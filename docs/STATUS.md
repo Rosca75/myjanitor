@@ -5,3 +5,4 @@
 - 2026-11-13 15:05 UTC: owner amendment received: the session manages commit, push and merge autonomously; the final MVP must land on `main`; no PR review is requested from the owner. Plan: work on `claude/eloquent-shannon-4pcqld`, open a PR at the end and merge it into `main` once all gates are green.
 - 2026-11-13 16:05 UTC: Wave 1 done and contracts frozen (12 crates, 66 IPC commands, 10 events; 62 Rust + 4 UI tests green; Windows check green incl. Tauri). Wave 2 started in six worktrees.
 - 2026-11-13 16:30 UTC: W2-C merged (filters, rules, presets, query parser, sniffer). Gates green: 132 Rust tests. Pending contract request: `Condition::Media` variant (to handle in the Wave 3 contract revision).
+- 2026-11-13 16:40 UTC: W2-D merged (16 detectors). Pending contract requests: protected-path predicate in DetectContext; per-candidate safety class.
