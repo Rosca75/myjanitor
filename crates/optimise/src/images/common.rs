@@ -166,3 +166,63 @@ mod tests {
         assert_eq!(read_bounded(&p, 100).unwrap().len(), 100);
     }
 }
+
+/// Settings-panel builders shared by the optimisers.
+pub mod spec {
+    use mj_core::params::{ChoiceOption, SettingKind, SettingSpec};
+    use mj_core::{ParamValue, ParamValues, StepPreset};
+
+    /// A toggle.
+    pub fn toggle(key: &str, label: &str, help: Option<&str>, default: bool, advanced: bool, lossy: bool) -> SettingSpec {
+        SettingSpec { key: key.into(), label: label.into(), help: help.map(Into::into), kind: SettingKind::Toggle { default }, advanced, lossy, disabled_reason: None }
+    }
+
+    /// A number input.
+    pub fn number(key: &str, label: &str, default: f64, min: f64, max: f64, step: f64, unit: Option<&str>, advanced: bool) -> SettingSpec {
+        SettingSpec {
+            key: key.into(),
+            label: label.into(),
+            help: None,
+            kind: SettingKind::Number { default, min, max, step, unit: unit.map(Into::into) },
+            advanced,
+            lossy: false,
+            disabled_reason: None,
+        }
+    }
+
+    /// A choice from `(value, label, help)` options.
+    pub fn choice(key: &str, label: &str, default: &str, options: &[(&str, &str, Option<&str>)], advanced: bool) -> SettingSpec {
+        SettingSpec {
+            key: key.into(),
+            label: label.into(),
+            help: None,
+            kind: SettingKind::Choice {
+                default: default.into(),
+                options: options.iter().map(|(v, l, h)| ChoiceOption { value: (*v).into(), label: (*l).into(), help: h.map(Into::into) }).collect(),
+            },
+            advanced,
+            lossy: false,
+            disabled_reason: None,
+        }
+    }
+
+    /// A preset tile; `values` are `(key, value)` pairs.
+    pub fn preset(id: &str, label: &str, description: &str, lossy: bool, values: &[(&str, ParamValue)]) -> StepPreset {
+        let mut v = ParamValues::new();
+        for (k, x) in values {
+            v.set(k, x.clone());
+        }
+        StepPreset { id: id.into(), label: label.into(), description: description.into(), values: v, lossy }
+    }
+
+    /// Shorthand for text and number values.
+    pub fn t(s: &str) -> ParamValue {
+        ParamValue::Text(s.into())
+    }
+    pub fn n(x: f64) -> ParamValue {
+        ParamValue::Number(x)
+    }
+    pub fn b(x: bool) -> ParamValue {
+        ParamValue::Bool(x)
+    }
+}
