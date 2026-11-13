@@ -17,6 +17,7 @@
 //! [`source`] reads what the in-house reader does not expose (raw entry data,
 //! local headers, archive comment, data layout) for lossless repacks.
 
+pub mod repack;
 pub mod source;
 
 use std::io::Write;
@@ -440,7 +441,7 @@ impl<W: Write> ZipWriter<W> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::zip::ZipArchive;
     use std::io::Cursor;
