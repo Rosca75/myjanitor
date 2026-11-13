@@ -10,6 +10,9 @@ rust-version.workspace = true
 mj-core.workspace = true
 mj-platform.workspace = true
 mj-formats.workspace = true
+miniz_oxide.workspace = true
+# JPEG decoding for perceptual hashing; see docs/dependencies/W2-B.md.
+zune-jpeg = "=0.5.15"
 
 [dev-dependencies]
 mj-core = { workspace = true, features = ["testutil"] }
