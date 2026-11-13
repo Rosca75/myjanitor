@@ -45,11 +45,8 @@ fn base_names(id: &str) -> Vec<&str> {
 
 fn windows_extensions() -> Vec<String> {
     let from_env = std::env::var("PATHEXT").unwrap_or_default();
-    let mut v: Vec<String> = from_env
-        .split(';')
-        .map(|e| e.trim().to_ascii_lowercase())
-        .filter(|e| e == ".exe" || e == ".com")
-        .collect();
+    let mut v: Vec<String> =
+        from_env.split(';').map(|e| e.trim().to_ascii_lowercase()).filter(|e| e == ".exe" || e == ".com").collect();
     if v.is_empty() {
         v = vec![".exe".into(), ".com".into()];
     }
@@ -178,7 +175,11 @@ pub fn parse_version(text: &str) -> Option<String> {
 /// Run the tool with its version flag (time-limited, cached by path, size and modification time).
 pub fn probe_version(id: &str, path: &Path) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
-    let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as i64);
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as i64);
     let key = (path.to_path_buf(), meta.len(), mtime);
     if let Some(v) = mj_core::lock(probe_cache()).get(&key) {
         return v.clone();
@@ -212,7 +213,13 @@ pub fn detect_with(o: &DetectOptions) -> Vec<ExternalTool> {
         .iter()
         .zip(paths)
         .zip(versions)
-        .map(|((id, path), version)| ExternalTool { id: id.to_string(), found: path.is_some(), path, version, used_for: used_for(id) })
+        .map(|((id, path), version)| ExternalTool {
+            id: id.to_string(),
+            found: path.is_some(),
+            path,
+            version,
+            used_for: used_for(id),
+        })
         .collect()
 }
 
@@ -227,7 +234,9 @@ pub fn availability(tools: &[ExternalTool], needed: &[&str]) -> Availability {
     match missing.as_slice() {
         [] => Availability::Available,
         [one] => Availability::Disabled { reason: format!("Requires {one} on PATH") },
-        [init @ .., last] => Availability::Disabled { reason: format!("Requires {} and {last} on PATH", init.join(", ")) },
+        [init @ .., last] => {
+            Availability::Disabled { reason: format!("Requires {} and {last} on PATH", init.join(", ")) }
+        }
     }
 }
 
@@ -239,7 +248,9 @@ pub fn availability_any(tools: &[ExternalTool], any_of: &[&str]) -> Availability
     match any_of {
         [] => Availability::Available,
         [one] => Availability::Disabled { reason: format!("Requires {one} on PATH") },
-        [init @ .., last] => Availability::Disabled { reason: format!("Requires {} or {last} on PATH", init.join(", ")) },
+        [init @ .., last] => {
+            Availability::Disabled { reason: format!("Requires {} or {last} on PATH", init.join(", ")) }
+        }
     }
 }
 
@@ -287,9 +298,17 @@ mod tests {
     #[test]
     fn finds_tools_in_a_fake_path_directory_and_reads_versions() {
         let dir = TempDir::new("fake-path").unwrap();
-        write_exe(dir.path(), &fake_name("ffmpeg"), "#!/bin/sh\necho 'ffmpeg version n6.1.1-3ubuntu5 Copyright (c) the FFmpeg developers'\n");
+        write_exe(
+            dir.path(),
+            &fake_name("ffmpeg"),
+            "#!/bin/sh\necho 'ffmpeg version n6.1.1-3ubuntu5 Copyright (c) the FFmpeg developers'\n",
+        );
         write_exe(dir.path(), &fake_name("cwebp"), "#!/bin/sh\necho 1.3.2\n");
-        write_exe(dir.path(), &fake_name("jpegtran"), "#!/bin/sh\necho 'libjpeg-turbo version 3.0.1 (build 20231209)' >&2\n");
+        write_exe(
+            dir.path(),
+            &fake_name("jpegtran"),
+            "#!/bin/sh\necho 'libjpeg-turbo version 3.0.1 (build 20231209)' >&2\n",
+        );
         write_exe(dir.path(), &fake_name("zstd"), "#!/bin/sh\nsleep 30\n"); // hangs: must be reported without a version
         let o = DetectOptions { path: Some(dir.path().as_os_str().to_os_string()), ..Default::default() };
         let t0 = std::time::Instant::now();
@@ -314,7 +333,11 @@ mod tests {
         write_exe(path_dir.path(), &fake_name("cjxl"), "#!/bin/sh\necho 'cjxl v0.8.2'\n");
         let mine = write_exe(own.path(), &fake_name("cjxl"), "#!/bin/sh\necho 'cjxl v0.9.0'\n");
         write_exe(own.path(), &fake_name("avifenc"), "#!/bin/sh\necho 'avifenc version: 1.0.4'\n");
-        let mut o = DetectOptions { path: Some(path_dir.path().as_os_str().to_os_string()), skip_version_probe: true, ..Default::default() };
+        let mut o = DetectOptions {
+            path: Some(path_dir.path().as_os_str().to_os_string()),
+            skip_version_probe: true,
+            ..Default::default()
+        };
         o.overrides.insert("cjxl".into(), mine.clone());
         o.overrides.insert("avifenc".into(), own.path().to_path_buf()); // a directory
         o.overrides.insert("cwebp".into(), own.join("nope")); // a dead override falls back to PATH, then to missing
@@ -324,7 +347,12 @@ mod tests {
         assert!(get("avifenc").found);
         assert!(!get("cwebp").found);
         // extra_dirs come before PATH
-        let o2 = DetectOptions { extra_dirs: vec![own.path().to_path_buf()], path: o.path.clone(), skip_version_probe: true, ..Default::default() };
+        let o2 = DetectOptions {
+            extra_dirs: vec![own.path().to_path_buf()],
+            path: o.path.clone(),
+            skip_version_probe: true,
+            ..Default::default()
+        };
         assert_eq!(detect_with(&o2).iter().find(|t| t.id == "cjxl").unwrap().path.as_deref(), Some(mine.as_path()));
     }
 
@@ -354,7 +382,10 @@ mod tests {
         let tools = vec![tool_at("ffmpeg", "/x/ffmpeg")];
         assert_eq!(availability(&tools, &["ffmpeg"]), Availability::Available);
         assert_eq!(availability(&[], &["ffmpeg"]), Availability::Disabled { reason: "Requires ffmpeg on PATH".into() });
-        assert_eq!(availability(&tools, &["ffmpeg", "ffprobe", "x"]), Availability::Disabled { reason: "Requires ffprobe and x on PATH".into() });
+        assert_eq!(
+            availability(&tools, &["ffmpeg", "ffprobe", "x"]),
+            Availability::Disabled { reason: "Requires ffprobe and x on PATH".into() }
+        );
         assert_eq!(availability_any(&tools, &["cwebp", "ffmpeg"]), Availability::Available);
         assert_eq!(
             availability_any(&[], &["cwebp", "avifenc", "cjxl"]),

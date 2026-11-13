@@ -56,7 +56,13 @@ pub fn move_into_place(tmp: &Path, dst: &Path) -> Result<()> {
 
 /// Result for "nothing was written".
 pub fn skipped(bytes_before: u64, reason: impl Into<String>) -> OptimiseOutput {
-    OptimiseOutput { bytes_before, bytes_after: bytes_before, lossy: false, skipped: Some(reason.into()), notes: Vec::new() }
+    OptimiseOutput {
+        bytes_before,
+        bytes_after: bytes_before,
+        lossy: false,
+        skipped: Some(reason.into()),
+        notes: Vec::new(),
+    }
 }
 
 /// Result for a written `dst`.
@@ -101,6 +107,10 @@ pub fn analyse_entries(
         let est = match estimate(e, ctx.params) {
             Ok(x) => x,
             Err(Error::Cancelled) => return Err(Error::Cancelled),
+            Err(Error::Unsupported { .. }) => {
+                out.diagnostics.skip("not_applicable");
+                continue;
+            }
             Err(_) => {
                 out.diagnostics.skip("estimate_failed");
                 continue;
@@ -136,7 +146,13 @@ pub fn analyse_entries(
 /// One-file estimate from a size ratio (estimated confidence).
 pub fn ratio_estimate(entry: &FileEntry, ratio: f64) -> Estimate {
     let after = ((entry.size as f64) * ratio.clamp(0.0, 1.0)).round() as u64;
-    Estimate { files: 1, bytes_before: entry.size, bytes_after: after.min(entry.size), confidence: Confidence::Estimated, skipped: 0 }
+    Estimate {
+        files: 1,
+        bytes_before: entry.size,
+        bytes_after: after.min(entry.size),
+        confidence: Confidence::Estimated,
+        skipped: 0,
+    }
 }
 
 #[cfg(test)]
@@ -173,12 +189,36 @@ pub mod spec {
     use mj_core::{ParamValue, ParamValues, StepPreset};
 
     /// A toggle.
-    pub fn toggle(key: &str, label: &str, help: Option<&str>, default: bool, advanced: bool, lossy: bool) -> SettingSpec {
-        SettingSpec { key: key.into(), label: label.into(), help: help.map(Into::into), kind: SettingKind::Toggle { default }, advanced, lossy, disabled_reason: None }
+    pub fn toggle(
+        key: &str,
+        label: &str,
+        help: Option<&str>,
+        default: bool,
+        advanced: bool,
+        lossy: bool,
+    ) -> SettingSpec {
+        SettingSpec {
+            key: key.into(),
+            label: label.into(),
+            help: help.map(Into::into),
+            kind: SettingKind::Toggle { default },
+            advanced,
+            lossy,
+            disabled_reason: None,
+        }
     }
 
     /// A number input.
-    pub fn number(key: &str, label: &str, default: f64, min: f64, max: f64, step: f64, unit: Option<&str>, advanced: bool) -> SettingSpec {
+    pub fn number(
+        key: &str,
+        label: &str,
+        default: f64,
+        min: f64,
+        max: f64,
+        step: f64,
+        unit: Option<&str>,
+        advanced: bool,
+    ) -> SettingSpec {
         SettingSpec {
             key: key.into(),
             label: label.into(),
@@ -191,14 +231,23 @@ pub mod spec {
     }
 
     /// A choice from `(value, label, help)` options.
-    pub fn choice(key: &str, label: &str, default: &str, options: &[(&str, &str, Option<&str>)], advanced: bool) -> SettingSpec {
+    pub fn choice(
+        key: &str,
+        label: &str,
+        default: &str,
+        options: &[(&str, &str, Option<&str>)],
+        advanced: bool,
+    ) -> SettingSpec {
         SettingSpec {
             key: key.into(),
             label: label.into(),
             help: None,
             kind: SettingKind::Choice {
                 default: default.into(),
-                options: options.iter().map(|(v, l, h)| ChoiceOption { value: (*v).into(), label: (*l).into(), help: h.map(Into::into) }).collect(),
+                options: options
+                    .iter()
+                    .map(|(v, l, h)| ChoiceOption { value: (*v).into(), label: (*l).into(), help: h.map(Into::into) })
+                    .collect(),
             },
             advanced,
             lossy: false,

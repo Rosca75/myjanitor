@@ -181,13 +181,24 @@ mod tests {
     }
 
     fn spec(target: Target) -> EncodeSpec {
-        EncodeSpec { target, quality: 80, lossless: false, input_is_jpeg: true, strip_metadata: false, resize: None, effort: 6 }
+        EncodeSpec {
+            target,
+            quality: 80,
+            lossless: false,
+            input_is_jpeg: true,
+            strip_metadata: false,
+            resize: None,
+            effort: 6,
+        }
     }
 
     #[test]
     fn oxipng_policies() {
         let (a, b) = (Path::new("/in/a.png"), Path::new("/t/o.png"));
-        assert_eq!(s(&oxipng_args(a, b, MetadataPolicy::KeepAll, 4)), ["-o", "4", "-q", "--out", "/t/o.png", "/in/a.png"]);
+        assert_eq!(
+            s(&oxipng_args(a, b, MetadataPolicy::KeepAll, 4)),
+            ["-o", "4", "-q", "--out", "/t/o.png", "/in/a.png"]
+        );
         assert_eq!(s(&oxipng_args(a, b, MetadataPolicy::StripText, 9))[3..5], ["--strip", "tEXt,zTXt,iTXt"]);
         assert_eq!(s(&oxipng_args(a, b, MetadataPolicy::StripAll { colour: false }, 4))[3..5], ["--strip", "safe"]);
         assert_eq!(s(&oxipng_args(a, b, MetadataPolicy::StripAll { colour: true }, 0))[..2], ["-o", "1"]);
@@ -197,7 +208,10 @@ mod tests {
     #[test]
     fn jpegtran_and_gifsicle() {
         let (a, b) = (Path::new("/in/a.jpg"), Path::new("/t/o.jpg"));
-        assert_eq!(s(&jpegtran_args(a, b, true)), ["-copy", "all", "-optimize", "-progressive", "-outfile", "/t/o.jpg", "/in/a.jpg"]);
+        assert_eq!(
+            s(&jpegtran_args(a, b, true)),
+            ["-copy", "all", "-optimize", "-progressive", "-outfile", "/t/o.jpg", "/in/a.jpg"]
+        );
         assert_eq!(s(&jpegtran_args(a, b, false)), ["-copy", "all", "-optimize", "-outfile", "/t/o.jpg", "/in/a.jpg"]);
         assert_eq!(s(&gifsicle_args(Path::new("a.gif"), Path::new("o.gif"), false)), ["-O3", "-o", "o.gif", "a.gif"]);
         assert!(s(&gifsicle_args(Path::new("a.gif"), Path::new("o.gif"), true)).contains(&"--no-comments".to_string()));
@@ -206,22 +220,47 @@ mod tests {
     #[test]
     fn cwebp_presets() {
         let (a, b) = (Path::new("/in/a.jpg"), Path::new("/t/o.webp"));
-        assert_eq!(s(&encoder_args(&spec(Target::Webp), a, b)), ["-quiet", "-mt", "-m", "6", "-q", "80", "-metadata", "all", "-o", "/t/o.webp", "/in/a.jpg"]);
+        assert_eq!(
+            s(&encoder_args(&spec(Target::Webp), a, b)),
+            ["-quiet", "-mt", "-m", "6", "-q", "80", "-metadata", "all", "-o", "/t/o.webp", "/in/a.jpg"]
+        );
         let mut l = spec(Target::Webp);
         (l.lossless, l.strip_metadata, l.resize) = (true, true, Some((1600, 900)));
         assert_eq!(
             s(&encoder_args(&l, Path::new("/in/a.png"), b)),
-            ["-quiet", "-mt", "-m", "6", "-lossless", "-z", "6", "-resize", "1600", "900", "-metadata", "icc", "-o", "/t/o.webp", "/in/a.png"]
+            [
+                "-quiet",
+                "-mt",
+                "-m",
+                "6",
+                "-lossless",
+                "-z",
+                "6",
+                "-resize",
+                "1600",
+                "900",
+                "-metadata",
+                "icc",
+                "-o",
+                "/t/o.webp",
+                "/in/a.png"
+            ]
         );
     }
 
     #[test]
     fn avifenc_presets() {
         let (a, b) = (Path::new("/in/a.jpg"), Path::new("/t/o.avif"));
-        assert_eq!(s(&encoder_args(&spec(Target::Avif), a, b)), ["-s", "4", "-j", "all", "-q", "80", "-o", "/t/o.avif", "/in/a.jpg"]);
+        assert_eq!(
+            s(&encoder_args(&spec(Target::Avif), a, b)),
+            ["-s", "4", "-j", "all", "-q", "80", "-o", "/t/o.avif", "/in/a.jpg"]
+        );
         let mut l = spec(Target::Avif);
         (l.lossless, l.strip_metadata, l.effort) = (true, true, 9);
-        assert_eq!(s(&encoder_args(&l, a, b)), ["-s", "1", "-j", "all", "--lossless", "--ignore-exif", "--ignore-xmp", "-o", "/t/o.avif", "/in/a.jpg"]);
+        assert_eq!(
+            s(&encoder_args(&l, a, b)),
+            ["-s", "1", "-j", "all", "--lossless", "--ignore-exif", "--ignore-xmp", "-o", "/t/o.avif", "/in/a.jpg"]
+        );
     }
 
     #[test]

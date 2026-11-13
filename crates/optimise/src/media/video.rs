@@ -128,7 +128,15 @@ impl VideoSettings {
 
     /// The size-model view of these settings.
     pub fn plan(&self) -> VideoPlan {
-        VideoPlan { av1: self.codec == VCodec::Av1, crf: f64::from(self.crf), max_height: self.max_height, max_fps: self.max_fps, screen: self.screen, remux: self.remux_only, audio_only: false }
+        VideoPlan {
+            av1: self.codec == VCodec::Av1,
+            crf: f64::from(self.crf),
+            max_height: self.max_height,
+            max_fps: self.max_fps,
+            screen: self.screen,
+            remux: self.remux_only,
+            audio_only: false,
+        }
     }
 }
 
@@ -223,10 +231,14 @@ impl Encoders {
 /// Query ffmpeg and trial-encode each listed hardware encoder (OPT-VID-02).
 pub fn detect_hardware(ffmpeg: &Path, cancel: &CancelToken) -> Result<Vec<HwEncoder>> {
     let enc = Encoders(list_encoders(ffmpeg, cancel)?);
-    Ok(enc.hardware().into_iter().map(|mut h| {
-        h.verified = encoder_accepts(ffmpeg, &h.name, &[], cancel);
-        h
-    }).collect())
+    Ok(enc
+        .hardware()
+        .into_iter()
+        .map(|mut h| {
+            h.verified = encoder_accepts(ffmpeg, &h.name, &[], cancel);
+            h
+        })
+        .collect())
 }
 
 /// Rough encode time in seconds for a file (needs metadata; `None` without it).
@@ -290,19 +302,84 @@ fn encoder_options(c: &Chosen, codec: VCodec, s: &VideoSettings) -> Vec<String> 
     let crf = s.crf.to_string();
     let v = |x: &[&str]| x.iter().map(|y| y.to_string()).collect::<Vec<_>>();
     let mut o = match (c.name.as_str(), c.hw) {
-        (_, Some(HwKind::Nvenc)) => v(&["-c:v", &c.name, "-rc", "vbr", "-cq", &crf, "-b:v", "0", "-preset", match s.speed { Speed::Fast => "p3", Speed::Medium => "p5", Speed::Slow => "p7" }]),
-        (_, Some(HwKind::Qsv)) => v(&["-c:v", &c.name, "-global_quality", &crf, "-preset", match s.speed { Speed::Fast => "fast", Speed::Medium => "medium", Speed::Slow => "slow" }]),
+        (_, Some(HwKind::Nvenc)) => v(&[
+            "-c:v",
+            &c.name,
+            "-rc",
+            "vbr",
+            "-cq",
+            &crf,
+            "-b:v",
+            "0",
+            "-preset",
+            match s.speed {
+                Speed::Fast => "p3",
+                Speed::Medium => "p5",
+                Speed::Slow => "p7",
+            },
+        ]),
+        (_, Some(HwKind::Qsv)) => v(&[
+            "-c:v",
+            &c.name,
+            "-global_quality",
+            &crf,
+            "-preset",
+            match s.speed {
+                Speed::Fast => "fast",
+                Speed::Medium => "medium",
+                Speed::Slow => "slow",
+            },
+        ]),
         (_, Some(HwKind::Amf)) => v(&["-c:v", &c.name, "-rc", "cqp", "-qp_i", &crf, "-qp_p", &crf]),
-        ("libx265", _) => v(&["-c:v", "libx265", "-crf", &crf, "-preset", match s.speed { Speed::Fast => "fast", Speed::Medium => "medium", Speed::Slow => "slow" }, "-x265-params", "log-level=error"]),
+        ("libx265", _) => v(&[
+            "-c:v",
+            "libx265",
+            "-crf",
+            &crf,
+            "-preset",
+            match s.speed {
+                Speed::Fast => "fast",
+                Speed::Medium => "medium",
+                Speed::Slow => "slow",
+            },
+            "-x265-params",
+            "log-level=error",
+        ]),
         ("libsvtav1", _) => {
-            let mut x = v(&["-c:v", "libsvtav1", "-crf", &crf, "-preset", match s.speed { Speed::Fast => "10", Speed::Medium => "8", Speed::Slow => "5" }]);
+            let mut x = v(&[
+                "-c:v",
+                "libsvtav1",
+                "-crf",
+                &crf,
+                "-preset",
+                match s.speed {
+                    Speed::Fast => "10",
+                    Speed::Medium => "8",
+                    Speed::Slow => "5",
+                },
+            ]);
             if s.screen_tools {
                 x.extend(v(&["-svtav1-params", "scm=1"]));
             }
             x
         }
         ("libaom-av1", _) => {
-            let mut x = v(&["-c:v", "libaom-av1", "-crf", &crf, "-b:v", "0", "-row-mt", "1", "-cpu-used", match s.speed { Speed::Fast => "8", Speed::Medium => "6", Speed::Slow => "4" }]);
+            let mut x = v(&[
+                "-c:v",
+                "libaom-av1",
+                "-crf",
+                &crf,
+                "-b:v",
+                "0",
+                "-row-mt",
+                "1",
+                "-cpu-used",
+                match s.speed {
+                    Speed::Fast => "8",
+                    Speed::Medium => "6",
+                    Speed::Slow => "4",
+                },
+            ]);
             if s.screen_tools {
                 x.extend(v(&["-aom-params", "tune-content=screen"]));
             }
@@ -326,7 +403,13 @@ pub fn screen_tool_args(encoder: &str) -> Option<&'static [&'static str]> {
 }
 
 /// Full ffmpeg argument vector for one file.
-pub fn build_args(s: &VideoSettings, chosen: Option<&Chosen>, f: &SourceFacts, src: &Path, out: &Path) -> Vec<OsString> {
+pub fn build_args(
+    s: &VideoSettings,
+    chosen: Option<&Chosen>,
+    f: &SourceFacts,
+    src: &Path,
+    out: &Path,
+) -> Vec<OsString> {
     let mut a = base_args();
     a.extend(input_args(src));
     if let Some((start, end)) = s.trim {
@@ -378,7 +461,11 @@ pub fn build_args(s: &VideoSettings, chosen: Option<&Chosen>, f: &SourceFacts, s
 
 /// Shared by [`Video`] and the screen-recording optimiser: choose the encoder, run ffmpeg, verify,
 /// move the result into place.
-pub(crate) fn run_video_job(job: &OptimiseJob<'_>, s: &mut VideoSettings, mut notes: Vec<String>) -> Result<OptimiseOutput> {
+pub(crate) fn run_video_job(
+    job: &OptimiseJob<'_>,
+    s: &mut VideoSettings,
+    mut notes: Vec<String>,
+) -> Result<OptimiseOutput> {
     job.cancel.checkpoint()?;
     let exe = crate::tools::require(job.tools, "ffmpeg")?;
     let before = std::fs::metadata(job.src).map_err(|e| Error::io(job.src, e))?.len();
@@ -390,11 +477,15 @@ pub(crate) fn run_video_job(job: &OptimiseJob<'_>, s: &mut VideoSettings, mut no
         let mut c = enc.choose(s.codec, &s.encoder_pref).ok_or_else(|| Error::unsupported(format!("{} encoding", s.codec.name()), "this ffmpeg has no encoder for it; pick the other codec or install an ffmpeg build with libx265 or libsvtav1"))?;
         if c.hw.is_some() && !encoder_accepts(exe, &c.name, &[], job.cancel) {
             notes.push(format!("{} could not start on this PC; the software encoder was used", c.name));
-            c = enc.choose(s.codec, "software").ok_or_else(|| Error::unsupported("encoding", "no software encoder available"))?;
+            c = enc
+                .choose(s.codec, "software")
+                .ok_or_else(|| Error::unsupported("encoding", "no software encoder available"))?;
         }
         if s.screen_tools {
             match screen_tool_args(&c.name) {
-                Some(extra) if encoder_accepts(exe, &c.name, extra, job.cancel) => notes.push("AV1 screen-content tools on".into()),
+                Some(extra) if encoder_accepts(exe, &c.name, extra, job.cancel) => {
+                    notes.push("AV1 screen-content tools on".into())
+                }
                 _ => {
                     s.screen_tools = false;
                     notes.push(format!("{} has no screen-content tools; standard settings used", c.name));
@@ -418,7 +509,11 @@ pub(crate) fn run_video_job(job: &OptimiseJob<'_>, s: &mut VideoSettings, mut no
     if let (None, Some(d_in), Some(d_out)) = (s.trim, dur, info_of(&out).and_then(|i| i.duration_ms)) {
         if d_in.abs_diff(d_out) > (d_in / 25).max(2000) {
             let _ = std::fs::remove_file(&out);
-            return Err(Error::Internal(format!("the new video is {} long but the original is {}; nothing was changed", clock(d_out as f64 / 1000.0), clock(d_in as f64 / 1000.0))));
+            return Err(Error::Internal(format!(
+                "the new video is {} long but the original is {}; nothing was changed",
+                clock(d_out as f64 / 1000.0),
+                clock(d_in as f64 / 1000.0)
+            )));
         }
     }
     if after >= before {
@@ -434,20 +529,65 @@ fn settings() -> Vec<SettingSpec> {
         "codec",
         "Codec",
         "hevc",
-        &[("hevc", "HEVC (H.265)", Some(compatibility_warning(VCodec::Hevc))), ("av1", "AV1", Some(compatibility_warning(VCodec::Av1)))],
+        &[
+            ("hevc", "HEVC (H.265)", Some(compatibility_warning(VCodec::Hevc))),
+            ("av1", "AV1", Some(compatibility_warning(VCodec::Av1))),
+        ],
         false,
     );
     codec.help = Some("Choose how new the player may need to be".into());
     vec![
         codec,
-        spec::choice("quality", "Quality", "balanced", &[("high", "High", None), ("balanced", "Balanced", None), ("small", "Smaller", None)], false),
-        spec::choice("max_height", "Largest height", "0", &[("0", "Keep size", None), ("1080", "1080p", None), ("720", "720p", None), ("480", "480p", None)], false),
-        spec::choice("max_fps", "Frame rate cap", "0", &[("0", "Keep", None), ("30", "30 fps", None), ("24", "24 fps", None), ("15", "15 fps", None)], false),
+        spec::choice(
+            "quality",
+            "Quality",
+            "balanced",
+            &[("high", "High", None), ("balanced", "Balanced", None), ("small", "Smaller", None)],
+            false,
+        ),
+        spec::choice(
+            "max_height",
+            "Largest height",
+            "0",
+            &[("0", "Keep size", None), ("1080", "1080p", None), ("720", "720p", None), ("480", "480p", None)],
+            false,
+        ),
+        spec::choice(
+            "max_fps",
+            "Frame rate cap",
+            "0",
+            &[("0", "Keep", None), ("30", "30 fps", None), ("24", "24 fps", None), ("15", "15 fps", None)],
+            false,
+        ),
         spec::toggle("drop_extra_audio", "Keep only the first audio track", None, false, false, true),
         spec::toggle("drop_subtitles", "Drop subtitles", None, false, false, true),
-        spec::toggle("remux_only", "Remux only (no re-encode)", Some("Keeps the picture as is and drops junk streams"), false, false, false),
-        spec::choice("encoder", "Encoder", "auto", &[("auto", "Software (best quality)", None), ("nvenc", "NVIDIA NVENC", Some("Faster; larger files")), ("qsv", "Intel Quick Sync", Some("Faster; larger files")), ("amf", "AMD AMF", Some("Faster; larger files"))], true),
-        spec::choice("speed", "Speed", "medium", &[("fast", "Fast", None), ("medium", "Balanced", None), ("slow", "Slow, smaller", None)], true),
+        spec::toggle(
+            "remux_only",
+            "Remux only (no re-encode)",
+            Some("Keeps the picture as is and drops junk streams"),
+            false,
+            false,
+            false,
+        ),
+        spec::choice(
+            "encoder",
+            "Encoder",
+            "auto",
+            &[
+                ("auto", "Software (best quality)", None),
+                ("nvenc", "NVIDIA NVENC", Some("Faster; larger files")),
+                ("qsv", "Intel Quick Sync", Some("Faster; larger files")),
+                ("amf", "AMD AMF", Some("Faster; larger files")),
+            ],
+            true,
+        ),
+        spec::choice(
+            "speed",
+            "Speed",
+            "medium",
+            &[("fast", "Fast", None), ("medium", "Balanced", None), ("slow", "Slow, smaller", None)],
+            true,
+        ),
         spec::number("crf", "Custom CRF (0 = from quality)", 0.0, 0.0, 51.0, 1.0, None, true),
         spec::number("audio_kbps", "Audio bitrate when converted", 128.0, 32.0, 512.0, 16.0, Some("kbps"), true),
     ]
@@ -456,8 +596,20 @@ fn settings() -> Vec<SettingSpec> {
 fn presets() -> Vec<StepPreset> {
     use spec::{b, t};
     vec![
-        spec::preset("efficient", "Efficient", "HEVC · looks the same, much smaller", true, &[("codec", t("hevc")), ("quality", t("balanced")), ("remux_only", b(false))]),
-        spec::preset("smallest", "Smallest", "AV1 · newest players only", true, &[("codec", t("av1")), ("quality", t("balanced")), ("remux_only", b(false))]),
+        spec::preset(
+            "efficient",
+            "Efficient",
+            "HEVC · looks the same, much smaller",
+            true,
+            &[("codec", t("hevc")), ("quality", t("balanced")), ("remux_only", b(false))],
+        ),
+        spec::preset(
+            "smallest",
+            "Smallest",
+            "AV1 · newest players only",
+            true,
+            &[("codec", t("av1")), ("quality", t("balanced")), ("remux_only", b(false))],
+        ),
         spec::preset("remux", "Remux only", "No re-encode · no quality loss", false, &[("remux_only", b(true))]),
     ]
 }
@@ -492,7 +644,13 @@ impl Optimiser for Video {
     fn estimate(&self, entry: &FileEntry, params: &ParamValues) -> Result<Estimate> {
         let s = VideoSettings::from_params(params);
         let after = video_after(info_of(&entry.path).as_ref(), entry.size, &s.plan());
-        Ok(Estimate { files: 1, bytes_before: entry.size, bytes_after: after, confidence: mj_core::Confidence::Estimated, skipped: 0 })
+        Ok(Estimate {
+            files: 1,
+            bytes_before: entry.size,
+            bytes_after: after,
+            confidence: mj_core::Confidence::Estimated,
+            skipped: 0,
+        })
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
@@ -521,7 +679,11 @@ impl Optimiser for Video {
                         columns.insert("codec".to_string(), c.clone());
                     }
                 }
-                common::Described { reason: "Video can be re-encoded at a lower bitrate".into(), columns, sub_group: None }
+                common::Described {
+                    reason: "Video can be re-encoded at a lower bitrate".into(),
+                    columns,
+                    sub_group: None,
+                }
             },
         )
     }
@@ -546,18 +708,50 @@ mod tests {
     }
 
     fn facts(ext: &str) -> SourceFacts {
-        SourceFacts { ext: ext.into(), audio_codec: Some("aac".into()), fps: Some(30.0), height: Some(1080), subtitle_tracks: 0 }
+        SourceFacts {
+            ext: ext.into(),
+            audio_codec: Some("aac".into()),
+            fps: Some(30.0),
+            height: Some(1080),
+            subtitle_tracks: 0,
+        }
     }
 
     #[test]
     fn hevc_default_arguments() {
-        let a = s(&build_args(&st(|_| {}), Some(&x265()), &facts("mov"), Path::new("/in/a.mov"), Path::new("/t/o.mp4")));
+        let a =
+            s(&build_args(&st(|_| {}), Some(&x265()), &facts("mov"), Path::new("/in/a.mov"), Path::new("/t/o.mp4")));
         let tail: Vec<&str> = a.iter().skip(8).map(String::as_str).collect();
         assert_eq!(
             tail,
             [
-                "-i", "/in/a.mov", "-map", "0:v:0", "-map", "0:a?", "-map_metadata", "0", "-map_chapters", "0", "-c:v", "libx265", "-crf", "28", "-preset", "medium",
-                "-x265-params", "log-level=error", "-tag:v", "hvc1", "-c:a", "copy", "-movflags", "+faststart", "-f", "mp4", "/t/o.mp4"
+                "-i",
+                "/in/a.mov",
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-map_metadata",
+                "0",
+                "-map_chapters",
+                "0",
+                "-c:v",
+                "libx265",
+                "-crf",
+                "28",
+                "-preset",
+                "medium",
+                "-x265-params",
+                "log-level=error",
+                "-tag:v",
+                "hvc1",
+                "-c:a",
+                "copy",
+                "-movflags",
+                "+faststart",
+                "-f",
+                "mp4",
+                "/t/o.mp4"
             ]
         );
     }
@@ -578,8 +772,16 @@ mod tests {
         f.fps = Some(60.0);
         let a = s(&build_args(&set, Some(&svt), &f, Path::new("a.avi"), Path::new("o.mp4")));
         assert!(a.windows(2).any(|w| w == ["-vf", "scale=-2:min(ih\\,720),fps=24"]), "{a:?}");
-        assert!(a.windows(2).any(|w| w == ["-map", "0:a:0?"]) && a.windows(2).any(|w| w == ["-c:a", "aac"]) && a.contains(&"128k".to_string()));
-        assert!(a.windows(2).any(|w| w == ["-c:v", "libsvtav1"]) && a.windows(2).any(|w| w == ["-preset", "8"]) && !a.contains(&"hvc1".to_string()));
+        assert!(
+            a.windows(2).any(|w| w == ["-map", "0:a:0?"])
+                && a.windows(2).any(|w| w == ["-c:a", "aac"])
+                && a.contains(&"128k".to_string())
+        );
+        assert!(
+            a.windows(2).any(|w| w == ["-c:v", "libsvtav1"])
+                && a.windows(2).any(|w| w == ["-preset", "8"])
+                && !a.contains(&"hvc1".to_string())
+        );
         // Already small enough: no filters.
         let mut small = facts("mp4");
         small.height = Some(540);
@@ -589,13 +791,29 @@ mod tests {
 
     #[test]
     fn remux_copies_streams_and_drops_the_rest() {
-        let a = s(&build_args(&st(|p| p.set("remux_only", spec::b(true))), None, &facts("mkv"), Path::new("a.mkv"), Path::new("o.mkv")));
-        assert!(a.windows(2).any(|w| w == ["-c", "copy"]) && a.windows(2).any(|w| w == ["-map", "0:s?"]) && a.contains(&"matroska".to_string()));
+        let a = s(&build_args(
+            &st(|p| p.set("remux_only", spec::b(true))),
+            None,
+            &facts("mkv"),
+            Path::new("a.mkv"),
+            Path::new("o.mkv"),
+        ));
+        assert!(
+            a.windows(2).any(|w| w == ["-c", "copy"])
+                && a.windows(2).any(|w| w == ["-map", "0:s?"])
+                && a.contains(&"matroska".to_string())
+        );
         assert!(!a.contains(&"-vf".to_string()) && !a.iter().any(|x| x.starts_with("-c:v")));
-        let drop = s(&build_args(&st(|p| {
-            p.set("remux_only", spec::b(true));
-            p.set("drop_subtitles", spec::b(true));
-        }), None, &facts("mp4"), Path::new("a"), Path::new("o")));
+        let drop = s(&build_args(
+            &st(|p| {
+                p.set("remux_only", spec::b(true));
+                p.set("drop_subtitles", spec::b(true));
+            }),
+            None,
+            &facts("mp4"),
+            Path::new("a"),
+            Path::new("o"),
+        ));
         assert!(!drop.contains(&"0:s?".to_string()) && drop.contains(&"+faststart".to_string()));
     }
 
@@ -603,12 +821,24 @@ mod tests {
     fn hardware_encoder_options() {
         let nv = Chosen { name: "hevc_nvenc".into(), hw: Some(HwKind::Nvenc) };
         let a = s(&build_args(&st(|_| {}), Some(&nv), &facts("mp4"), Path::new("a"), Path::new("o")));
-        assert!(a.windows(2).any(|w| w == ["-c:v", "hevc_nvenc"]) && a.windows(2).any(|w| w == ["-cq", "28"]) && a.windows(2).any(|w| w == ["-preset", "p5"]));
+        assert!(
+            a.windows(2).any(|w| w == ["-c:v", "hevc_nvenc"])
+                && a.windows(2).any(|w| w == ["-cq", "28"])
+                && a.windows(2).any(|w| w == ["-preset", "p5"])
+        );
         let q = Chosen { name: "av1_qsv".into(), hw: Some(HwKind::Qsv) };
-        let a = s(&build_args(&st(|p| p.set("codec", spec::t("av1"))), Some(&q), &facts("mp4"), Path::new("a"), Path::new("o")));
+        let a = s(&build_args(
+            &st(|p| p.set("codec", spec::t("av1"))),
+            Some(&q),
+            &facts("mp4"),
+            Path::new("a"),
+            Path::new("o"),
+        ));
         assert!(a.windows(2).any(|w| w == ["-global_quality", "33"]));
         let amf = Chosen { name: "hevc_amf".into(), hw: Some(HwKind::Amf) };
-        assert!(s(&build_args(&st(|_| {}), Some(&amf), &facts("mp4"), Path::new("a"), Path::new("o"))).windows(2).any(|w| w == ["-qp_i", "28"]));
+        assert!(s(&build_args(&st(|_| {}), Some(&amf), &facts("mp4"), Path::new("a"), Path::new("o")))
+            .windows(2)
+            .any(|w| w == ["-qp_i", "28"]));
     }
 
     #[test]
@@ -618,7 +848,10 @@ mod tests {
         set.screen_tools = true;
         let aom = Chosen { name: "libaom-av1".into(), hw: None };
         let a = s(&build_args(&set, Some(&aom), &facts("mp4"), Path::new("a"), Path::new("o")));
-        assert!(a.windows(4).any(|w| w == ["-ss", "12.500", "-to", "300.000"]) && a.windows(2).any(|w| w == ["-aom-params", "tune-content=screen"]));
+        assert!(
+            a.windows(4).any(|w| w == ["-ss", "12.500", "-to", "300.000"])
+                && a.windows(2).any(|w| w == ["-aom-params", "tune-content=screen"])
+        );
         assert_eq!(screen_tool_args("libx265"), None);
     }
 
@@ -626,7 +859,10 @@ mod tests {
     fn encoder_selection() {
         let all = Encoders(["libx265", "libsvtav1", "libaom-av1", "hevc_nvenc", "av1_qsv"].map(String::from).to_vec());
         assert_eq!(all.choose(VCodec::Hevc, "auto").unwrap().name, "libx265");
-        assert_eq!(all.choose(VCodec::Hevc, "nvenc").unwrap(), Chosen { name: "hevc_nvenc".into(), hw: Some(HwKind::Nvenc) });
+        assert_eq!(
+            all.choose(VCodec::Hevc, "nvenc").unwrap(),
+            Chosen { name: "hevc_nvenc".into(), hw: Some(HwKind::Nvenc) }
+        );
         assert_eq!(all.choose(VCodec::Hevc, "amf").unwrap().name, "libx265", "missing hardware falls back to software");
         assert_eq!(all.choose(VCodec::Av1, "auto").unwrap().name, "libsvtav1");
         assert_eq!(Encoders(vec!["libaom-av1".into()]).choose(VCodec::Av1, "auto").unwrap().name, "libaom-av1");
@@ -646,7 +882,9 @@ mod tests {
 
     #[test]
     fn warnings_and_availability() {
-        assert!(compatibility_warning(VCodec::Hevc).contains("HEVC") && compatibility_warning(VCodec::Av1).contains("AV1"));
+        assert!(
+            compatibility_warning(VCodec::Hevc).contains("HEVC") && compatibility_warning(VCodec::Av1).contains("AV1")
+        );
         let codec = Video.info().settings.into_iter().find(|x| x.key == "codec").unwrap();
         match codec.kind {
             mj_core::SettingKind::Choice { options, .. } => assert!(options.iter().all(|o| o.help.is_some())),
@@ -665,7 +903,10 @@ mod tests {
         let i = mj_formats::media::probe_reader(std::io::Cursor::new(buf), n).unwrap();
         let base = st(|_| {});
         let half = st(|p| p.set("max_height", spec::t("540")));
-        assert!(encode_time_estimate(&i, &half, "libx265").unwrap() < encode_time_estimate(&i, &base, "libx265").unwrap() / 3.0);
+        assert!(
+            encode_time_estimate(&i, &half, "libx265").unwrap()
+                < encode_time_estimate(&i, &base, "libx265").unwrap() / 3.0
+        );
         assert!(encode_time_estimate(&i, &base, "hevc_nvenc").unwrap() < 200.0);
     }
 }

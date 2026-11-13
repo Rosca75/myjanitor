@@ -94,8 +94,14 @@ impl AudioSettings {
 }
 
 /// The `silenceremove` filter: pauses longer than `max_pause_s` are cut down to `max_pause_s`.
+/// ffmpeg passes `stop_duration` seconds of a silence through before it starts cutting and keeps
+/// `stop_silence` more on top, so the extra silence is 0 to make `max_pause_s` the longest pause.
 pub fn silence_filter(s: &AudioSettings) -> String {
-    format!("silenceremove=stop_periods=-1:stop_duration={d}:stop_threshold={db}dB:stop_silence={d}", d = s.max_pause_s, db = s.silence_db)
+    format!(
+        "silenceremove=stop_periods=-1:stop_duration={d}:stop_threshold={db}dB:stop_silence=0",
+        d = s.max_pause_s,
+        db = s.silence_db
+    )
 }
 
 /// Full ffmpeg argument vector for one file.
@@ -107,7 +113,14 @@ pub fn build_args(s: &AudioSettings, src: &Path, out: &Path) -> Vec<OsString> {
     if keeps_cover {
         a.extend(args(["-map", "0:v:0?"]));
         if s.cover_max_px > 0 {
-            a.extend(args(["-c:v", "mjpeg", "-q:v", "4", "-vf", &format!("scale='min(iw,{n})':-2", n = s.cover_max_px)]));
+            a.extend(args([
+                "-c:v",
+                "mjpeg",
+                "-q:v",
+                "4",
+                "-vf",
+                &format!("scale='min(iw,{n})':-2", n = s.cover_max_px),
+            ]));
         } else {
             a.extend(args(["-c:v", "copy"]));
         }
@@ -130,7 +143,16 @@ pub fn build_args(s: &AudioSettings, src: &Path, out: &Path) -> Vec<OsString> {
             }
             a.extend(args(["-f", "opus"]));
         }
-        Codec::Aac => a.extend(args(["-c:a", "aac", "-b:a", &format!("{}k", s.bitrate_kbps), "-movflags", "+faststart", "-f", "ipod"])),
+        Codec::Aac => a.extend(args([
+            "-c:a",
+            "aac",
+            "-b:a",
+            &format!("{}k", s.bitrate_kbps),
+            "-movflags",
+            "+faststart",
+            "-f",
+            "ipod",
+        ])),
         Codec::Flac => a.extend(args(["-c:a", "flac", "-compression_level", "12", "-f", "flac"])),
     }
     a.push(path_arg(out));
@@ -170,7 +192,11 @@ pub fn peaks_from_u8(samples: &[u8], n: usize) -> Vec<u8> {
     (0..n)
         .map(|i| {
             let (a, b) = (i * samples.len() / n, ((i + 1) * samples.len() / n).max(i * samples.len() / n + 1));
-            let m = samples[a..b.min(samples.len())].iter().map(|&x| (i32::from(x) - 128).unsigned_abs()).max().unwrap_or(0);
+            let m = samples[a..b.min(samples.len())]
+                .iter()
+                .map(|&x| (i32::from(x) - 128).unsigned_abs())
+                .max()
+                .unwrap_or(0);
             (m * 2).min(255) as u8
         })
         .collect()
@@ -186,19 +212,34 @@ pub fn preview(ffmpeg: &Path, src: &Path, params: &ParamValues, cancel: &CancelT
     out.ensure_success("ffmpeg")?;
     let duration_ms = info_of(src).and_then(|i| i.duration_ms).unwrap_or(out.stdout.len() as u64);
     let err = run_analysis(ffmpeg, &detect_args(src, s.silence_db, s.max_pause_s), cancel, None)?;
-    let silences = if s.remove_silences { removable_segments(&parse_silences(&err, Some(duration_ms as f64 / 1000.0)), &s) } else { Vec::new() };
+    let silences = if s.remove_silences {
+        removable_segments(&parse_silences(&err, Some(duration_ms as f64 / 1000.0)), &s)
+    } else {
+        Vec::new()
+    };
     Ok(WaveformPreview { peaks: peaks_from_u8(&out.stdout, 200), duration_ms, silences })
 }
 
 fn settings() -> Vec<SettingSpec> {
-    let mut transcribe = spec::toggle("transcribe", "Transcribe on this PC, then archive audio", Some("Keeps a searchable text file next to each meeting"), false, true, false);
+    let mut transcribe = spec::toggle(
+        "transcribe",
+        "Transcribe on this PC, then archive audio",
+        Some("Keeps a searchable text file next to each meeting"),
+        false,
+        true,
+        false,
+    );
     transcribe.disabled_reason = Some("Requires a local transcription tool (none is bundled)".into());
     vec![
         spec::choice(
             "codec",
             "Format",
             "opus",
-            &[("opus", "Opus", Some("Smallest for speech")), ("aac", "AAC (.m4a)", Some("Plays everywhere")), ("flac", "FLAC", Some("Lossless"))],
+            &[
+                ("opus", "Opus", Some("Smallest for speech")),
+                ("aac", "AAC (.m4a)", Some("Plays everywhere")),
+                ("flac", "FLAC", Some("Lossless")),
+            ],
             true,
         ),
         spec::number("bitrate_kbps", "Bitrate", 24.0, 6.0, 320.0, 2.0, Some("kbps"), true),
@@ -215,9 +256,32 @@ fn settings() -> Vec<SettingSpec> {
 fn presets() -> Vec<StepPreset> {
     use spec::{b, n, t};
     vec![
-        spec::preset("speech", "Speech", "Opus 24 kbps mono · smallest", true, &[("codec", t("opus")), ("bitrate_kbps", n(24.0)), ("downmix_mono", b(true)), ("remove_silences", b(true))]),
-        spec::preset("transcription_safe", "Transcription-safe", "Opus 48 kbps · keeps detail for speech-to-text", true, &[("codec", t("opus")), ("bitrate_kbps", n(48.0)), ("downmix_mono", b(false)), ("remove_silences", b(false))]),
-        spec::preset("lossless", "Lossless", "FLAC · no quality loss, ~45 % smaller", false, &[("codec", t("flac")), ("downmix_mono", b(false)), ("remove_silences", b(false))]),
+        spec::preset(
+            "speech",
+            "Speech",
+            "Opus 24 kbps mono · smallest",
+            true,
+            &[("codec", t("opus")), ("bitrate_kbps", n(24.0)), ("downmix_mono", b(true)), ("remove_silences", b(true))],
+        ),
+        spec::preset(
+            "transcription_safe",
+            "Transcription-safe",
+            "Opus 48 kbps · keeps detail for speech-to-text",
+            true,
+            &[
+                ("codec", t("opus")),
+                ("bitrate_kbps", n(48.0)),
+                ("downmix_mono", b(false)),
+                ("remove_silences", b(false)),
+            ],
+        ),
+        spec::preset(
+            "lossless",
+            "Lossless",
+            "FLAC · no quality loss, ~45 % smaller",
+            false,
+            &[("codec", t("flac")), ("downmix_mono", b(false)), ("remove_silences", b(false))],
+        ),
     ]
 }
 
@@ -250,9 +314,19 @@ impl Optimiser for Audio {
 
     fn estimate(&self, entry: &FileEntry, params: &ParamValues) -> Result<Estimate> {
         let s = AudioSettings::from_params(params);
-        let plan = AudioPlan { lossy_kbps: (s.codec != Codec::Flac).then_some(s.bitrate_kbps), mono: s.mono, strip_cover: s.strip_cover };
+        let plan = AudioPlan {
+            lossy_kbps: (s.codec != Codec::Flac).then_some(s.bitrate_kbps),
+            mono: s.mono,
+            strip_cover: s.strip_cover,
+        };
         let after = audio_after(info_of(&entry.path).as_ref(), entry.size, &plan);
-        Ok(Estimate { files: 1, bytes_before: entry.size, bytes_after: after.min(entry.size), confidence: mj_core::Confidence::Estimated, skipped: 0 })
+        Ok(Estimate {
+            files: 1,
+            bytes_before: entry.size,
+            bytes_after: after.min(entry.size),
+            confidence: mj_core::Confidence::Estimated,
+            skipped: 0,
+        })
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
@@ -279,7 +353,11 @@ impl Optimiser for Audio {
         if let (false, Some(d_in), Some(d_out)) = (s.remove_silences, dur, info_of(&out).and_then(|i| i.duration_ms)) {
             if d_in.abs_diff(d_out) > (d_in / 50).max(1000) {
                 let _ = std::fs::remove_file(&out);
-                return Err(Error::Internal(format!("the converted file is {} long but the original is {}; nothing was changed", clock(d_out as f64 / 1000.0), clock(d_in as f64 / 1000.0))));
+                return Err(Error::Internal(format!(
+                    "the converted file is {} long but the original is {}; nothing was changed",
+                    clock(d_out as f64 / 1000.0),
+                    clock(d_in as f64 / 1000.0)
+                )));
             }
         }
         if after >= before {
@@ -303,7 +381,11 @@ impl Optimiser for Audio {
                 if let Some(d) = info.as_ref().and_then(|i| i.duration_s()) {
                     columns.insert("length".to_string(), clock(d));
                 }
-                common::Described { reason: "Recording can be stored in much less space".into(), columns, sub_group: None }
+                common::Described {
+                    reason: "Recording can be stored in much less space".into(),
+                    columns,
+                    sub_group: None,
+                }
             },
         )
     }
@@ -329,9 +411,28 @@ mod tests {
         assert_eq!(
             tail,
             [
-                "-i", "/in/a.wav", "-map", "0:a:0", "-vn", "-map_metadata", "0", "-ac", "1", "-af",
-                "silenceremove=stop_periods=-1:stop_duration=2:stop_threshold=-45dB:stop_silence=2",
-                "-c:a", "libopus", "-b:a", "24k", "-vbr", "on", "-application", "voip", "-f", "opus", "/t/o.opus"
+                "-i",
+                "/in/a.wav",
+                "-map",
+                "0:a:0",
+                "-vn",
+                "-map_metadata",
+                "0",
+                "-ac",
+                "1",
+                "-af",
+                "silenceremove=stop_periods=-1:stop_duration=2:stop_threshold=-45dB:stop_silence=0",
+                "-c:a",
+                "libopus",
+                "-b:a",
+                "24k",
+                "-vbr",
+                "on",
+                "-application",
+                "voip",
+                "-f",
+                "opus",
+                "/t/o.opus"
             ]
         );
         assert_eq!(&a[..2], ["-nostdin", "-hide_banner"]);
@@ -340,7 +441,12 @@ mod tests {
     #[test]
     fn transcription_safe_keeps_stereo_and_pauses() {
         let a = s(&build_args(&settings_of("transcription_safe"), Path::new("/in/a.wav"), Path::new("/t/o.opus")));
-        assert!(a.contains(&"48k".to_string()) && !a.contains(&"-ac".to_string()) && !a.contains(&"-af".to_string()) && !a.contains(&"voip".to_string()));
+        assert!(
+            a.contains(&"48k".to_string())
+                && !a.contains(&"-ac".to_string())
+                && !a.contains(&"-af".to_string())
+                && !a.contains(&"voip".to_string())
+        );
     }
 
     #[test]
@@ -365,7 +471,10 @@ mod tests {
         let aac = s(&build_args(&st, Path::new("a.m4a"), Path::new("o.m4a")));
         assert!(aac.windows(2).any(|w| w == ["-c:a", "aac"]) && aac.contains(&"ipod".to_string()));
         st.codec = Codec::Opus;
-        assert!(s(&build_args(&st, Path::new("a"), Path::new("o"))).contains(&"-vn".to_string()), "Opus never carries cover art");
+        assert!(
+            s(&build_args(&st, Path::new("a"), Path::new("o"))).contains(&"-vn".to_string()),
+            "Opus never carries cover art"
+        );
     }
 
     #[test]
@@ -376,7 +485,10 @@ mod tests {
 
     #[test]
     fn parameters_are_clamped() {
-        let p = ParamValues::new().with("bitrate_kbps", spec::n(9999.0)).with("max_pause_s", spec::n(0.0)).with("codec", spec::t("weird"));
+        let p = ParamValues::new()
+            .with("bitrate_kbps", spec::n(9999.0))
+            .with("max_pause_s", spec::n(0.0))
+            .with("codec", spec::t("weird"));
         let st = AudioSettings::from_params(&p);
         assert_eq!((st.bitrate_kbps, st.max_pause_s, st.codec), (320, 0.5, Codec::Opus));
     }

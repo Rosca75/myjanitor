@@ -44,7 +44,14 @@ pub struct RunOptions<'a> {
 
 impl Default for RunOptions<'_> {
     fn default() -> Self {
-        RunOptions { timeout: Some(Duration::from_secs(300)), max_stdout: 1 << 20, max_stderr: 64 << 10, cancel: None, cwd: None, on_line: None }
+        RunOptions {
+            timeout: Some(Duration::from_secs(300)),
+            max_stdout: 1 << 20,
+            max_stderr: 64 << 10,
+            cancel: None,
+            cwd: None,
+            on_line: None,
+        }
     }
 }
 
@@ -77,11 +84,19 @@ impl RunOutput {
     /// Turn a failed run into an error that says what failed and why.
     pub fn ensure_success(&self, tool: &str) -> Result<()> {
         if self.timed_out {
-            return Err(Error::Io { path: None, kind: "timed_out", message: format!("{tool} did not finish in time and was stopped") });
+            return Err(Error::Io {
+                path: None,
+                kind: "timed_out",
+                message: format!("{tool} did not finish in time and was stopped"),
+            });
         }
         if self.code != Some(0) {
             let code = self.code.map_or("a signal".to_string(), |c| format!("code {c}"));
-            return Err(Error::Io { path: None, kind: "tool_failed", message: format!("{tool} failed (exit {code}): {}", self.stderr_tail(400)) });
+            return Err(Error::Io {
+                path: None,
+                kind: "tool_failed",
+                message: format!("{tool} failed (exit {code}): {}", self.stderr_tail(400)),
+            });
         }
         Ok(())
     }
@@ -158,7 +173,12 @@ fn pump(mut r: impl Read, cap: usize, keep_tail: bool, stream: Stream, hook: Opt
 fn kill_tree(child: &mut std::process::Child) {
     let pid = child.id().to_string();
     #[cfg(unix)]
-    let _ = Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -199,7 +219,11 @@ pub fn run(program: &Path, args: &[OsString], opts: &RunOptions<'_>) -> Result<R
     let started = Instant::now();
     let mut child = cmd.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => Error::ToolMissing(name.clone()),
-        _ => Error::Io { path: Some(program.to_path_buf()), kind: "spawn", message: format!("could not start {name}: {e}") },
+        _ => Error::Io {
+            path: Some(program.to_path_buf()),
+            kind: "spawn",
+            message: format!("could not start {name}: {e}"),
+        },
     })?;
     let (out, err) = (child.stdout.take(), child.stderr.take());
     let (stop, hook) = (AtomicBool::new(false), opts.on_line);
@@ -311,7 +335,8 @@ mod tests {
         fn timeout_kills_the_child() {
             let (p, a) = sh("sleep 20", &[]);
             let t = Instant::now();
-            let o = run(&p, &a, &RunOptions { timeout: Some(Duration::from_millis(200)), ..Default::default() }).unwrap();
+            let o =
+                run(&p, &a, &RunOptions { timeout: Some(Duration::from_millis(200)), ..Default::default() }).unwrap();
             assert!(o.timed_out && !o.success() && o.code.is_none());
             assert!(t.elapsed() < Duration::from_secs(5));
             assert!(o.ensure_success("sleep").unwrap_err().to_string().contains("in time"));
@@ -339,9 +364,13 @@ mod tests {
             let (p, a) = sh("pwd; printf 'a\\rb\\nc'", &[]);
             let seen = Mutex::new(Vec::new());
             let hook = |s: Stream, l: &str| seen.lock().unwrap().push((s, l.to_string()));
-            let o = run(&p, &a, &RunOptions { cwd: Some(dir.path()), on_line: Some(&hook), ..Default::default() }).unwrap();
+            let o =
+                run(&p, &a, &RunOptions { cwd: Some(dir.path()), on_line: Some(&hook), ..Default::default() }).unwrap();
             let want = std::fs::canonicalize(dir.path()).unwrap();
-            assert_eq!(std::fs::canonicalize(String::from_utf8_lossy(&o.stdout).lines().next().unwrap()).unwrap(), want);
+            assert_eq!(
+                std::fs::canonicalize(String::from_utf8_lossy(&o.stdout).lines().next().unwrap()).unwrap(),
+                want
+            );
             let lines: Vec<String> = seen.lock().unwrap().iter().map(|(_, l)| l.clone()).collect();
             assert_eq!(&lines[1..], ["a", "b", "c"]);
         }

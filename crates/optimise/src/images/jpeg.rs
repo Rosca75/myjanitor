@@ -5,8 +5,8 @@
 
 use mj_core::{
     ActionKind, Availability, Category, Confidence, DetectContext, DetectorOutput, Error, Estimate, ExternalTool,
-    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport, Result,
-    SafetyClass, SettingSpec, StepPreset,
+    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport,
+    Result, SafetyClass, SettingSpec, StepPreset,
 };
 
 use super::adapters::jpegtran_args;
@@ -39,22 +39,65 @@ fn settings() -> Vec<SettingSpec> {
             &[
                 ("keep_all", "Keep everything", None),
                 ("strip_gps", "Remove GPS position only", Some("Also removes XMP packets that mention GPS")),
-                ("strip_thumbnail", "Remove embedded thumbnails", Some("Previews inside the file; the photo is untouched")),
+                (
+                    "strip_thumbnail",
+                    "Remove embedded thumbnails",
+                    Some("Previews inside the file; the photo is untouched"),
+                ),
                 ("strip_all", "Remove all metadata", Some("Keeps orientation and colour profile")),
             ],
             false,
         ),
-        spec::toggle("strip_icc", "Also remove colour profile", Some("Colours can look different afterwards"), false, true, true),
-        spec::toggle("optimise_huffman", "Optimise Huffman tables (jpegtran)", Some("Needs jpegtran on PATH; pixels stay identical"), true, true, false),
-        spec::toggle("progressive", "Make progressive (jpegtran)", Some("Usually smaller for large photos"), true, true, false),
+        spec::toggle(
+            "strip_icc",
+            "Also remove colour profile",
+            Some("Colours can look different afterwards"),
+            false,
+            true,
+            true,
+        ),
+        spec::toggle(
+            "optimise_huffman",
+            "Optimise Huffman tables (jpegtran)",
+            Some("Needs jpegtran on PATH; pixels stay identical"),
+            true,
+            true,
+            false,
+        ),
+        spec::toggle(
+            "progressive",
+            "Make progressive (jpegtran)",
+            Some("Usually smaller for large photos"),
+            true,
+            true,
+            false,
+        ),
     ]
 }
 
 fn presets() -> Vec<StepPreset> {
     vec![
-        spec::preset("safe", "Safe", "Drop embedded thumbnails · pixel-identical", false, &[("metadata", spec::t("strip_thumbnail"))]),
-        spec::preset("privacy", "Privacy", "Remove GPS position · pixel-identical", false, &[("metadata", spec::t("strip_gps"))]),
-        spec::preset("smallest", "Smallest", "Drop all metadata · pixel-identical", false, &[("metadata", spec::t("strip_all"))]),
+        spec::preset(
+            "safe",
+            "Safe",
+            "Drop embedded thumbnails · pixel-identical",
+            false,
+            &[("metadata", spec::t("strip_thumbnail"))],
+        ),
+        spec::preset(
+            "privacy",
+            "Privacy",
+            "Remove GPS position · pixel-identical",
+            false,
+            &[("metadata", spec::t("strip_gps"))],
+        ),
+        spec::preset(
+            "smallest",
+            "Smallest",
+            "Drop all metadata · pixel-identical",
+            false,
+            &[("metadata", spec::t("strip_all"))],
+        ),
     ]
 }
 
@@ -97,7 +140,13 @@ impl Optimiser for JpegLossless {
         if matches!(rewrite(&prefix, JpegMetadata::KeepAll), Err(Error::Unsupported { .. })) {
             return Err(Error::unsupported("JPEG", "multi-picture JPEG"));
         }
-        Ok(Estimate { files: 1, bytes_before: entry.size, bytes_after: entry.size.saturating_sub(saved), confidence: Confidence::Estimated, skipped: 0 })
+        Ok(Estimate {
+            files: 1,
+            bytes_before: entry.size,
+            bytes_after: entry.size.saturating_sub(saved),
+            confidence: Confidence::Estimated,
+            skipped: 0,
+        })
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
@@ -111,16 +160,24 @@ impl Optimiser for JpegLossless {
         };
         let (mut best, mut notes) = (r.bytes, r.notes);
         job.cancel.checkpoint()?;
-        if let (true, Ok(exe)) = (job.params.bool("optimise_huffman", true), crate::tools::require(job.tools, "jpegtran")) {
+        if let (true, Ok(exe)) =
+            (job.params.bool("optimise_huffman", true), crate::tools::require(job.tools, "jpegtran"))
+        {
             let (stage1, stage2) = (job.temp_dir.join("stage1.jpg"), job.temp_dir.join("stage2.jpg"));
             std::fs::write(&stage1, &best).map_err(|e| Error::io(&stage1, e))?;
             let args = jpegtran_args(&stage1, &stage2, job.params.bool("progressive", true));
-            let o = run(exe, &args, &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), ..Default::default() })?;
+            let o = run(
+                exe,
+                &args,
+                &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), ..Default::default() },
+            )?;
             if o.success() {
                 let cand = std::fs::read(&stage2).map_err(|e| Error::io(&stage2, e))?;
                 // Same image, same kept markers, complete stream: otherwise the tool's output is ignored.
                 let same = header_signature(&cand).zip(header_signature(&best)).is_some_and(|((fa, sa), (fb, sb))| {
-                    (fa.width, fa.height, fa.components, fa.precision) == (fb.width, fb.height, fb.components, fb.precision) && sa == sb
+                    (fa.width, fa.height, fa.components, fa.precision)
+                        == (fb.width, fb.height, fb.components, fb.precision)
+                        && sa == sb
                 });
                 if same && ends_with_eoi(&cand) && cand.len() < best.len() {
                     best = cand;
@@ -132,7 +189,8 @@ impl Optimiser for JpegLossless {
         }
         // Removing a GPS position zeroes bytes in place, so the file may keep its size; that is still
         // the point of the run (privacy), so an equal-size, changed file is written for it.
-        let privacy_rewrite = policy(job.params) == JpegMetadata::StripGps && best.len() as u64 == before && best != src;
+        let privacy_rewrite =
+            policy(job.params) == JpegMetadata::StripGps && best.len() as u64 == before && best != src;
         if best.len() as u64 > before || (best.len() as u64 == before && !privacy_rewrite) {
             return Ok(common::skipped(before, "Nothing to remove or optimise"));
         }
@@ -147,7 +205,11 @@ impl Optimiser for JpegLossless {
             MIN_SIZE,
             &|e| self.applies_to(e),
             &|e, p| self.estimate(e, p),
-            &|_, _| common::Described { reason: "Metadata can be removed without touching the picture".into(), columns: Default::default(), sub_group: None },
+            &|_, _| common::Described {
+                reason: "Metadata can be removed without touching the picture".into(),
+                columns: Default::default(),
+                sub_group: None,
+            },
         )
     }
 }
@@ -168,7 +230,19 @@ mod tests {
 
     fn photo() -> Vec<u8> {
         let thumb = [vec![0xFF, 0xD8, 0xFF, 0xDB, 0, 4, 1, 2], vec![9; 3000], vec![0xFF, 0xD9]].concat();
-        let t = tiff(&[(0x0112, Value::Short(6)), (0x8825, Value::SubIfd(vec![(1, Value::Ascii("N".into())), (2, Value::Rational(vec![(1, 1), (2, 1), (3, 1)]))]))], Some(&[(0, Value::Thumbnail(thumb))]));
+        let t = tiff(
+            &[
+                (0x0112, Value::Short(6)),
+                (
+                    0x8825,
+                    Value::SubIfd(vec![
+                        (1, Value::Ascii("N".into())),
+                        (2, Value::Rational(vec![(1, 1), (2, 1), (3, 1)])),
+                    ]),
+                ),
+            ],
+            Some(&[(0, Value::Thumbnail(thumb))]),
+        );
         let mut f = vec![0xFF, 0xD8];
         f.extend(app1(&t));
         f.extend(seg(0xDB, &[0; 65]));
@@ -180,9 +254,25 @@ mod tests {
         f
     }
 
-    fn run_job(src: &std::path::Path, dst: &std::path::Path, d: &TempDir, p: &ParamValues, tools: &[ExternalTool]) -> OptimiseOutput {
+    fn run_job(
+        src: &std::path::Path,
+        dst: &std::path::Path,
+        d: &TempDir,
+        p: &ParamValues,
+        tools: &[ExternalTool],
+    ) -> OptimiseOutput {
         let c = CancelToken::new();
-        JpegLossless.optimise(&OptimiseJob { src, dst, params: p, tools, temp_dir: d.path(), cancel: &c, progress: &NullProgress }).unwrap()
+        JpegLossless
+            .optimise(&OptimiseJob {
+                src,
+                dst,
+                params: p,
+                tools,
+                temp_dir: d.path(),
+                cancel: &c,
+                progress: &NullProgress,
+            })
+            .unwrap()
     }
 
     #[test]
@@ -195,7 +285,9 @@ mod tests {
         let (a, b) = (std::fs::read(&src).unwrap(), std::fs::read(&dst).unwrap());
         let scan = |v: &[u8]| v[v.windows(2).position(|w| w == [0xFF, 0xDA]).unwrap()..].to_vec();
         assert_eq!(scan(&a), scan(&b));
-        let est = JpegLossless.estimate(&FileEntry::new(&src, mj_core::EntryKind::File, a.len() as u64), &ParamValues::new()).unwrap();
+        let est = JpegLossless
+            .estimate(&FileEntry::new(&src, mj_core::EntryKind::File, a.len() as u64), &ParamValues::new())
+            .unwrap();
         assert!(est.bytes_after + 3000 < est.bytes_before);
     }
 
@@ -232,7 +324,8 @@ mod tests {
         };
         // Good fake: same file minus 500 scan bytes (still ends in EOI).
         let tools = mk("head -c $(( $(wc -c < \"$in\") - 502 )) \"$in\" > \"$out\"; printf '\\377\\331' >> \"$out\"");
-        let plain = run_job(&src, &d.join("p.jpg"), &d, &ParamValues::new().with("optimise_huffman", spec::b(false)), &tools);
+        let plain =
+            run_job(&src, &d.join("p.jpg"), &d, &ParamValues::new().with("optimise_huffman", spec::b(false)), &tools);
         let with = run_job(&src, &d.join("w.jpg"), &d, &ParamValues::new(), &tools);
         assert_eq!(with.bytes_after + 500, plain.bytes_after);
         assert!(with.notes.iter().any(|n| n.contains("jpegtran")));
@@ -256,7 +349,15 @@ mod tests {
         let c = CancelToken::new();
         let p = ParamValues::new();
         let dst = d.join("o2.jpg");
-        let res = JpegLossless.optimise(&OptimiseJob { src: &bad, dst: &dst, params: &p, tools: &[], temp_dir: d.path(), cancel: &c, progress: &NullProgress });
+        let res = JpegLossless.optimise(&OptimiseJob {
+            src: &bad,
+            dst: &dst,
+            params: &p,
+            tools: &[],
+            temp_dir: d.path(),
+            cancel: &c,
+            progress: &NullProgress,
+        });
         assert!(res.is_err() && !dst.exists());
     }
 }

@@ -20,7 +20,9 @@ pub enum JpegMetadata {
     /// Remove the embedded EXIF thumbnail and JFXX thumbnails.
     StripThumbnail,
     /// Remove EXIF, XMP, IPTC, comments and vendor segments; keep orientation and (unless `icc`) the colour profile.
-    StripAll { icc: bool },
+    StripAll {
+        icc: bool,
+    },
 }
 
 impl JpegMetadata {
@@ -81,7 +83,9 @@ fn decide(marker: u8, body: &[u8], policy: JpegMetadata, xmp_dropped: &mut bool)
     let all = matches!(policy, StripAll { .. });
     Ok(match marker {
         0xFE if policy != KeepAll => Act::Drop("comments"),
-        0xE0 if body.starts_with(b"JFXX\0") && matches!(policy, StripThumbnail | StripAll { .. }) => Act::Drop("JFXX thumbnail"),
+        0xE0 if body.starts_with(b"JFXX\0") && matches!(policy, StripThumbnail | StripAll { .. }) => {
+            Act::Drop("JFXX thumbnail")
+        }
         0xE1 if body.starts_with(b"Exif\0\0") => {
             let tiff = &body[6..];
             match policy {
@@ -99,10 +103,13 @@ fn decide(marker: u8, body: &[u8], policy: JpegMetadata, xmp_dropped: &mut bool)
                         Ok(true) => Act::Replace(exif_body(&t), "GPS position"),
                         Ok(false) => Act::Keep,
                         // Unreadable GPS data: remove all EXIF rather than risk leaking a location.
-                        Err(_) => kept_orientation(tiff).map_or(Act::Drop("EXIF (GPS unreadable)"), |b| Act::Replace(b, "EXIF (GPS unreadable)")),
+                        Err(_) => kept_orientation(tiff)
+                            .map_or(Act::Drop("EXIF (GPS unreadable)"), |b| Act::Replace(b, "EXIF (GPS unreadable)")),
                     }
                 }
-                StripAll { .. } => kept_orientation(tiff).map_or(Act::Drop("EXIF"), |b| Act::Replace(b, "EXIF (orientation kept)")),
+                StripAll { .. } => {
+                    kept_orientation(tiff).map_or(Act::Drop("EXIF"), |b| Act::Replace(b, "EXIF (orientation kept)"))
+                }
             }
         }
         0xE1 if body.starts_with(XMP) => match policy {
@@ -122,7 +129,9 @@ fn decide(marker: u8, body: &[u8], policy: JpegMetadata, xmp_dropped: &mut bool)
             StripAll { icc: true } => Act::Drop("colour profile"),
             _ => Act::Keep,
         },
-        0xE2 if body.starts_with(b"MPF\0") => return Err(Error::unsupported("JPEG", "multi-picture JPEG (MPF) is left untouched")),
+        0xE2 if body.starts_with(b"MPF\0") => {
+            return Err(Error::unsupported("JPEG", "multi-picture JPEG (MPF) is left untouched"))
+        }
         0xED if all => Act::Drop("IPTC/Photoshop data"),
         0xE2..=0xEC | 0xEF if all => Act::Drop("vendor data"),
         _ => Act::Keep,
@@ -153,7 +162,10 @@ pub fn rewrite(buf: &[u8], policy: JpegMetadata) -> Result<Rewritten> {
             0xD9 | 0x00 | 0x01 | 0xD0..=0xD8 => return Err(bad("unexpected marker before the first scan")),
             _ => {}
         }
-        let len = buf.get(pos + 2..pos + 4).map(|b| usize::from(u16::from_be_bytes([b[0], b[1]]))).ok_or_else(|| bad("truncated segment"))?;
+        let len = buf
+            .get(pos + 2..pos + 4)
+            .map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])))
+            .ok_or_else(|| bad("truncated segment"))?;
         let end = pos + 2 + len;
         if len < 2 || end > buf.len() {
             return Err(bad("segment length out of range"));
@@ -245,9 +257,20 @@ mod tests {
     fn exif(orientation: u16, gps: bool, thumb: bool) -> Vec<u8> {
         let mut ifd0 = vec![(0x010F, Value::Ascii("ACME".into())), (0x0112, Value::Short(orientation))];
         if gps {
-            ifd0.push((0x8825, Value::SubIfd(vec![(1, Value::Ascii("N".into())), (2, Value::Rational(vec![(52, 1), (30, 1), (0, 1)])), (3, Value::Ascii("E".into())), (4, Value::Rational(vec![(13, 1), (24, 1), (0, 1)]))])));
+            ifd0.push((
+                0x8825,
+                Value::SubIfd(vec![
+                    (1, Value::Ascii("N".into())),
+                    (2, Value::Rational(vec![(52, 1), (30, 1), (0, 1)])),
+                    (3, Value::Ascii("E".into())),
+                    (4, Value::Rational(vec![(13, 1), (24, 1), (0, 1)])),
+                ]),
+            ));
         }
-        let t1 = vec![(0, Value::Thumbnail([vec![0xFF, 0xD8, 0xFF, 0xDB, 0, 4, 1, 2], vec![9; 400], vec![0xFF, 0xD9]].concat()))];
+        let t1 = vec![(
+            0,
+            Value::Thumbnail([vec![0xFF, 0xD8, 0xFF, 0xDB, 0, 4, 1, 2], vec![9; 400], vec![0xFF, 0xD9]].concat()),
+        )];
         tiff(&ifd0, thumb.then_some(&t1[..]))
     }
 
@@ -296,7 +319,12 @@ mod tests {
     #[test]
     fn scan_bytes_are_identical_under_every_policy() {
         let f = sample(6, 0);
-        for p in [JpegMetadata::StripGps, JpegMetadata::StripThumbnail, JpegMetadata::StripAll { icc: false }, JpegMetadata::StripAll { icc: true }] {
+        for p in [
+            JpegMetadata::StripGps,
+            JpegMetadata::StripThumbnail,
+            JpegMetadata::StripAll { icc: false },
+            JpegMetadata::StripAll { icc: true },
+        ] {
             let r = rewrite(&f, p).unwrap();
             assert_eq!(scan(&r.bytes), scan(&f), "{p:?}");
             assert!(r.bytes.len() <= f.len(), "{p:?}");
@@ -344,7 +372,10 @@ mod tests {
         assert_eq!(r.bytes.len(), sample(1, 0).len());
         let mut f = sample(1, 0);
         f.extend_from_slice(b"MOTIONPHOTO-VIDEO");
-        assert_eq!(rewrite(&f, JpegMetadata::StripAll { icc: false }).unwrap().bytes.ends_with(b"MOTIONPHOTO-VIDEO"), true);
+        assert_eq!(
+            rewrite(&f, JpegMetadata::StripAll { icc: false }).unwrap().bytes.ends_with(b"MOTIONPHOTO-VIDEO"),
+            true
+        );
     }
 
     #[test]

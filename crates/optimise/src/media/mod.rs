@@ -8,3 +8,6 @@ pub mod estimate;
 pub mod ffmpeg;
 pub mod screen;
 pub mod video;
+
+#[cfg(test)]
+mod real_ffmpeg;

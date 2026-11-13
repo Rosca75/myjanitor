@@ -32,7 +32,13 @@ pub fn run_encode(job: &OptimiseJob<'_>, exe: &Path, argv: &[OsString], duration
         }
     };
     let hook: LineHook<'_> = &hook;
-    let opts = RunOptions { timeout: Some(Duration::from_secs(12 * 3600)), cancel: Some(job.cancel), cwd: Some(job.temp_dir), on_line: Some(hook), ..Default::default() };
+    let opts = RunOptions {
+        timeout: Some(Duration::from_secs(12 * 3600)),
+        cancel: Some(job.cancel),
+        cwd: Some(job.temp_dir),
+        on_line: Some(hook),
+        ..Default::default()
+    };
     let out = run(exe, argv, &opts)?;
     out.ensure_success("ffmpeg")?;
     Ok(out)
@@ -40,7 +46,13 @@ pub fn run_encode(job: &OptimiseJob<'_>, exe: &Path, argv: &[OsString], duration
 
 /// Run an analysis pass that prints to stderr (`silencedetect`, `freezedetect`): returns stderr.
 pub fn run_analysis(exe: &Path, argv: &[OsString], cancel: &CancelToken, cwd: Option<&Path>) -> Result<String> {
-    let opts = RunOptions { timeout: Some(Duration::from_secs(3600)), max_stderr: 4 << 20, cancel: Some(cancel), cwd, ..Default::default() };
+    let opts = RunOptions {
+        timeout: Some(Duration::from_secs(3600)),
+        max_stderr: 4 << 20,
+        cancel: Some(cancel),
+        cwd,
+        ..Default::default()
+    };
     let out = run(exe, argv, &opts)?;
     out.ensure_success("ffmpeg")?;
     Ok(out.stderr)
@@ -76,7 +88,12 @@ pub fn parse_encoders(text: &str) -> Vec<String> {
 
 /// Query the encoder list.
 pub fn list_encoders(exe: &Path, cancel: &CancelToken) -> Result<Vec<String>> {
-    let opts = RunOptions { timeout: Some(Duration::from_secs(20)), max_stdout: 1 << 20, cancel: Some(cancel), ..Default::default() };
+    let opts = RunOptions {
+        timeout: Some(Duration::from_secs(20)),
+        max_stdout: 1 << 20,
+        cancel: Some(cancel),
+        ..Default::default()
+    };
     let out = run(exe, &args(["-hide_banner", "-encoders"]), &opts)?;
     out.ensure_success("ffmpeg")?;
     Ok(parse_encoders(&String::from_utf8_lossy(&out.stdout)))
@@ -137,10 +154,22 @@ pub fn intersect(a: &[(f64, f64)], b: &[(f64, f64)]) -> Vec<(f64, f64)> {
 /// Trial-encode 0.2 s of black with `extra` encoder arguments; true when ffmpeg accepts them. Used to
 /// find out whether an encoder supports an option (screen-content tools) or hardware is really present.
 pub fn encoder_accepts(exe: &Path, encoder: &str, extra: &[&str], cancel: &CancelToken) -> bool {
-    let mut a = args(["-nostdin", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=256x256:r=10:d=0.4", "-c:v", encoder]);
+    let mut a = args([
+        "-nostdin",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=256x256:r=10:d=0.4",
+        "-c:v",
+        encoder,
+    ]);
     a.extend(args(extra));
     a.extend(args(["-f", "null", "-"]));
-    run(exe, &a, &RunOptions { timeout: Some(Duration::from_secs(30)), cancel: Some(cancel), ..Default::default() }).is_ok_and(|o| o.success())
+    run(exe, &a, &RunOptions { timeout: Some(Duration::from_secs(30)), cancel: Some(cancel), ..Default::default() })
+        .is_ok_and(|o| o.success())
 }
 
 /// Seconds as `h:mm:ss` or `m:ss`.
@@ -189,6 +218,9 @@ mod tests {
 
     #[test]
     fn clock_format() {
-        assert_eq!((clock(59.6), clock(125.0), clock(3725.0)), ("1:00".to_string(), "2:05".to_string(), "1:02:05".to_string()));
+        assert_eq!(
+            (clock(59.6), clock(125.0), clock(3725.0)),
+            ("1:00".to_string(), "2:05".to_string(), "1:02:05".to_string())
+        );
     }
 }

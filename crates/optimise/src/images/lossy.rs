@@ -11,8 +11,8 @@ use std::path::Path;
 
 use mj_core::{
     ActionKind, Availability, Category, Confidence, DetectContext, DetectorOutput, Error, Estimate, ExternalTool,
-    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport, Result,
-    SafetyClass, SettingSpec, StepPreset,
+    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport,
+    Result, SafetyClass, SettingSpec, StepPreset,
 };
 
 use super::adapters::{encoder_args, resize_target, EncodeSpec, Target};
@@ -42,18 +42,56 @@ fn settings() -> Vec<SettingSpec> {
             false,
         ),
         spec::number("quality", "Quality", 80.0, 1.0, 100.0, 1.0, None, false),
-        spec::toggle("lossless", "Keep every pixel (lossless)", Some("JPEG to JPEG XL is reversible; other conversions are lossless but larger"), false, false, false),
+        spec::toggle(
+            "lossless",
+            "Keep every pixel (lossless)",
+            Some("JPEG to JPEG XL is reversible; other conversions are lossless but larger"),
+            false,
+            false,
+            false,
+        ),
         spec::number("max_edge", "Shrink pictures larger than", 0.0, 0.0, 12000.0, 100.0, Some("px (0 = off)"), false),
-        spec::choice("edge", "Measured on the", "long", &[("long", "Long edge", None), ("short", "Short edge", None)], true),
-        spec::toggle("strip_metadata", "Remove EXIF and XMP", Some("A colour profile is always kept"), false, true, false),
+        spec::choice(
+            "edge",
+            "Measured on the",
+            "long",
+            &[("long", "Long edge", None), ("short", "Short edge", None)],
+            true,
+        ),
+        spec::toggle(
+            "strip_metadata",
+            "Remove EXIF and XMP",
+            Some("A colour profile is always kept"),
+            false,
+            true,
+            false,
+        ),
     ]
 }
 
 fn presets() -> Vec<StepPreset> {
     vec![
-        spec::preset("balanced", "Balanced", "WebP quality 80 · looks the same", true, &[("format", spec::t("webp")), ("quality", spec::n(80.0)), ("lossless", spec::b(false))]),
-        spec::preset("smallest", "Smallest", "AVIF quality 60", true, &[("format", spec::t("avif")), ("quality", spec::n(60.0)), ("lossless", spec::b(false))]),
-        spec::preset("reversible", "Reversible", "JPEG XL from JPEG · no quality loss", false, &[("format", spec::t("jxl")), ("lossless", spec::b(true))]),
+        spec::preset(
+            "balanced",
+            "Balanced",
+            "WebP quality 80 · looks the same",
+            true,
+            &[("format", spec::t("webp")), ("quality", spec::n(80.0)), ("lossless", spec::b(false))],
+        ),
+        spec::preset(
+            "smallest",
+            "Smallest",
+            "AVIF quality 60",
+            true,
+            &[("format", spec::t("avif")), ("quality", spec::n(60.0)), ("lossless", spec::b(false))],
+        ),
+        spec::preset(
+            "reversible",
+            "Reversible",
+            "JPEG XL from JPEG · no quality loss",
+            false,
+            &[("format", spec::t("jxl")), ("lossless", spec::b(true))],
+        ),
     ]
 }
 
@@ -78,7 +116,9 @@ fn is_jpeg_name(p: &Path) -> bool {
 fn encode_spec(p: &ParamValues, src: &Path) -> Option<EncodeSpec> {
     let target = Target::parse(p.text("format", "webp"))?;
     let dims = dimensions(src);
-    let resize = dims.and_then(|(w, h)| resize_target(w, h, p.number("max_edge", 0.0).max(0.0) as u32, p.text("edge", "long") == "long"));
+    let resize = dims.and_then(|(w, h)| {
+        resize_target(w, h, p.number("max_edge", 0.0).max(0.0) as u32, p.text("edge", "long") == "long")
+    });
     Some(EncodeSpec {
         target,
         quality: p.number("quality", 80.0).clamp(1.0, 100.0) as u8,
@@ -93,7 +133,9 @@ fn encode_spec(p: &ParamValues, src: &Path) -> Option<EncodeSpec> {
 fn magic_ok(t: Target, head: &[u8]) -> bool {
     match t {
         Target::Webp => head.len() >= 12 && &head[..4] == b"RIFF" && &head[8..12] == b"WEBP",
-        Target::Avif => head.len() >= 12 && &head[4..8] == b"ftyp" && matches!(&head[8..12], b"avif" | b"avis" | b"mif1"),
+        Target::Avif => {
+            head.len() >= 12 && &head[4..8] == b"ftyp" && matches!(&head[8..12], b"avif" | b"avis" | b"mif1")
+        }
         Target::Jxl => head.starts_with(&[0xFF, 0x0A]) || head.starts_with(b"\0\0\0\x0cJXL "),
     }
 }
@@ -158,17 +200,34 @@ impl Optimiser for ImageLossy {
         let before = std::fs::metadata(job.src).map_err(|e| Error::io(job.src, e))?.len();
         let s = encode_spec(job.params, job.src).ok_or_else(|| Error::InvalidInput("unknown image format".into()))?;
         if s.resize.is_some() && s.target != Target::Webp {
-            return Err(Error::unsupported("resize", "only WebP output can resize (cwebp); choose WebP or turn resizing off"));
+            return Err(Error::unsupported(
+                "resize",
+                "only WebP output can resize (cwebp); choose WebP or turn resizing off",
+            ));
         }
         let exe = crate::tools::require(job.tools, s.target.tool())?;
         let out = job.temp_dir.join(format!("mj-image-out.{}", s.target.extension()));
         let _ = std::fs::remove_file(&out);
-        let o = run(exe, &encoder_args(&s, job.src, &out), &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), timeout: Some(std::time::Duration::from_secs(900)), ..Default::default() })?;
+        let o = run(
+            exe,
+            &encoder_args(&s, job.src, &out),
+            &RunOptions {
+                cancel: Some(job.cancel),
+                cwd: Some(job.temp_dir),
+                timeout: Some(std::time::Duration::from_secs(900)),
+                ..Default::default()
+            },
+        )?;
         o.ensure_success(s.target.tool())?;
-        let head = std::fs::read(&out).map(|b| b.into_iter().take(16).collect::<Vec<u8>>()).map_err(|e| Error::io(&out, e))?;
+        let head =
+            std::fs::read(&out).map(|b| b.into_iter().take(16).collect::<Vec<u8>>()).map_err(|e| Error::io(&out, e))?;
         if !magic_ok(s.target, &head) {
             let _ = std::fs::remove_file(&out);
-            return Err(Error::Internal(format!("{} did not write a valid .{} file", s.target.tool(), s.target.extension())));
+            return Err(Error::Internal(format!(
+                "{} did not write a valid .{} file",
+                s.target.tool(),
+                s.target.extension()
+            )));
         }
         let after = std::fs::metadata(&out).map_err(|e| Error::io(&out, e))?.len();
         if after >= before {
@@ -201,7 +260,6 @@ impl Optimiser for ImageLossy {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,7 +269,10 @@ mod tests {
 
     #[test]
     fn availability_names_every_missing_tool() {
-        assert_eq!(ImageLossy.availability(&[]), Availability::Disabled { reason: "Requires cwebp, avifenc or cjxl on PATH".into() });
+        assert_eq!(
+            ImageLossy.availability(&[]),
+            Availability::Disabled { reason: "Requires cwebp, avifenc or cjxl on PATH".into() }
+        );
         assert!(ImageLossy.availability(&[crate::tools::tool_at("cjxl", "/x/cjxl")]).is_available());
     }
 
@@ -234,7 +295,17 @@ mod tests {
         let src = d.write("a.png", &rgb_png(400, 200, &[], 1)).unwrap();
         let dst = d.join("o.avif");
         let c = CancelToken::new();
-        let go = |p: &ParamValues, tools: &[ExternalTool]| ImageLossy.optimise(&OptimiseJob { src: &src, dst: &dst, params: p, tools, temp_dir: d.path(), cancel: &c, progress: &NullProgress });
+        let go = |p: &ParamValues, tools: &[ExternalTool]| {
+            ImageLossy.optimise(&OptimiseJob {
+                src: &src,
+                dst: &dst,
+                params: p,
+                tools,
+                temp_dir: d.path(),
+                cancel: &c,
+                progress: &NullProgress,
+            })
+        };
         let p = ParamValues::new().with("format", spec::t("avif")).with("max_edge", spec::n(100.0));
         assert!(matches!(go(&p, &[]), Err(Error::Unsupported { .. })));
         let p = ParamValues::new().with("format", spec::t("avif"));
@@ -257,14 +328,32 @@ mod tests {
         let tools = vec![crate::tools::tool_at("cwebp", &exe)];
         let (dst, c) = (d.join("o.webp"), CancelToken::new());
         let p = ParamValues::new().with("quality", spec::n(70.0)).with("max_edge", spec::n(200.0));
-        let r = ImageLossy.optimise(&OptimiseJob { src: &src, dst: &dst, params: &p, tools: &tools, temp_dir: d.path(), cancel: &c, progress: &NullProgress }).unwrap();
+        let r = ImageLossy
+            .optimise(&OptimiseJob {
+                src: &src,
+                dst: &dst,
+                params: &p,
+                tools: &tools,
+                temp_dir: d.path(),
+                cancel: &c,
+                progress: &NullProgress,
+            })
+            .unwrap();
         assert!(r.lossy && r.notes.contains(&"output_extension=webp".to_string()) && dst.is_file());
         let args = std::fs::read_to_string(&log).unwrap();
         assert!(args.contains("-q\n70\n") && args.contains("-resize\n200\n100\n"), "{args}");
         // An encoder that writes garbage is an error and leaves no destination.
         std::fs::write(&exe, "#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"-o\" ]; then out=\"$2\"; fi; shift; done\necho nonsense > \"$out\"\n").unwrap();
         let dst2 = d.join("o2.webp");
-        let r = ImageLossy.optimise(&OptimiseJob { src: &src, dst: &dst2, params: &p, tools: &tools, temp_dir: d.path(), cancel: &c, progress: &NullProgress });
+        let r = ImageLossy.optimise(&OptimiseJob {
+            src: &src,
+            dst: &dst2,
+            params: &p,
+            tools: &tools,
+            temp_dir: d.path(),
+            cancel: &c,
+            progress: &NullProgress,
+        });
         assert!(r.is_err() && !dst2.exists());
     }
 
@@ -272,17 +361,32 @@ mod tests {
     #[test]
     fn real_encoders_when_present() {
         let tools = crate::tools::detect(&Default::default());
-        let present: Vec<&str> = ["cwebp", "avifenc", "cjxl"].into_iter().filter(|t| mj_core::tools::find(&tools, t).is_some()).collect();
+        let present: Vec<&str> =
+            ["cwebp", "avifenc", "cjxl"].into_iter().filter(|t| mj_core::tools::find(&tools, t).is_some()).collect();
         eprintln!("real image encoders present: {present:?}");
         // A flat synthetic PNG is tiny, so only check the run completes or is skipped as not smaller.
         let d = TempDir::new("lossy-real").unwrap();
         let src = d.write("a.png", &rgb_png(512, 512, &[], 1)).unwrap();
         for (i, t) in present.iter().enumerate() {
-            let fmt = match *t { "cwebp" => "webp", "avifenc" => "avif", _ => "jxl" };
+            let fmt = match *t {
+                "cwebp" => "webp",
+                "avifenc" => "avif",
+                _ => "jxl",
+            };
             let dst = d.join(format!("o{i}"));
             let p = ParamValues::new().with("format", spec::t(fmt));
             let c = CancelToken::new();
-            let r = ImageLossy.optimise(&OptimiseJob { src: &src, dst: &dst, params: &p, tools: &tools, temp_dir: d.path(), cancel: &c, progress: &NullProgress }).unwrap();
+            let r = ImageLossy
+                .optimise(&OptimiseJob {
+                    src: &src,
+                    dst: &dst,
+                    params: &p,
+                    tools: &tools,
+                    temp_dir: d.path(),
+                    cancel: &c,
+                    progress: &NullProgress,
+                })
+                .unwrap();
             assert!(r.skipped.is_some() || dst.is_file());
         }
     }

@@ -118,7 +118,13 @@ pub fn audio_after(info: Option<&MediaInfo>, size: u64, p: &AudioPlan) -> u64 {
                 _ => 3.0, // a lossy source grows when stored as FLAC
             };
             if p.mono && stereo {
-                r *= if codec == "flac" { 0.55 } else if codec.starts_with("pcm") { 0.5 } else { 1.0 };
+                r *= if codec == "flac" {
+                    0.55
+                } else if codec.starts_with("pcm") {
+                    0.5
+                } else {
+                    1.0
+                };
             }
             (before - cover).max(0.0) * r
         }
@@ -138,7 +144,13 @@ mod tests {
 
     fn video_info() -> MediaInfo {
         use build::mp4::*;
-        let tail = moov(600_000, &[trak(b"vide", b"avc1", 1920, 1080, 30_000, 18_000_000, 18_000), trak(b"soun", b"mp4a", 0, 0, 48_000, 28_800_000, 28_000)]);
+        let tail = moov(
+            600_000,
+            &[
+                trak(b"vide", b"avc1", 1920, 1080, 30_000, 18_000_000, 18_000),
+                trak(b"soun", b"mp4a", 0, 0, 48_000, 28_800_000, 28_000),
+            ],
+        );
         info(file(b"isom", 600_000_000, &[tail]))
     }
 
@@ -146,7 +158,15 @@ mod tests {
     fn video_estimate_follows_codec_crf_resolution_and_fps() {
         let i = video_info();
         let size = i.file_size;
-        let mk = |av1, crf, h, fps| VideoPlan { av1, crf, max_height: h, max_fps: fps, screen: false, remux: false, audio_only: false };
+        let mk = |av1, crf, h, fps| VideoPlan {
+            av1,
+            crf,
+            max_height: h,
+            max_fps: fps,
+            screen: false,
+            remux: false,
+            audio_only: false,
+        };
         let hevc = video_after(Some(&i), size, &mk(false, 28.0, 0, 0.0));
         let av1 = video_after(Some(&i), size, &mk(true, 32.0, 0, 0.0));
         assert!(hevc < size * 6 / 10 && av1 < hevc, "{hevc} {av1} {size}");
@@ -164,7 +184,10 @@ mod tests {
 
     #[test]
     fn encode_time_ranks_encoders_and_scales_with_pixels() {
-        let (sw, hw) = (encode_seconds("libx265", 1.0, 600.0, 1920, 1080, 30.0), encode_seconds("hevc_nvenc", 1.0, 600.0, 1920, 1080, 30.0));
+        let (sw, hw) = (
+            encode_seconds("libx265", 1.0, 600.0, 1920, 1080, 30.0),
+            encode_seconds("hevc_nvenc", 1.0, 600.0, 1920, 1080, 30.0),
+        );
         assert!(hw * 5.0 < sw && (sw - 667.0).abs() < 5.0, "{sw} {hw}");
         assert!(encode_seconds("libx265", 1.0, 600.0, 3840, 2160, 30.0) > sw * 3.9);
         assert!(encode_seconds("libx265", 2.0, 600.0, 1920, 1080, 30.0) < sw);
@@ -180,8 +203,15 @@ mod tests {
         let flac = audio_after(Some(&wav), size, &AudioPlan { lossy_kbps: None, mono: false, strip_cover: true });
         assert!(flac < size * 6 / 10 && flac > size / 2);
         let flac_stereo_src = info(build::build_flac(44_100, 2, 16, 44_100 * 60, None, 5000));
-        let again = audio_after(Some(&flac_stereo_src), flac_stereo_src.file_size, &AudioPlan { lossy_kbps: None, mono: false, strip_cover: true });
+        let again = audio_after(
+            Some(&flac_stereo_src),
+            flac_stereo_src.file_size,
+            &AudioPlan { lossy_kbps: None, mono: false, strip_cover: true },
+        );
         assert!(again <= flac_stereo_src.file_size);
-        assert!(audio_after(None, 1_000_000, &AudioPlan { lossy_kbps: Some(48), mono: false, strip_cover: false }) < 200_000);
+        assert!(
+            audio_after(None, 1_000_000, &AudioPlan { lossy_kbps: Some(48), mono: false, strip_cover: false })
+                < 200_000
+        );
     }
 }

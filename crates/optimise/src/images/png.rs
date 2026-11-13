@@ -5,8 +5,8 @@
 
 use mj_core::{
     ActionKind, Availability, Category, Confidence, DetectContext, DetectorOutput, Error, Estimate, ExternalTool,
-    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport, Result,
-    SafetyClass, SettingSpec, StepPreset,
+    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport,
+    Result, SafetyClass, SettingSpec, StepPreset,
 };
 use mj_formats::png::{self, MetadataPolicy};
 
@@ -46,17 +46,43 @@ fn settings() -> Vec<SettingSpec> {
             ],
             false,
         ),
-        spec::toggle("strip_colour", "Also remove colour profile and gamma", Some("Colours can look different afterwards"), false, true, true),
+        spec::toggle(
+            "strip_colour",
+            "Also remove colour profile and gamma",
+            Some("Colours can look different afterwards"),
+            false,
+            true,
+            true,
+        ),
         spec::toggle("refilter", "Try adaptive row filters", Some("Slower, usually smaller"), true, true, false),
-        spec::toggle("use_oxipng", "Use oxipng when installed", Some("Stronger recompression, checked pixel by pixel"), true, true, false),
+        spec::toggle(
+            "use_oxipng",
+            "Use oxipng when installed",
+            Some("Stronger recompression, checked pixel by pixel"),
+            true,
+            true,
+            false,
+        ),
     ]
 }
 
 fn presets() -> Vec<StepPreset> {
     vec![
         spec::preset("safe", "Safe", "Keep metadata · pixel-identical", false, &[("metadata", spec::t("keep_all"))]),
-        spec::preset("tidy", "Tidy", "Drop text notes · pixel-identical", false, &[("metadata", spec::t("strip_text"))]),
-        spec::preset("smallest", "Smallest", "Drop all metadata · pixel-identical", false, &[("metadata", spec::t("strip_all"))]),
+        spec::preset(
+            "tidy",
+            "Tidy",
+            "Drop text notes · pixel-identical",
+            false,
+            &[("metadata", spec::t("strip_text"))],
+        ),
+        spec::preset(
+            "smallest",
+            "Smallest",
+            "Drop all metadata · pixel-identical",
+            false,
+            &[("metadata", spec::t("strip_all"))],
+        ),
     ]
 }
 
@@ -100,7 +126,13 @@ impl Optimiser for PngLossless {
         let idat: u64 = chunks.iter().filter(|(k, _)| k == b"IDAT").map(|(_, l)| *l).sum();
         let gain = idat as f64 * if params.bool("refilter", true) { 0.08 } else { 0.03 };
         let after = (entry.size as f64 - removed as f64 - gain).max(0.0) as u64;
-        Ok(Estimate { files: 1, bytes_before: entry.size, bytes_after: after.min(entry.size), confidence: Confidence::Estimated, skipped: 0 })
+        Ok(Estimate {
+            files: 1,
+            bytes_before: entry.size,
+            bytes_after: after.min(entry.size),
+            confidence: Confidence::Estimated,
+            skipped: 0,
+        })
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
@@ -121,7 +153,11 @@ impl Optimiser for PngLossless {
         job.cancel.checkpoint()?;
         if let (true, Ok(exe)) = (job.params.bool("use_oxipng", true), crate::tools::require(job.tools, "oxipng")) {
             let out = job.temp_dir.join("oxipng-out.png");
-            let o = run(exe, &oxipng_args(job.src, &out, pol, 4), &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), ..Default::default() })?;
+            let o = run(
+                exe,
+                &oxipng_args(job.src, &out, pol, 4),
+                &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), ..Default::default() },
+            )?;
             // oxipng writes nothing when it cannot improve the file: that is not a failure.
             if o.success() && out.is_file() {
                 let cand = std::fs::read(&out).map_err(|e| Error::io(&out, e))?;
@@ -146,7 +182,11 @@ impl Optimiser for PngLossless {
             MIN_SIZE,
             &|e| self.applies_to(e),
             &|e, p| self.estimate(e, p),
-            &|_, _| common::Described { reason: "PNG can be recompressed without changing a pixel".into(), columns: Default::default(), sub_group: None },
+            &|_, _| common::Described {
+                reason: "PNG can be recompressed without changing a pixel".into(),
+                columns: Default::default(),
+                sub_group: None,
+            },
         )
     }
 }
@@ -158,14 +198,22 @@ mod tests {
     use mj_core::{CancelToken, NullProgress};
     use mj_formats::png::build::{chunk, rgb_png};
 
-    fn job<'a>(src: &'a std::path::Path, dst: &'a std::path::Path, tmp: &'a std::path::Path, params: &'a ParamValues, tools: &'a [ExternalTool], c: &'a CancelToken) -> OptimiseJob<'a> {
+    fn job<'a>(
+        src: &'a std::path::Path,
+        dst: &'a std::path::Path,
+        tmp: &'a std::path::Path,
+        params: &'a ParamValues,
+        tools: &'a [ExternalTool],
+        c: &'a CancelToken,
+    ) -> OptimiseJob<'a> {
         OptimiseJob { src, dst, params, tools, temp_dir: tmp, cancel: c, progress: &NullProgress }
     }
 
     #[test]
     fn optimises_verifies_and_reports() {
         let d = TempDir::new("png-opt").unwrap();
-        let src = d.write("a.png", &rgb_png(96, 64, &[chunk(b"tEXt", b"k\0v"), chunk(b"gAMA", &[0, 0, 1, 0])], 2)).unwrap();
+        let src =
+            d.write("a.png", &rgb_png(96, 64, &[chunk(b"tEXt", b"k\0v"), chunk(b"gAMA", &[0, 0, 1, 0])], 2)).unwrap();
         let dst = d.join("out.png");
         let p = ParamValues::new().with("metadata", spec::t("strip_text"));
         let c = CancelToken::new();

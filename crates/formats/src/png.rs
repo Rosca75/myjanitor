@@ -508,7 +508,9 @@ pub fn decode_rgba16(buf: &[u8]) -> Result<Decoded> {
     let trns = png.chunks.iter().find(|c| &c.kind == b"tRNS").map(|c| c.data.as_slice()).unwrap_or(&[]);
     let (w, h, depth) = (ih.width as usize, ih.height as usize, usize::from(ih.bit_depth));
     let mut out = vec![0u16; w * h * 4];
-    let key = |i: usize| -> Option<u16> { (trns.len() >= i * 2 + 2).then(|| u16::from_be_bytes([trns[i * 2], trns[i * 2 + 1]])) };
+    let key = |i: usize| -> Option<u16> {
+        (trns.len() >= i * 2 + 2).then(|| u16::from_be_bytes([trns[i * 2], trns[i * 2 + 1]]))
+    };
     let mut put = |x: usize, y: usize, row: &[u8], i: usize| {
         let at = (y * w + x) * 4;
         let px = match ih.color_type {
@@ -555,7 +557,11 @@ pub fn decode_rgba16(buf: &[u8]) -> Result<Decoded> {
             let (pw, ph) = ((w - x0).div_ceil(dx), (h - y0).div_ceil(dy));
             let row_len = ih.row_bytes(pw as u64) as usize;
             let len = ph * (1 + row_len);
-            let pixels = unfilter(raw.get(at..at + len).ok_or_else(|| Error::parse("PNG", "interlaced data too short"))?, row_len, ih.bpp())?;
+            let pixels = unfilter(
+                raw.get(at..at + len).ok_or_else(|| Error::parse("PNG", "interlaced data too short"))?,
+                row_len,
+                ih.bpp(),
+            )?;
             at += len;
             for j in 0..ph {
                 let row = &pixels[j * row_len..(j + 1) * row_len];
@@ -752,7 +758,13 @@ mod tests {
         // palette + tRNS: index 1 is transparent
         let pz = miniz_oxide::deflate::compress_to_vec_zlib(&[0u8, 0, 1], 6);
         let p = write(
-            &[build::ihdr(2, 1, 8, 3, 0), build::chunk(b"PLTE", &[255, 0, 0, 0, 255, 0]), build::chunk(b"tRNS", &[255, 0]), build::chunk(b"IDAT", &pz), build::chunk(b"IEND", &[])],
+            &[
+                build::ihdr(2, 1, 8, 3, 0),
+                build::chunk(b"PLTE", &[255, 0, 0, 0, 255, 0]),
+                build::chunk(b"tRNS", &[255, 0]),
+                build::chunk(b"IDAT", &pz),
+                build::chunk(b"IEND", &[]),
+            ],
             &[],
         );
         let d = decode_rgba16(&p).unwrap();
@@ -763,7 +775,9 @@ mod tests {
     fn decode_handles_adam7() {
         // 8x8 greyscale where pixel (x, y) = y * 8 + x, stored interlaced with filter 0.
         let mut raw = Vec::new();
-        for (x0, y0, dx, dy) in [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] {
+        for (x0, y0, dx, dy) in
+            [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+        {
             for y in (y0..8).step_by(dy) {
                 raw.push(0);
                 for x in (x0..8).step_by(dx) {
