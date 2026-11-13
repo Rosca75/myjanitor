@@ -1,127 +1,65 @@
 //! `myjanitor-cli`: the command-line front end (AUT-01) over the same engine as
-//! the GUI. Owner: W3-E. Wave 1 commands: `info`, `commands`, `scan`.
-//! Planned (W3-E): `list`, `dry-run`, `apply`, `undo`, `history`, `export`.
+//! the GUI. Owner: W3-E.
+//!
+//! Exit codes: 0 ok, 1 error, 2 usage, 3 finished with some failed items.
+//! Human output is plain aligned text; `--json` prints the engine's serde types.
+//! `--data-dir DIR` moves every application folder under DIR (tests always use it).
 #![forbid(unsafe_code)]
 
 mod args;
+mod cmd_admin;
+mod cmd_hist;
+mod cmd_plan;
+mod cmd_scan;
+mod ctx;
+mod out;
+mod safety;
 
-use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
 
-use mj_engine::api::{OpportunitiesRequest, ScanRunState, ScanStartRequest, ScopeSetRequest};
-use mj_engine::{Engine, EngineConfig};
+use args::{Outcome, Parsed};
+use ctx::{Fail, Res};
 
-const HELP: &str = "myjanitor-cli: clean files and make them smaller, safely and offline
-
-USAGE:
-    myjanitor-cli [--data-dir DIR] [--cache-dir DIR] <COMMAND> [ARGS]
-
-COMMANDS:
-    info                 Version, platform and folders (JSON)
-    commands             List the engine commands
-    scan <PATH>...       Scan folders and print the opportunities (read-only)
-    help                 This text
-
-OPTIONS:
-    --json               JSON output where supported
-    --version            Print the version";
-
-fn engine(a: &args::Args) -> Result<Arc<Engine>, String> {
-    let (mut data, mut cache, portable) = mj_engine::paths::default_dirs();
-    if let Some(d) = a.options.get("data-dir") {
-        data = PathBuf::from(d);
-    }
-    if let Some(c) = a.options.get("cache-dir") {
-        cache = PathBuf::from(c);
-    }
-    let mut cfg = EngineConfig::new(data, cache);
-    cfg.portable = portable;
-    Engine::new(cfg).map_err(|e| e.to_string())
-}
-
-fn json<T: serde::Serialize>(v: &T) -> String {
-    serde_json::to_string_pretty(v).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
-}
-
-fn scan(a: &args::Args) -> Result<(), String> {
-    if a.positionals.is_empty() {
-        return Err("scan needs at least one folder".into());
-    }
-    let e = engine(a)?;
-    let roots = a
-        .positionals
-        .iter()
-        .map(|p| std::fs::canonicalize(p).map_err(|err| format!("{p}: {err}")))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut scope = e.scope_get().map_err(|x| x.to_string())?;
-    scope.roots = roots;
-    e.scope_set(ScopeSetRequest { scope }).map_err(|x| x.to_string())?;
-    e.scan_start(ScanStartRequest::default()).map_err(|x| x.to_string())?;
-    let status = loop {
-        let s = e.scan_status().map_err(|x| x.to_string())?;
-        if !matches!(s.state, ScanRunState::Scanning | ScanRunState::Paused | ScanRunState::Stopping) {
-            break s;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    };
-    if let Some(err) = &status.error {
-        return Err(format!("{} ({})", err.message, err.hint));
-    }
-    let list = e.opportunities_list(OpportunitiesRequest::default()).map_err(|x| x.to_string())?;
-    if a.flag("json") {
-        println!("{}", json(&list));
-    } else {
-        let stats = status.stats.unwrap_or_default();
-        println!("Scanned {} files, {} folders, {}", stats.files, stats.dirs, mj_core::size::format_bytes(stats.bytes));
-        if stats.unreadable > 0 {
-            println!("Could not read {} entries", stats.unreadable);
-        }
-        println!(
-            "Reclaimable: {} in {} opportunities",
-            mj_core::size::format_bytes(list.summary.total),
-            list.items.len()
-        );
-        for o in &list.items {
-            println!("  {:<28} {:>10}  {} {}", o.title, mj_core::size::format_bytes(o.saving), o.count, o.unit);
-        }
-    }
-    Ok(())
-}
-
-fn run() -> Result<(), String> {
-    let a = args::parse(std::env::args().skip(1))?;
-    if a.flag("version") {
-        println!("myjanitor-cli {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
-    }
-    match a.command.as_deref() {
-        None | Some("help") => {
-            println!("{HELP}");
-            Ok(())
-        }
-        Some("info") => {
-            println!("{}", json(&engine(&a)?.app_info().map_err(|e| e.to_string())?));
-            Ok(())
-        }
-        Some("commands") => {
-            for c in mj_engine::api::COMMANDS {
-                println!("{}", c.name);
-            }
-            Ok(())
-        }
-        Some("scan") => scan(&a),
-        Some(other) => Err(format!("unknown command `{other}`; see `myjanitor-cli help`")),
+/// Run the parsed command.
+fn dispatch(a: &Parsed) -> Res {
+    match (a.cmd.name, a.cmd.sub) {
+        ("scan", _) => cmd_scan::scan(a),
+        ("list", _) => cmd_scan::list(a),
+        ("show", _) => cmd_scan::show(a),
+        ("search", _) => cmd_scan::search(a),
+        ("plan", _) => cmd_plan::plan(a),
+        ("dry-run", _) => cmd_plan::dry_run(a),
+        ("apply", _) => cmd_plan::apply(a),
+        ("clean", _) => cmd_plan::clean(a),
+        ("history", _) => cmd_hist::history(a),
+        ("undo", _) => cmd_hist::undo(a),
+        ("report", _) => cmd_hist::report(a),
+        ("run-profile", _) => cmd_admin::run_profile(a),
+        ("schedule", _) => cmd_admin::schedule(a),
+        ("context-menu", _) => cmd_admin::context_menu_cmd(a),
+        ("tools", _) => cmd_admin::tools(a),
+        ("settings", _) => cmd_admin::settings(a),
+        ("cache", _) => cmd_admin::cache(a),
+        ("info", _) => cmd_admin::info(a),
+        ("commands", _) => cmd_admin::commands(a),
+        (other, _) => Err(Fail::Usage(format!("`{other}` is not implemented"))),
     }
 }
 
 fn main() -> ExitCode {
-    match run() {
+    let result = match args::parse(std::env::args().skip(1)) {
+        Ok(Outcome::Print(text)) => {
+            print!("{text}");
+            return ExitCode::SUCCESS;
+        }
+        Ok(Outcome::Run(a)) => dispatch(&a),
+        Err(e) => Err(Fail::from(e)),
+    };
+    match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(e) => {
-            eprintln!("error: {e}");
-            ExitCode::from(2)
+        Err(f) => {
+            eprintln!("error: {}", f.message());
+            ExitCode::from(f.code())
         }
     }
 }

@@ -35,7 +35,7 @@ pub mod integration {
     pub use crate::schedules::next::{local_offset_minutes, next_run};
     pub use crate::schedules::os as scheduler;
     pub use crate::settings::context_menu;
-    pub use crate::settings::os::{Cmd, CmdOutput, Runner, StdRunner};
+    pub use crate::settings::os::{os_integration_disabled, Cmd, CmdOutput, Runner, StdRunner, NO_OS_INTEGRATION_VAR};
 }
 
 /// Operating system family for path conventions.
