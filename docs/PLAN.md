@@ -4,12 +4,12 @@ State: todo / in progress / done / blocked.
 
 | Wave | ID | Workstream | Model | State |
 |---|---|---|---|---|
-| 0 | R1 | pdf-to-markdown lessons | Sonnet | in progress |
-| 0 | R2 | dedup-photos cache + matching | Sonnet | in progress |
-| 0 | R3 | doc-anonymiser palette | Sonnet | in progress |
-| 0 | R4 | Option B design extraction | Sonnet | in progress |
-| 0 | R5 | Feature matrix | Sonnet | in progress |
-| 1 | W1 | Architecture, contracts, workspace skeleton, tokens | Opus | todo |
+| 0 | R1 | pdf-to-markdown lessons | Sonnet | done |
+| 0 | R2 | dedup-photos cache + matching | Sonnet | done |
+| 0 | R3 | doc-anonymiser palette | Sonnet | done |
+| 0 | R4 | Option B design extraction | Sonnet | done |
+| 0 | R5 | Feature matrix | Sonnet | done |
+| 1 | W1 | Architecture, contracts, workspace skeleton, tokens | Opus | in progress |
 | 2 | W2-A | Scan engine, cache, platform scanning | Opus | todo |
 | 2 | W2-B | Duplicate and similarity engine | Opus | todo |
 | 2 | W2-C | Filters, rule engine, presets, query parser | Sonnet | todo |
