@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Permissions for the main MyJanitor window. No fs or dialog plugin: all file I/O happens in Rust commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

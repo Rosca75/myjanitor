@@ -1,0 +1,17 @@
+[package]
+name = "mj-actions"
+description = "Action engine, journal, undo, quarantine, protected paths and safety detection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-platform.workspace = true
+mj-formats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+mj-core = { workspace = true, features = ["testutil"] }

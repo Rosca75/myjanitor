@@ -1,0 +1,16 @@
+[package]
+name = "mj-filters"
+description = "Metadata filters, AND/OR rule engine, presets and quick-query parser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-formats.workspace = true
+regex.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+mj-core = { workspace = true, features = ["testutil"] }

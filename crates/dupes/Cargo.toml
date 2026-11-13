@@ -1,0 +1,15 @@
+[package]
+name = "mj-dupes"
+description = "Exact duplicates, perceptual image hash, version chains, derived files, duplicate fonts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-platform.workspace = true
+mj-formats.workspace = true
+
+[dev-dependencies]
+mj-core = { workspace = true, features = ["testutil"] }
