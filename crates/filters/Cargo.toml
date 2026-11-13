@@ -11,6 +11,7 @@ mj-core.workspace = true
 mj-formats.workspace = true
 regex.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 mj-core = { workspace = true, features = ["testutil"] }
