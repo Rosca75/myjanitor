@@ -1860,6 +1860,7 @@ dependencies = [
  "mj-formats",
  "regex",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
