@@ -15,7 +15,7 @@ State: todo / in progress / done / blocked.
 | 2 | W2-C | Filters, rule engine, presets, query parser | Sonnet | done |
 | 2 | W2-D | Simple detectors | Sonnet | done |
 | 2 | W2-E | Action engine and safety | Opus | in progress |
-| 2 | W2-F | Frontend shell on mock IPC | Sonnet | in progress |
+| 2 | W2-F | Frontend shell on mock IPC | Sonnet | done |
 | 3 | W3-A | Optimisation framework, ZIP, OOXML | Opus | todo |
 | 3 | W3-B | PDF, archiving, file-system compression | Opus | todo |
 | 3 | W3-C | Images, external-tool media adapters | Sonnet | todo |

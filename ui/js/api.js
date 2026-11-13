@@ -127,16 +127,26 @@ function tauriBackend() {
   };
 }
 
+/** @type {Promise<Backend> | null} In-flight creation, so concurrent first calls share one backend. */
+let pending = null;
+
 /** @returns {Promise<Backend>} */
-async function getBackend() {
-  if (backend) return backend;
-  if (wantsMock()) {
-    const { createMockBackend } = await import('./mock/backend.js');
-    backend = createMockBackend();
-  } else {
-    backend = tauriBackend();
+function getBackend() {
+  if (backend) return Promise.resolve(backend);
+  if (!pending) {
+    pending = (async () => {
+      if (wantsMock()) {
+        const { createMockBackend } = await import('./mock/backend.js');
+        return createMockBackend();
+      }
+      return tauriBackend();
+    })().then((b) => {
+      backend = b;
+      pending = null;
+      return b;
+    });
   }
-  return backend;
+  return pending;
 }
 
 /**
@@ -146,6 +156,7 @@ async function getBackend() {
 export function useMock(on) {
   forceMock = on;
   backend = null;
+  pending = null;
 }
 
 /** @returns {Promise<string>} `"tauri"` or `"mock"`. */

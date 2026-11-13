@@ -7,3 +7,4 @@
 - 2026-11-13 16:30 UTC: W2-C merged (filters, rules, presets, query parser, sniffer). Gates green: 132 Rust tests. Pending contract request: `Condition::Media` variant (to handle in the Wave 3 contract revision).
 - 2026-11-13 16:40 UTC: W2-D merged (16 detectors). Pending contract requests: protected-path predicate in DetectContext; per-candidate safety class.
 - 2026-11-13 16:50 UTC: W2-B merged (exact duplicates, similar images, version chains, derived files, duplicate fonts). 260 Rust tests green. Dependency added: zune-jpeg 0.5.15. Pending contract requests: real sync/Downloads/font roots in DetectContext; pixel counts for apply_keep_rule; ARCHITECTURE note for D-2B04 (bounded full decode of thumbnail-less JPEGs).
+- 2026-11-13 17:05 UTC: W2-F merged (Option B shell, B1/B2, five states, mock backend; 135 UI tests). Orchestrator fix: api.js backend creation memoised (race). Pending token request: violet grouping badge token.
