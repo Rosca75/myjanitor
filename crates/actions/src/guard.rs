@@ -178,6 +178,12 @@ impl Guard {
         if item.target == TargetKind::File && md.kind != EntryKind::Dir && !stamp_matches(item.expected, md) {
             return Err(Error::Changed(item.path.clone()));
         }
+        // Same size and mtime but another file (replaced in between): changed too.
+        if let (Some(want), Some(have)) = (item.expected_id, md.file_id) {
+            if want != have {
+                return Err(Error::Changed(item.path.clone()));
+            }
+        }
         Ok(())
     }
 
@@ -266,6 +272,7 @@ mod tests {
             link_source: None,
             root: t.join("in"),
             expected: md.stamp(),
+            expected_id: md.file_id,
         };
         assert!(g.check_item(&item, &p, false).is_ok());
         std::fs::write(&f2, b"abcd").unwrap();

@@ -217,6 +217,11 @@ pub struct ActionItem {
     /// Stamp at scan time. The engine re-stats right before acting and skips with
     /// `Error::Changed` on mismatch (TOCTOU guard). Folders use size 0 / mtime 0 and are not compared.
     pub expected: FileStamp,
+    /// File id at scan time, when known (Wave 3 contract revision). When both this and the
+    /// fresh metadata carry an id they must be equal too, so a file replaced by another one
+    /// with the same size and mtime is still detected as changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_id: Option<crate::entry::FileId>,
 }
 
 #[cfg(test)]

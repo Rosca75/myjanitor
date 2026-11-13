@@ -9,8 +9,10 @@
 //!   keep-if-not-smaller, then replaces the original according to
 //!   `OriginalsPolicy` (or writes a light copy), preserving timestamps and
 //!   permissions per `Settings::optimise`.
-//! - Lossy items require the step to have been confirmed (the engine facade
-//!   checks `StepConfirmation`; this layer trusts its caller on that).
+//! - Lossy and irreversible items require the step to have been confirmed:
+//!   the facade checks `StepConfirmation` *and* passes `ExecOptions::confirmed`;
+//!   this layer does not trust its caller and refuses unconfirmed items itself
+//!   (see below).
 //! - `dry_run` performs every check without changing anything and returns
 //!   exact numbers for removals and measured numbers for optimisations
 //!   (outputs written to the temp dir, then deleted).
@@ -232,6 +234,9 @@ fn new_entry(ctx: &ExecContext<'_>, item: &ActionItem, id: EntryId, kind: Action
         undo_deadline: None,
         lossy: false,
         error: None,
+        original_mode: fsops::file_mode(&item.path),
+        previous_compression: None,
+        undo_of: None,
     }
 }
 
@@ -278,7 +283,7 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
                 badges |= Badges::ENCRYPTED;
             }
             if badges.intersects(skip_set) {
-                return Err(Error::Protected(item.path.clone()));
+                return Err(Error::Confidential(item.path.clone()));
             }
         }
     }
@@ -338,10 +343,7 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
         Action::Hardlink | Action::Reflink => link_replace(ctx, item, e, undo_until),
         Action::Dehydrate => simple_platform(ctx, item, e, undo_until, |p, path| p.dehydrate(path), 0),
         Action::FsCompress { algorithm } => fs_compress(ctx, item, e, *algorithm, undo_until),
-        Action::FsDecompress => {
-            let size = item.expected.size;
-            simple_platform(ctx, item, e, None, |p, path| p.fs_decompress(path), size)
-        }
+        Action::FsDecompress => fs_decompress(ctx, item, e, undo_until),
         Action::Optimise { optimiser, params, output, originals, .. } => {
             optimise(ctx, opts, item, e, *optimiser, params, output, originals, undo_until)
         }
@@ -371,6 +373,11 @@ fn run_acted(
             Ok(outcome(&e, ItemStatus::Done, None))
         }
         Err(err) => {
+            let err = if safety::needs_elevation(&err, ctx.guard.protected()) {
+                Error::NeedsElevation(item.path.clone())
+            } else {
+                err
+            };
             let status = if matches!(err, Error::ConfirmationRequired(_) | Error::Changed(_)) || is_skip(&err) {
                 JournalState::Skipped
             } else {
@@ -617,6 +624,22 @@ fn fs_compress(
         e.bytes_after = ctx.platform.metadata(&item.path).ok().and_then(|m| m.allocated).unwrap_or(e.bytes_before);
         Ok(())
     })
+}
+
+fn fs_decompress(
+    ctx: &ExecContext<'_>,
+    item: &ActionItem,
+    mut e: JournalEntry,
+    undo_until: Option<Timestamp>,
+) -> Result<ItemOutcome> {
+    // The previous algorithm is journalled so undo can compress again with it.
+    match ctx.platform.fs_compression(&item.path) {
+        Ok(Some(a)) => e.previous_compression = Some(a),
+        Ok(None) => return skip(ctx, e, Error::Conflict("skipped: the file is not compressed".into())),
+        Err(err) => return skip(ctx, e, err),
+    }
+    let size = item.expected.size;
+    simple_platform(ctx, item, e, undo_until, |p, path| p.fs_decompress(path), size)
 }
 
 #[allow(clippy::too_many_arguments)]

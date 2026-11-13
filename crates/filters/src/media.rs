@@ -5,12 +5,13 @@
 //! job) through a [`MediaMetaProvider`]. A condition on a field the record
 //! does not carry never matches, and files without any record are counted, not
 //! silently dropped. The conditions are serialisable so the UI's "field picker and
-//! condition" can store them, but they are not part of the frozen `Rule`
-//! tree: the engine applies them as a second pass over an already selected
-//! set with [`filter_by_media`], so metadata is extracted only for files that
-//! survived every cheaper test.
+//! condition" can store them, and since the Wave 3 contract revision they are also part of the
+//! `Rule` tree (`Condition::Media`): the evaluator orders them after every
+//! metadata test and asks the provider in `ContentConfig::media`, so metadata
+//! is looked up only for files that survived every cheaper test. A second pass
+//! with [`filter_by_media`] remains available.
 
-use mj_core::{CancelToken, Cmp, DateValue, Error, FileEntry, FileIndex, Result, TextMode, Timestamp};
+use mj_core::{CancelToken, Cmp, DateValue, Error, FileEntry, FileIndex, Result, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::eval::FilterContext;
@@ -40,61 +41,13 @@ pub struct MediaMeta {
     pub year: Option<u32>,
 }
 
-/// Numeric fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NumField {
-    Width,
-    Height,
-    /// `width * height`.
-    Pixels,
-    DurationMs,
-    BitrateKbps,
-    Year,
-}
-
-/// Text fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TextField {
-    /// Video or audio codec.
-    Codec,
-    VideoCodec,
-    AudioCodec,
-    CameraMake,
-    CameraModel,
-    Title,
-    Artist,
-    Album,
-    Genre,
-}
-
 /// One media condition. All conditions of a [`MediaMatcher`] must hold.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum MediaCondition {
-    Number {
-        field: NumField,
-        cmp: Cmp,
-        value: u64,
-    },
-    Text {
-        field: TextField,
-        mode: TextMode,
-        pattern: String,
-        #[serde(default)]
-        case_sensitive: bool,
-    },
-    /// Date taken, absolute or relative.
-    DateTaken {
-        cmp: Cmp,
-        value: DateValue,
-    },
-    /// GPS coordinates present (`true`) or absent (`false`).
-    Gps {
-        present: bool,
-    },
-}
+pub use mj_core::MediaCondition;
+/// Numeric fields (the contract type lives in `mj-core` so rule trees can carry media
+/// conditions: `Condition::Media`).
+pub use mj_core::MediaNumField as NumField;
+/// Text fields.
+pub use mj_core::MediaTextField as TextField;
 
 fn number(m: &MediaMeta, f: NumField) -> Option<u64> {
     match f {
@@ -185,6 +138,16 @@ pub trait MediaMetaProvider: Send + Sync {
     fn media_meta(&self, entry: &FileEntry) -> Option<MediaMeta>;
 }
 
+/// A shared provider, as carried by `ContentConfig::media`.
+#[derive(Clone)]
+pub struct MediaSource(pub std::sync::Arc<dyn MediaMetaProvider>);
+
+impl std::fmt::Debug for MediaSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MediaSource")
+    }
+}
+
 /// Result of [`filter_by_media`].
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MediaFilterResult {
@@ -220,7 +183,7 @@ pub fn filter_by_media(
 mod tests {
     use super::*;
     use mj_core::time::{RelativeSpan, SpanUnit};
-    use mj_core::{EntryKind, ScanStats};
+    use mj_core::{EntryKind, ScanStats, TextMode};
     use std::collections::BTreeMap;
 
     fn ctx(g: &BTreeMap<String, Vec<String>>) -> FilterContext<'_> {
@@ -315,5 +278,28 @@ mod tests {
         let cancel = CancelToken::new();
         cancel.cancel();
         assert!(filter_by_media(&index, &[0], &Provider, &matcher, Some(&cancel)).is_err());
+    }
+
+    #[test]
+    fn media_conditions_inside_the_rule_tree() {
+        use crate::content::ContentConfig;
+        use crate::eval::{select_with, SelectOptions};
+        use mj_core::{Condition, Rule};
+        let g = BTreeMap::new();
+        let entries =
+            ["/m/a.mp4", "/m/b.mp4", "/m/c.mp4"].iter().map(|p| FileEntry::new(*p, EntryKind::File, 5)).collect();
+        let index = FileIndex::new(vec!["/m".into()], entries, ScanStats::default(), Timestamp::default());
+        let rule = Rule::Cond(Condition::Media {
+            cond: MediaCondition::Number { field: NumField::Width, cmp: Cmp::Ge, value: 1920 },
+        });
+        let content = ContentConfig { media: Some(MediaSource(std::sync::Arc::new(Provider))), ..Default::default() };
+        let sel = select_with(&index, &rule, &ctx(&g), SelectOptions { content, ..Default::default() }).unwrap();
+        assert_eq!(sel.positions, vec![0]);
+        assert_eq!(sel.diagnostics.media_without_metadata, 1);
+        // Without a provider nothing matches and everything is reported, also under NOT.
+        let not = Rule::Not(Box::new(rule));
+        let sel = select_with(&index, &not, &ctx(&g), SelectOptions::default()).unwrap();
+        assert!(sel.positions.is_empty());
+        assert_eq!(sel.diagnostics.to_core().skipped.get("media_without_metadata"), Some(&3));
     }
 }

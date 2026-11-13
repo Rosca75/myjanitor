@@ -96,6 +96,9 @@ pub struct SavingsSummary {
     pub opt_in: u64,
     pub review_only: u64,
     pub opportunities: u64,
+    /// Bytes freed by runs applied this session (status strip "Reclaimed").
+    #[serde(default)]
+    pub reclaimed: u64,
 }
 
 impl SavingsSummary {

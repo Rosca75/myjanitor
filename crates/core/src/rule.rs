@@ -144,6 +144,67 @@ pub enum Condition {
         #[serde(default)]
         case_sensitive: bool,
     },
+    /// Media metadata (CLN-CNT-03): resolution, duration, codec, camera, date taken, GPS,
+    /// tags. Evaluated through the caller's metadata provider; a file without metadata, or
+    /// any evaluation without a provider, is *unknown* (never a match, never "not media").
+    /// JSON: `{"field":"media","cond":{"kind":"number","field":"pixels","cmp":"ge","value":12000000}}`.
+    Media { cond: MediaCondition },
+}
+
+/// Numeric media fields (CLN-CNT-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaNumField {
+    Width,
+    Height,
+    /// `width * height`.
+    Pixels,
+    DurationMs,
+    BitrateKbps,
+    Year,
+}
+
+/// Text media fields (CLN-CNT-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaTextField {
+    /// Video or audio codec.
+    Codec,
+    VideoCodec,
+    AudioCodec,
+    CameraMake,
+    CameraModel,
+    Title,
+    Artist,
+    Album,
+    Genre,
+}
+
+/// One media-metadata condition. Tagged by `kind`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MediaCondition {
+    Number {
+        field: MediaNumField,
+        cmp: Cmp,
+        value: u64,
+    },
+    Text {
+        field: MediaTextField,
+        mode: TextMode,
+        pattern: String,
+        #[serde(default)]
+        case_sensitive: bool,
+    },
+    /// Date taken, absolute or relative.
+    DateTaken {
+        cmp: Cmp,
+        value: DateValue,
+    },
+    /// GPS coordinates present (`true`) or absent (`false`).
+    Gps {
+        present: bool,
+    },
 }
 
 /// A saved rule preset ("Downloads older than 90 days", CLN-ENG-02).
@@ -185,6 +246,15 @@ mod tests {
         assert!(json.contains(r#""attr":["hidden"]"#), "{json}");
         let back: Rule = serde_json::from_str(&json).unwrap();
         assert_eq!(back, r);
+        let media = Rule::Cond(Condition::Media {
+            cond: MediaCondition::Number { field: MediaNumField::Pixels, cmp: Cmp::Ge, value: 12_000_000 },
+        });
+        let json = serde_json::to_string(&media).unwrap();
+        assert_eq!(
+            json,
+            r#"{"cond":{"field":"media","cond":{"kind":"number","field":"pixels","cmp":"ge","value":12000000}}}"#
+        );
+        assert_eq!(serde_json::from_str::<Rule>(&json).unwrap(), media);
         assert!(Cmp::Lt.test(1, 2) && !Cmp::Gt.test(1, 2));
     }
 }

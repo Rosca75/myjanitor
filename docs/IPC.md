@@ -1,6 +1,7 @@
 # MyJanitor IPC contract
 
-**Frozen in Wave 1.** Changes go through the orchestrator. This file is
+**Frozen in Wave 1, revised (additively) in Wave 3 by W3-D1** (`docs/decisions/W3-D1.md`).
+Changes go through the orchestrator. This file is
 machine-checked:
 
 - every `### \`name\`` heading is a command or an event, in the order of
@@ -53,6 +54,8 @@ command has the command's name: `Engine::plan_add_step(req)`.
 | `conflict` | State conflict (a scan already runs, a step already in the plan). |
 | `confirmation_required` | `plan_apply` without the confirmation of a lossy/permanent step. |
 | `internal` | A bug. |
+| `needs_elevation` | The OS refused a path that needs administrator rights; MyJanitor never elevates on its own (SAF-05). Per-item only. |
+| `confidential` | A signed, sensitivity-labelled or encrypted file skipped by the safety settings (SAF-07/09). Per-item only. |
 
 ```json ErrorInfo
 {"code":"confirmation_required","message":"Confirmation required: step 7 (Meeting recordings) needs confirmation","hint":"Review the step and confirm it in the dialog."}
@@ -552,7 +555,7 @@ paths; global exclusions from settings are added by the engine.
 #### FsListDirResponse
 
 ```json FsListDirResponse
-{"path":"/home/me","parent":"/home","entries":[{"name":"Downloads","path":"/home/me/Downloads","is_dir":true,"is_link":false,"hidden":false}],"places":[{"label":"Home","path":"/home/me","kind":"home"},{"label":"Computer","path":"/","kind":"drive"}]}
+{"path":"/home/me","parent":"/home","entries":[{"name":"Downloads","path":"/home/me/Downloads","is_dir":true,"is_link":false,"hidden":false}],"places":[{"label":"Home","path":"/home/me","kind":"home"},{"label":"Computer","path":"/","kind":"drive"}],"omitted":4}
 ```
 
 #### ScanStatus
@@ -587,7 +590,7 @@ from `params` take the spec default).
 #### OpportunitiesList
 
 ```json OpportunitiesList
-{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":18},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
+{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":18,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
 ```
 
 #### StepSummary
@@ -607,7 +610,10 @@ from `params` take the spec default).
 `size` is what the file occupies now (allocated size when known; 0 for
 online-only files), `size_after` the estimate after the default action (0 for
 removals). `stamp` is the scan-time `{size, mtime}` the action engine
-re-checks. `columns` carries per-source table cells (B2: Source, Length).
+re-checks. `columns` carries per-source table cells (B2: Source, Length). Reserved
+keys: `resolution` (`"WxH"`, used by the `highest_resolution` keep rule), `pixels`, and
+`safety` (a per-row `SafetyClass` when a card mixes classes: the summary buckets the
+row by it and a step holding a selected row whose class needs confirmation needs it too).
 
 ```json Candidate
 {"id":1041,"path":"C:\\Users\\Michel\\Recordings\\Steering committee 14 Oct.wav","target":"file","source":{"optimiser":"audio"},"size":1181116006,"size_after":54525952,"confidence":"estimated","reason":"Speech recording, 14 min of silence","badges":[],"default_selected":true,"sub_group":"needs_transcript","modified":1792000000000000000,"stamp":{"size":1181116006,"mtime":1792000000000000000},"columns":{"source":"Local","length":"1:47:30"}}
@@ -615,7 +621,9 @@ re-checks. `columns` carries per-source table cells (B2: Source, Length).
 
 #### CandidateRow
 
-A `Candidate` plus the effective selection.
+A `Candidate` plus the effective selection. `actionable: false` rows (protected, and
+signed / labelled / encrypted rows while the matching `settings.safety.skip_*` is on)
+carry a `blocked_reason` and can never be selected.
 
 ```json CandidateRow
 {"id":1047,"path":"C:\\Users\\Michel\\Recordings\\Board session – privileged.m4a","target":"file","source":{"optimiser":"audio"},"size":220200960,"size_after":220200960,"confidence":"estimated","reason":"Marked confidential","badges":["confidential"],"default_selected":false,"modified":1792000000000000000,"stamp":{"size":220200960,"mtime":1792000000000000000},"selected":false,"actionable":true}
@@ -658,10 +666,13 @@ Nodes: `all`, `any`, `not`, `cond`. Conditions (`field`): `name`, `path`
 `size`, `zero_byte`, `largest_n`, `date` (`which`: `created`/`modified`/`accessed`;
 `value`: `{"at": ts}` or `{"ago": {"amount", "unit"}}`), `attribute`, `owner`,
 `depth`, `path_length`, `invalid_name`, `kind`, `extension_mismatch`,
-`content_contains`. `cmp`: `lt`, `le`, `eq`, `ge`, `gt`.
+`content_contains`, `media` (`cond`: `{"kind":"number","field":"width|height|pixels|duration_ms|bitrate_kbps|year","cmp","value"}`,
+`{"kind":"text","field":"codec|video_codec|audio_codec|camera_make|camera_model|title|artist|album|genre","mode","pattern"}`,
+`{"kind":"date_taken","cmp","value"}`, `{"kind":"gps","present"}`; a file without metadata is
+*unknown*: never matched, counted in the diagnostics). `cmp`: `lt`, `le`, `eq`, `ge`, `gt`.
 
 ```json Rule
-{"any":[{"cond":{"field":"name","mode":"wildcard","pattern":"~$*","case_sensitive":false}},{"not":{"cond":{"field":"attribute","attr":["hidden"],"set":true}}},{"cond":{"field":"largest_n","n":50}},{"cond":{"field":"zero_byte"}}]}
+{"any":[{"cond":{"field":"name","mode":"wildcard","pattern":"~$*","case_sensitive":false}},{"not":{"cond":{"field":"attribute","attr":["hidden"],"set":true}}},{"cond":{"field":"largest_n","n":50}},{"cond":{"field":"zero_byte"}},{"cond":{"field":"media","cond":{"kind":"number","field":"pixels","cmp":"ge","value":12000000}}}]}
 ```
 
 #### RulePreset
@@ -749,7 +760,9 @@ keep_if_not_smaller}`, `archive{format, level, dest?, originals, keep_sources}`,
 `state`: `intent`, `done`, `failed`, `skipped`, `undone`, `undo_failed`, `purged`.
 `retained_at` is where the original now lives (quarantine, move destination,
 backup); `trash` locates a Recycle Bin / Trash item; `created` lists files the
-action wrote (undo removes them).
+action wrote (undo removes them). Optional since Wave 3: `original_mode` (permissions before
+acting), `previous_compression` (transparent compression before `fs_decompress`, which makes
+it undoable) and, in undo runs, `undo_of` (the entry id this record reverses).
 
 ```json JournalEntry
 {"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}

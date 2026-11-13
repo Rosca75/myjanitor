@@ -105,6 +105,10 @@ pub struct FsListDirResponse {
     /// Sorted: folders first, then case-insensitive name.
     pub entries: Vec<FsDirEntry>,
     pub places: Vec<FsPlace>,
+    /// Entries left out because they are hidden (`show_hidden: false`) or are files
+    /// (`include_files: false`), so the browser can say so instead of hiding them silently.
+    #[serde(default)]
+    pub omitted: u64,
 }
 
 // ---------------------------------------------------------------- scan

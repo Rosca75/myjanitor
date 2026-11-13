@@ -56,7 +56,7 @@ impl Engine {
     pub fn fs_list_dir(&self, req: FsListDirRequest) -> Result<FsListDirResponse> {
         let places = places();
         let Some(path) = req.path else {
-            return Ok(FsListDirResponse { path: None, parent: None, entries: Vec::new(), places });
+            return Ok(FsListDirResponse { path: None, parent: None, entries: Vec::new(), places, omitted: 0 });
         };
         let mut entries = Vec::new();
         for item in self.platform().read_dir(&path)? {
@@ -74,6 +74,12 @@ impl Engine {
             entries.push(FsDirEntry { name, path: item.path, is_dir, is_link, hidden });
         }
         entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-        Ok(FsListDirResponse { parent: path.parent().map(Path::to_path_buf), path: Some(path), entries, places })
+        Ok(FsListDirResponse {
+            parent: path.parent().map(Path::to_path_buf),
+            path: Some(path),
+            entries,
+            places,
+            omitted: 0,
+        })
     }
 }

@@ -95,6 +95,17 @@ pub struct JournalEntry {
     pub lossy: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<ErrorInfo>,
+    /// Permissions of the original before acting (Unix mode bits; Windows: 1 = read-only,
+    /// 0 = writable), when read. Undo restores them where the action replaced the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_mode: Option<u32>,
+    /// Transparent compression of the original before `fs_compress` / `fs_decompress`
+    /// (`None`: none, or not read). Makes `fs_decompress` undoable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_compression: Option<crate::action::FsCompressAlgo>,
+    /// In an undo run: the entry this record reverses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_of: Option<EntryId>,
 }
 
 /// Kind of a run.

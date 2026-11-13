@@ -72,11 +72,14 @@ pub struct ContentConfig {
     pub max_bytes: u64,
     /// Document text extractors.
     pub extractors: ExtractorSet,
+    /// Media-metadata provider for `Condition::Media`. `None`: media conditions are
+    /// *unknown* for every file (counted, never a match).
+    pub media: Option<crate::media::MediaSource>,
 }
 
 impl Default for ContentConfig {
     fn default() -> Self {
-        ContentConfig { max_bytes: DEFAULT_MAX_BYTES, extractors: ExtractorSet::new() }
+        ContentConfig { max_bytes: DEFAULT_MAX_BYTES, extractors: ExtractorSet::new(), media: None }
     }
 }
 

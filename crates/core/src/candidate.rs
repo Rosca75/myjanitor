@@ -85,12 +85,52 @@ impl Candidate {
         self.size.saturating_sub(self.size_after)
     }
 
+    /// Pixel count (width x height) when the source recorded it in
+    /// `columns[`[`columns::RESOLUTION`]`]` as `"WxH"` or `columns[`[`columns::PIXELS`]`]`
+    /// as an integer. Used by `KeepRule::HighestResolution` when a rule is re-applied.
+    pub fn pixels(&self) -> Option<u64> {
+        if let Some(p) = self.columns.get(columns::PIXELS).and_then(|v| v.trim().parse::<u64>().ok()) {
+            return Some(p);
+        }
+        let r = self.columns.get(columns::RESOLUTION)?;
+        let (w, h) = r.trim().split_once(['x', 'X', '×'])?;
+        w.trim().parse::<u64>().ok()?.checked_mul(h.trim().parse::<u64>().ok()?)
+    }
+
+    /// Per-candidate safety class when a card mixes classes (`columns[`[`columns::SAFETY`]`]`
+    /// holding a snake_case [`SafetyClass`] name). `None` = the card's class applies.
+    pub fn safety_override(&self) -> Option<crate::safety::SafetyClass> {
+        use crate::safety::SafetyClass as S;
+        Some(match self.columns.get(columns::SAFETY)?.as_str() {
+            "reversible" => S::Reversible,
+            "rebuildable" => S::Rebuildable,
+            "light_copy" => S::LightCopy,
+            "lossy_opt_in" => S::LossyOptIn,
+            "review_only" => S::ReviewOnly,
+            "permanent" => S::Permanent,
+            _ => return None,
+        })
+    }
+
     /// Apply the auto-uncheck rule to `default_selected`.
     pub fn normalise_selection(&mut self) {
         if self.badges.intersects(Badges::AUTO_UNCHECK) {
             self.default_selected = false;
         }
     }
+}
+
+/// Reserved `Candidate::columns` keys with a meaning to the engine (Wave 3 contract revision).
+/// They are additive conventions so `Candidate` keeps its shape.
+pub mod columns {
+    /// `"WxH"` image or video resolution (shown as a column; feeds `Candidate::pixels`).
+    pub const RESOLUTION: &str = "resolution";
+    /// Pixel count as a decimal integer (alternative to `RESOLUTION`).
+    pub const PIXELS: &str = "pixels";
+    /// Per-candidate `SafetyClass` (snake_case) when a card mixes classes. The engine
+    /// buckets the hero summary per candidate and requires confirmation for a step whose
+    /// selection holds a candidate whose class requires it.
+    pub const SAFETY: &str = "safety";
 }
 
 /// Kind of a group.
@@ -272,5 +312,32 @@ mod tests {
         assert_eq!(KeepRule::HighestResolution.pick(&m), Some(1));
         assert_eq!(KeepRule::PreferredFolder { folder: "/a/b".into() }.pick(&m), Some(0));
         assert_eq!(KeepRule::Newest.pick(&[]), None);
+    }
+
+    #[test]
+    fn reserved_columns() {
+        let mut c = Candidate {
+            id: CandidateId(1),
+            path: "/a.jpg".into(),
+            target: TargetKind::File,
+            source: Source::Custom("x".into()),
+            size: 1,
+            size_after: 0,
+            confidence: Confidence::Exact,
+            reason: String::new(),
+            badges: Badges::empty(),
+            default_selected: true,
+            group: None,
+            sub_group: None,
+            modified: None,
+            stamp: FileStamp { size: 1, mtime: Timestamp(0) },
+            file_count: None,
+            columns: BTreeMap::new(),
+        };
+        assert_eq!(c.pixels(), None);
+        c.columns.insert(columns::RESOLUTION.into(), "4000x3000".into());
+        assert_eq!(c.pixels(), Some(12_000_000));
+        c.columns.insert(columns::SAFETY.into(), "permanent".into());
+        assert_eq!(c.safety_override(), Some(crate::safety::SafetyClass::Permanent));
     }
 }

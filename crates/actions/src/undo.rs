@@ -176,6 +176,7 @@ fn undo_one(ctx: &ExecContext<'_>, id: EntryId, uid: EntryId) -> Result<ItemOutc
     }
     let mut u = src.clone();
     u.id = uid;
+    u.undo_of = Some(id);
     u.run_id = ctx.run_id;
     u.job_id = ctx.job_id;
     u.step_id = ctx.step_id;
@@ -239,6 +240,9 @@ fn reverse(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
         ActionKind::Hardlink | ActionKind::Reflink => unlink_replacement(ctx, e),
         ActionKind::Dehydrate => ctx.platform.hydrate(orig),
         ActionKind::FsCompress => ctx.platform.fs_decompress(orig),
+        ActionKind::FsDecompress if e.previous_compression.is_some() => {
+            ctx.platform.fs_compress(orig, e.previous_compression.unwrap_or(mj_core::FsCompressAlgo::Xpress8k))
+        }
         ActionKind::Optimise | ActionKind::Archive => undo_output(ctx, e),
         ActionKind::PermanentDelete | ActionKind::FsDecompress | ActionKind::None => {
             Err(Error::InvalidInput("this action cannot be undone".into()))
@@ -320,6 +324,9 @@ fn unlink_replacement(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
     if !ok {
         let _ = std::fs::remove_file(&temp);
         return Err(Error::Conflict(format!("{} was modified after linking; nothing was changed", orig.display())));
+    }
+    if let Some(mode) = e.original_mode {
+        let _ = fsops::set_file_mode(&temp, mode);
     }
     if let Err(err) = fsops::set_mtime(&temp, e.original_stamp.mtime) {
         let _ = std::fs::remove_file(&temp);

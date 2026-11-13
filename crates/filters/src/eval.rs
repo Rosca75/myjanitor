@@ -38,6 +38,7 @@ use crate::content::{self, ContentConfig, ContentOutcome, MismatchOutcome, Needl
 use crate::exclusions::Exclusions;
 use crate::groups;
 use crate::matcher::TextMatcher;
+use crate::media::MediaMatcher;
 use crate::timeutil;
 
 /// Rule trees nested deeper than this are refused (hostile preset files).
@@ -89,6 +90,7 @@ struct Counters {
     content_binary: AtomicU64,
     content_truncated: AtomicU64,
     skipped_online_only: AtomicU64,
+    media_unknown: AtomicU64,
     unavailable: Mutex<BTreeMap<String, u64>>,
     unreadable_sample: Mutex<Vec<PathBuf>>,
 }
@@ -126,6 +128,8 @@ pub struct FilterDiagnostics {
     pub content_truncated: u64,
     /// Online-only files not read (reading would download them).
     pub skipped_online_only: u64,
+    /// Files a media condition could not be evaluated on (no metadata or no provider).
+    pub media_without_metadata: u64,
     /// Document files not searched because no extractor is registered, by extension.
     pub content_unavailable: BTreeMap<String, u64>,
     /// Up to ten unreadable paths.
@@ -149,6 +153,7 @@ impl FilterDiagnostics {
         add("content_binary", self.content_binary);
         add("content_truncated", self.content_truncated);
         add("online_only_not_read", self.skipped_online_only);
+        add("media_without_metadata", self.media_without_metadata);
         for (ext, n) in &self.content_unavailable {
             add(&format!("content_unavailable_{ext}"), *n);
         }
@@ -180,6 +185,7 @@ enum Leaf {
     Kind(EntryKind),
     Mismatch,
     Content(Needle),
+    Media(MediaMatcher),
 }
 
 #[derive(Debug)]
@@ -203,6 +209,7 @@ impl Node {
                 Leaf::PathLen(..) | Leaf::InvalidName => 4,
                 Leaf::Name(m) | Leaf::Path(m) => 10 + m.cost() as u32,
                 Leaf::Mismatch => 100,
+                Leaf::Media(_) => 150,
                 Leaf::Content(_) => 200,
             },
         }
@@ -290,6 +297,19 @@ impl Leaf {
             Leaf::Kind(k) => Tri::from(e.kind == *k),
             Leaf::Mismatch => self.eval_mismatch(e, rt),
             Leaf::Content(n) => self.eval_content(e, rt, n),
+            Leaf::Media(m) => {
+                if !is_file {
+                    return Tri::False;
+                }
+                let meta = rt.content.media.as_ref().and_then(|p| p.0.media_meta(e));
+                match meta {
+                    Some(meta) => Tri::from(m.matches(&meta)),
+                    None => {
+                        Counters::bump(&rt.counters.media_unknown);
+                        Tri::Unknown
+                    }
+                }
+            }
         }
     }
 
@@ -395,6 +415,7 @@ impl CompiledRule {
             content_binary: get(&c.content_binary),
             content_truncated: get(&c.content_truncated),
             skipped_online_only: get(&c.skipped_online_only),
+            media_without_metadata: get(&c.media_unknown),
             content_unavailable: mj_core::lock(&c.unavailable).clone(),
             unreadable_sample: mj_core::lock(&c.unreadable_sample).clone(),
         }
@@ -501,6 +522,7 @@ impl Compiler<'_> {
                 }
                 Leaf::Content(Needle::new(text, *case_sensitive))
             }
+            Condition::Media { cond } => Leaf::Media(MediaMatcher::compile(std::slice::from_ref(cond), self.ctx)?),
         })
     }
 }

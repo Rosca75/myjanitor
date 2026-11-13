@@ -101,6 +101,35 @@ pub fn exists(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
+/// Permissions of `path` without following links (Unix mode bits; Windows 1 = read-only).
+pub fn file_mode(path: &Path) -> Option<u32> {
+    let md = std::fs::symlink_metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Some(md.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        Some(u32::from(md.permissions().readonly()))
+    }
+}
+
+/// Restore permissions recorded by [`file_mode`] (best effort).
+pub fn set_file_mode(path: &Path, mode: u32) -> Result<()> {
+    let mut perms = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        perms.set_mode(mode & 0o7777);
+    }
+    #[cfg(not(unix))]
+    {
+        perms.set_readonly(mode & 1 == 1);
+    }
+    std::fs::set_permissions(path, perms).map_err(|e| Error::io(path, e))
+}
+
 /// Set a file's modification time.
 pub fn set_mtime(path: &Path, t: Timestamp) -> Result<()> {
     let f = OpenOptions::new().write(true).open(path).map_err(|e| Error::io(path, e))?;
