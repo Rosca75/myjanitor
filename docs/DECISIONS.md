@@ -139,3 +139,8 @@ One entry per non-trivial decision: *context → options → choice → why*.
 - **Context:** the brief gates each wave on the previous one. W2-A (scan) and W2-E (actions) were still running when the other four Wave 2 workstreams had merged.
 - **Choice:** start W3-B (PDF, archiving, FS compression) and W3-C (images, media adapters) early.
 - **Why:** they own disjoint files and depend only on the frozen Wave 1 contracts, not on W2-A or W2-E output. W3-A, W3-D and W3-E wait for the Wave 2 exit.
+
+## D-010 W3-D split and contract revision
+- **Context:** Wave 2 workstreams returned contract change requests (media conditions in the rule tree, detector context roots and protected-path predicate, pixel counts for keep rules, file id in the changed-since-scan check, error codes `needs_elevation`/`confidential`, extra journal fields, cache-aware scan call, confirmation pass-through). The engine facade also decides what gets deleted, so it is data-loss relevant.
+- **Choice:** W3-D1 (Opus) applies the contract revision and builds the engine facade and Tauri commands; W3-D2 (Sonnet) builds the derived screens against `docs/IPC.md`.
+- **Why:** the brief's rule of thumb assigns code that could lose user data to Opus; UI screens stay with Sonnet.
