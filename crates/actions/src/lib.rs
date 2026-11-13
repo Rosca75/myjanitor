@@ -16,16 +16,18 @@
 #![forbid(unsafe_code)]
 
 pub mod engine;
+pub mod fsops;
 pub mod guard;
 pub mod journal;
 pub mod protected;
 pub mod quarantine;
 pub mod report;
+pub mod retain;
 pub mod safety;
 pub mod select;
 pub mod undo;
 
-pub use engine::{dry_run, execute, ExecContext, Services};
+pub use engine::{dry_run, execute, execute_with, ExecContext, ExecOptions, Services, TrashRoute};
 pub use guard::Guard;
 pub use journal::Journal;
 pub use protected::ProtectedPaths;
