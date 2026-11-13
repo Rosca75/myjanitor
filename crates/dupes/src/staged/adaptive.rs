@@ -91,7 +91,8 @@ where
             }
             let r = call(i);
             let d = done.fetch_add(1, Ordering::Relaxed) + 1;
-            let f = if r.is_err() { failed.fetch_add(1, Ordering::Relaxed) + 1 } else { failed.load(Ordering::Relaxed) };
+            let f =
+                if r.is_err() { failed.fetch_add(1, Ordering::Relaxed) + 1 } else { failed.load(Ordering::Relaxed) };
             *lock(&slots[i]) = Some(r);
             if d >= PROBE && f * 2 > d {
                 abort.store(true, Ordering::Relaxed);

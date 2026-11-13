@@ -134,8 +134,8 @@ impl Detector for SimilarImages {
     fn run(&self, ctx: &DetectContext<'_>) -> Result<DetectorOutput> {
         let mode = MatchMode::parse(ctx.params.text(MATCH_MODE, "dhash"));
         // The one percent -> bits conversion (research §5.1, invariant 1).
-        let radius = ThresholdPercent::new(ctx.params.number(THRESHOLD, perceptual::DEFAULT_THRESHOLD_PERCENT as f64))
-            .to_bits();
+        let radius =
+            ThresholdPercent::new(ctx.params.number(THRESHOLD, perceptual::DEFAULT_THRESHOLD_PERCENT as f64)).to_bits();
         let decode_full = ctx.params.bool(DECODE_FULL, true);
         let rule = keep::rule_from_params(ctx.params, KeepRule::HighestResolution);
         let mut diag = Diagnostics::default();
@@ -191,10 +191,8 @@ impl Detector for SimilarImages {
         for (n, c) in clusters.iter().enumerate() {
             let idx: Vec<usize> = c.members.iter().map(|&m| owners[m]).collect();
             let members: Vec<&FileEntry> = idx.iter().map(|&i| images[i]).collect();
-            let pixels: Vec<Option<u64>> = idx
-                .iter()
-                .map(|&i| fps[i].as_ref().and_then(|f| Some(f.width? as u64 * f.height? as u64)))
-                .collect();
+            let pixels: Vec<Option<u64>> =
+                idx.iter().map(|&i| fps[i].as_ref().and_then(|f| Some(f.width? as u64 * f.height? as u64))).collect();
             let keeper = keep::pick(&rule, &members, &pixels);
             let confidence = c.confidence();
             let columns = idx
@@ -365,7 +363,13 @@ fn failed(e: &DecodeError, w: Option<u32>, h: Option<u32>, exif: Option<ExifSumm
         DecodeError::Unsupported(_) => Outcome::Skipped(skip::UNSUPPORTED, None),
         DecodeError::Corrupt(_) => Outcome::Skipped(
             skip::DECODE_FAILED,
-            Some(Fingerprints { width: w, height: h, exif, flags: FingerprintFlags::DECODE_FAILED, ..Default::default() }),
+            Some(Fingerprints {
+                width: w,
+                height: h,
+                exif,
+                flags: FingerprintFlags::DECODE_FAILED,
+                ..Default::default()
+            }),
         ),
     }
 }
@@ -424,7 +428,13 @@ fn fingerprint_file(e: &FileEntry, decode_full: bool, gate: &Gate) -> std::resul
         }
     }
     if !decode_full {
-        let fp = Fingerprints { width: w, height: h, exif: exif_summary, flags: FingerprintFlags::NO_THUMBNAIL, ..Default::default() };
+        let fp = Fingerprints {
+            width: w,
+            height: h,
+            exif: exif_summary,
+            flags: FingerprintFlags::NO_THUMBNAIL,
+            ..Default::default()
+        };
         return Ok(Outcome::Skipped(skip::NO_THUMBNAIL, Some(fp)));
     }
     if e.size > MAX_FULL_READ {

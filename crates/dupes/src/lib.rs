@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn path_lists_split_on_lines_and_semicolons() {
-        assert_eq!(super::path_list(" /a \n\n/b;/c "), vec!["/a", "/b", "/c"].into_iter().map(Into::into).collect::<Vec<std::path::PathBuf>>());
+        assert_eq!(
+            super::path_list(" /a \n\n/b;/c "),
+            vec!["/a", "/b", "/c"].into_iter().map(Into::into).collect::<Vec<std::path::PathBuf>>()
+        );
         assert!(super::path_list("  ").is_empty());
     }
 }

@@ -225,7 +225,13 @@ pub(crate) fn read_all<R: Send>(
         let out = work(e);
         let d = done.fetch_add(1, Ordering::Relaxed) + 1;
         let b = bytes.fetch_add(e.size, Ordering::Relaxed) + e.size;
-        ctx.progress.report(&Progress { phase: Phase::Hashing, done: d.min(total), total: Some(total), bytes: b, current: None });
+        ctx.progress.report(&Progress {
+            phase: Phase::Hashing,
+            done: d.min(total),
+            total: Some(total),
+            bytes: b,
+            current: None,
+        });
         out
     })?;
     if r.fell_back {

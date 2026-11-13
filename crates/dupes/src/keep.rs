@@ -56,7 +56,8 @@ pub fn rule_from_params(params: &ParamValues, default: KeepRule) -> KeepRule {
 /// Keep-rule settings (choice + preferred folder). `images` adds "highest resolution".
 pub fn settings(default: &str, images: bool) -> Vec<SettingSpec> {
     let opt = |v: &str, l: &str| ChoiceOption { value: v.into(), label: l.into(), help: None };
-    let mut options = vec![opt("newest", "Keep newest"), opt("oldest", "Keep oldest"), opt("shortest_path", "Keep shortest path")];
+    let mut options =
+        vec![opt("newest", "Keep newest"), opt("oldest", "Keep oldest"), opt("shortest_path", "Keep shortest path")];
     if images {
         options.push(opt("highest_resolution", "Keep highest resolution"));
     }

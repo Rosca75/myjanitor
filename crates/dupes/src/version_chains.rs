@@ -103,10 +103,8 @@ impl Detector for VersionChains {
             }
             let members: Vec<&FileEntry> = chain.iter().map(|m| files[m.index]).collect();
             let keeper = keep::pick(&rule, &members, &[]);
-            let columns = chain
-                .iter()
-                .map(|m| BTreeMap::from([("version".to_string(), m.markers.join(", "))]))
-                .collect();
+            let columns =
+                chain.iter().map(|m| BTreeMap::from([("version".to_string(), m.markers.join(", "))])).collect();
             let label = format!("{} versions of {}", members.len(), members[keeper].name());
             keep::emit(
                 GroupSpec {
@@ -389,7 +387,10 @@ pub fn find_chains(files: &[&FileEntry], fuzzy: bool, notes: &mut Vec<String>) -
         let mut uf = UnionFind::new(list.len());
         if fuzzy && list.len() > 1 {
             if list.len() > FUZZY_LIMIT {
-                notes.push(format!("Version chains: fuzzy name matching skipped in a folder with {} names ({folder})", list.len()));
+                notes.push(format!(
+                    "Version chains: fuzzy name matching skipped in a folder with {} names ({folder})",
+                    list.len()
+                ));
             } else {
                 let marked = |m: &[Member]| m.iter().any(|x| !x.markers.is_empty());
                 for i in 0..list.len() {

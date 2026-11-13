@@ -131,7 +131,8 @@ pub fn group_names(out: &DetectorOutput) -> Vec<Vec<String>> {
         .groups
         .iter()
         .map(|g| {
-            let mut m: Vec<String> = g.members.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+            let mut m: Vec<String> =
+                g.members.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
             m.sort();
             m
         })
@@ -142,11 +143,7 @@ pub fn group_names(out: &DetectorOutput) -> Vec<Vec<String>> {
 
 /// The keeper's file name of the group containing `name`.
 pub fn keeper_of(out: &DetectorOutput, name: &str) -> String {
-    let g = out
-        .groups
-        .iter()
-        .find(|g| g.members.iter().any(|p| p.file_name().unwrap() == name))
-        .expect("group");
+    let g = out.groups.iter().find(|g| g.members.iter().any(|p| p.file_name().unwrap() == name)).expect("group");
     g.keeper.as_ref().unwrap().file_name().unwrap().to_string_lossy().into_owned()
 }
 

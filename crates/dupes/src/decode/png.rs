@@ -196,7 +196,9 @@ fn row_to_gray(hdr: &Header, channels: usize, row: &[u8], palette: &[[u8; 3]], o
     for (x, o) in out.iter_mut().enumerate() {
         *o = match hdr.color_type {
             0 | 4 => (sample(row, d, x * channels) >> 8) as u8,
-            2 | 6 => luma16(sample(row, d, x * channels), sample(row, d, x * channels + 1), sample(row, d, x * channels + 2)),
+            2 | 6 => {
+                luma16(sample(row, d, x * channels), sample(row, d, x * channels + 1), sample(row, d, x * channels + 2))
+            }
             3 => {
                 let p = palette.get(index(row, d, x)).copied().unwrap_or([0, 0, 0]);
                 super::luma8(p[0], p[1], p[2])

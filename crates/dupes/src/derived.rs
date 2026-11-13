@@ -124,7 +124,7 @@ mod tests {
             f("/r/Deck.pptx", Some(10)),
             f("/r/Deck.pdf", Some(20)),
             f("/r/Report.docx", Some(30)),
-            f("/r/Report.pdf", Some(20)), // older than its source: kept out
+            f("/r/Report.pdf", Some(20)),     // older than its source: kept out
             f("/r/other/Deck.pdf", Some(50)), // different folder
             f("/r/Notes.PDF", Some(5)),
             f("/r/notes.DOCX", Some(5)), // same time, case-insensitive stem

@@ -85,7 +85,7 @@ impl GridAccumulator {
 
     /// The averaged grids (a cell with no pixel is 0).
     pub fn finish(&self) -> Grids {
-        let avg = |s: u64, c: u64| if c == 0 { 0 } else { (s / c) as u32 };
+        let avg = |s: u64, c: u64| s.checked_div(c).unwrap_or(0) as u32;
         let mut g9 = [0u32; DHASH_COLS * DHASH_ROWS];
         for (i, g) in g9.iter_mut().enumerate() {
             *g = avg(self.sum9[i], self.cnt9[i]);
@@ -139,11 +139,8 @@ pub fn phash(g32: &[u32]) -> u64 {
     let mut rows = [[0.0f64; 8]; PHASH_SIZE];
     for (y, r) in rows.iter_mut().enumerate() {
         for (k, out) in r.iter_mut().enumerate() {
-            let mut s = 0.0;
-            for i in 0..PHASH_SIZE {
-                s += *g32.get(y * PHASH_SIZE + i).unwrap_or(&0) as f64 * b[k][i];
-            }
-            *out = s;
+            let row = g32.get(y * PHASH_SIZE..(y + 1) * PHASH_SIZE).unwrap_or(&[]);
+            *out = row.iter().zip(&b[k]).map(|(&g, &c)| g as f64 * c).sum();
         }
     }
     let mut block = [[0.0f64; 8]; 8];

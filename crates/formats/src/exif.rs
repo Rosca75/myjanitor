@@ -477,10 +477,7 @@ mod tests {
                         (TAG_LENS_MODEL, Value::Ascii("EF 24-70mm".into())),
                     ]),
                 ),
-                (
-                    TAG_GPS_IFD,
-                    Value::SubIfd(vec![(TAG_GPS_LATITUDE, Value::Rational(vec![(48, 1), (51, 1), (0, 1)]))]),
-                ),
+                (TAG_GPS_IFD, Value::SubIfd(vec![(TAG_GPS_LATITUDE, Value::Rational(vec![(48, 1), (51, 1), (0, 1)]))])),
             ],
             Some(&[(0, Value::Thumbnail(fake_thumb()))]),
         )
