@@ -9,17 +9,47 @@
 import { stepActions } from './ctl-step.js';
 import { applyActions } from './ctl-apply.js';
 import { miscActions } from './ctl-misc.js';
+import { historyActions } from './ctl-history.js';
+import { reportActions } from './ctl-report.js';
+import { searchActions } from './ctl-search.js';
+import { diskActions } from './ctl-disk.js';
 import { copy } from './copy.js';
+import { createGens } from './lib/gens.js';
+import { toErrorInfo, isUnavailable } from './errors.js';
 
 /**
  * @param {{ api: any, store: ReturnType<typeof import('./state.js').createStore<any>> }} deps
  */
 export function createController({ api, store }) {
-  const ctx = { api, store, get: store.get, set: store.set, actions: /** @type {any} */ ({}) };
+  const ctx = { api, store, get: store.get, set: store.set, gens: createGens(), actions: /** @type {any} */ ({}) };
 
-  /** Show an error toast from an ErrorInfo (or anything thrown). @param {any} e */
+  /** Show an error toast from an ErrorInfo (or anything thrown): never swallowed. @param {any} e */
   ctx.fail = (e) => {
-    store.set({ toast: { level: 'error', message: e?.message ?? String(e), hint: e?.hint ?? '' } });
+    const info = toErrorInfo(e);
+    store.set({ toast: { level: 'error', message: info.message, hint: info.hint } });
+  };
+  /**
+   * A feature the backend does not offer (`not_implemented`, `unsupported`):
+   * remember it so its controls render disabled with the hint, and say so once.
+   * @param {string} key @param {any} e
+   */
+  ctx.markUnavailable = (key, e) => {
+    const info = toErrorInfo(e);
+    store.set({ unavail: { ...store.get().unavail, [key]: info }, toast: { level: 'info', message: info.message, hint: info.hint } });
+  };
+  /**
+   * Like `guard`, for a command that may be missing in this build: those errors
+   * disable the feature `key`, every other error is a toast.
+   * @param {string} key @param {(...a: any[]) => Promise<any>} fn
+   */
+  ctx.feature = (key, fn) => async (...a) => {
+    try {
+      return await fn(...a);
+    } catch (e) {
+      if (isUnavailable(e)) ctx.markUnavailable(key, e);
+      else ctx.fail(e);
+      return undefined;
+    }
   };
   /**
    * Show a transient message.
@@ -42,7 +72,7 @@ export function createController({ api, store }) {
   };
 
   const a = ctx.actions;
-  Object.assign(a, coreActions(ctx), stepActions(ctx), applyActions(ctx), miscActions(ctx), { notify: ctx.notify });
+  Object.assign(a, coreActions(ctx), stepActions(ctx), applyActions(ctx), miscActions(ctx), historyActions(ctx), reportActions(ctx), searchActions(ctx), diskActions(ctx), { notify: ctx.notify });
   return a;
 }
 
@@ -57,20 +87,23 @@ function coreActions(c) {
 
   const refreshOpps = async () => {
     const { tab, sort } = get();
+    const g = c.gens.next('opps');
     const [opps, drives] = await Promise.all([api.opportunitiesList({ tab, sort }), soft(api.drivesList(), [])]);
-    set({ opps, drives });
+    if (c.gens.current('opps', g)) set({ opps, drives }); // a newer refresh is on its way: ignore this stale answer
   };
 
   const refreshHistory = async () => {
     const [history, lastReport] = await Promise.all([soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] }), soft(api.reportLast(), null)]);
     set({ history, lastReport, undoable: history.runs.some((r) => r.undoable) });
   };
+  /** A start-up read that may fail without stopping the app: toast it, use the fallback. */
+  const startup = (p, fallback) => p.catch((e) => { c.fail(e); return fallback; });
 
   return {
     /** Load everything the shell shows at start-up (docs/IPC.md §2). */
     async init() {
       const [info, scope, scan, plan, jobs, tools] = await Promise.all([
-        soft(api.appInfo(), null), api.scopeGet(), api.scanStatus(), api.planGet(), soft(api.jobsList(), []), soft(api.toolsList(), []),
+        soft(api.appInfo(), null), startup(api.scopeGet(), get().scope), startup(api.scanStatus(), get().scan), startup(api.planGet(), get().plan), soft(api.jobsList(), []), soft(api.toolsList(), []),
       ]);
       const { progress, ...scanState } = scan;
       set({ info, scope, scan: scanState, scanProgress: progress ?? null, plan, jobs, tools, jobProgress: Object.fromEntries(jobs.map((j) => [j.id, j.progress])) });
@@ -86,6 +119,8 @@ function coreActions(c) {
       set({ route: { name, params, from: name === 'step' ? cur : null } });
       if (['clean', 'optimise', 'archive'].includes(name)) c.actions.loadCategory(name);
       if (name === 'history') c.actions.loadHistory();
+      if (name === 'disk') c.actions.loadDisk();
+      if (name === 'clean') c.actions.loadPresets();
       if (name === 'settings') c.actions.loadSettings();
     },
     back() {
@@ -95,14 +130,21 @@ function coreActions(c) {
 
     // ---------------------------------------------------------------- scope
     removeRoot: guard(async (path) => set({ scope: await api.scopeRemoveRoot({ path }) })),
-    /** Open the in-app folder browser. @param {{ mode?: 'scope'|'move' }} [opts] */
+    /**
+     * Open the in-app folder browser. Modes: scope (add a location), move, keep
+     * (preferred folder of a keep rule) and export (choose where to save; also
+     * carries the file name and what to export).
+     * @param {{ mode?: 'scope'|'move'|'keep'|'export', exportJob?: any, filename?: string }} [opts]
+     */
     async openBrowser(opts = {}) {
       const mode = opts.mode ?? 'scope';
-      set({ browser: { mode, path: '', parent: null, entries: [], places: [], loading: true } });
+      const extra = { exportJob: opts.exportJob ?? null, filename: opts.filename ?? '' };
+      set({ browser: { mode, ...extra, path: '', parent: null, entries: [], places: [], loading: true } });
       try {
         const first = await api.fsListDir({});
-        set({ browser: { mode, path: '', parent: null, entries: [], places: first.places, loading: false } });
-        if (first.places[0]) await c.actions.browseTo(first.places[0].path);
+        set({ browser: { mode, ...extra, path: '', parent: null, entries: [], places: first.places, loading: false } });
+        const start = (mode === 'export' && first.places.find((p) => p.kind === 'documents')) || first.places[0];
+        if (start) await c.actions.browseTo(start.path);
       } catch (e) {
         c.fail(e);
         set({ browser: null });
@@ -113,7 +155,7 @@ function coreActions(c) {
       const prev = get().browser;
       set({ browser: { ...prev, loading: true } });
       const r = await api.fsListDir({ path, show_hidden: false, include_files: false });
-      set({ browser: { mode: prev.mode, path: r.path, parent: r.parent ?? null, entries: r.entries, places: r.places, loading: false } });
+      set({ browser: { ...prev, path: r.path, parent: r.parent ?? null, entries: r.entries, places: r.places, loading: false } });
     }),
     closeBrowser: () => set({ browser: null }),
     /** "Choose this folder": add it to the scan scope. */
@@ -123,6 +165,15 @@ function coreActions(c) {
       if (b.mode === 'move') {
         set({ browser: null });
         await c.actions.setStepAction('move', b.path);
+        return;
+      }
+      if (b.mode === 'keep') {
+        set({ browser: null });
+        await c.actions.applyKeepRule('preferred_folder', b.path);
+        return;
+      }
+      if (b.mode === 'export') {
+        await c.actions.finishExport();
         return;
       }
       set({ scope: await api.scopeAddRoot({ path: b.path }), browser: null });

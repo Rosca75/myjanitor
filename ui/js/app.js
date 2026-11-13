@@ -26,7 +26,7 @@ import { renderSettings } from './views/settings/index.js';
 /** Route name to view function. */
 export const VIEWS = { overview: renderOverview, step: renderStep, clean: renderClean, optimise: renderOptimise, archive: renderArchive, history: renderHistory, settings: renderSettings };
 
-const MAIN_KEYS = ['route', 'scan', 'detectors', 'opps', 'tab', 'sort', 'showSmall', 'plan', 'drives', 'completed', 'step', 'category', 'history', 'quarantine', 'settings', 'cache', 'tools', 'custom', 'info', 'scope'];
+const MAIN_KEYS = ['route', 'scan', 'detectors', 'opps', 'tab', 'sort', 'showSmall', 'plan', 'drives', 'completed', 'step', 'category', 'history', 'quarantine', 'settings', 'cache', 'tools', 'custom', 'info', 'scope', 'historyUi', 'disk', 'unavail', 'drives', 'tools'];
 
 /**
  * @param {any} root element to mount into
@@ -36,6 +36,9 @@ const MAIN_KEYS = ['route', 'scan', 'detectors', 'opps', 'tab', 'sort', 'showSma
  */
 export function mountApp(root, store, actions, opts = {}) {
   const now = opts.now ?? (() => Date.now());
+  /** Every store subscription, so teardown can drop them all. */
+  const offs = [];
+  const sub = (fn, keys) => { offs.push(store.subscribe(fn, keys)); };
   const rail = h('div', { class: 'app__rail' });
   const header = h('div', { class: 'app__header' });
   const main = h('main', { class: 'app__main', id: 'main', 'aria-label': 'Content' });
@@ -52,18 +55,18 @@ export function mountApp(root, store, actions, opts = {}) {
   const bind = (el, keys, render) => {
     const draw = (s) => replaceKeepingFocus(el, render(s));
     draw(store.get());
-    store.subscribe(draw, keys);
+    sub(draw, keys);
   };
 
   bind(rail, ['route', 'step', 'opps'], (s) => renderRail(s, actions));
   bind(header, ['route', 'scope', 'scan', 'opps', 'step', 'plan'], (s) => renderHeader(s, actions, now()));
   bind(main, MAIN_KEYS, (s) => (VIEWS[s.route.name] ?? renderOverview)(s, actions));
   bind(panel, ['route', 'plan', 'step', 'tools', 'dryRunning', 'jobs', 'scan'], (s) => renderPanel(s, actions));
-  bind(strip, ['jobs', 'plan', 'opps', 'reclaimed', 'undoable', 'lastReport', 'scan', 'dialog'], (s) => renderStrip(s, actions));
+  bind(strip, ['jobs', 'plan', 'opps', 'reclaimed', 'undoable', 'lastReport', 'scan', 'dialog', 'completed', 'queueOpen'], (s) => renderStrip(s, actions));
 
   // In-place progress (no re-render of the controls).
-  store.subscribe((s) => patchScanning(main, s), ['scanProgress']);
-  store.subscribe((s) => patchStrip(strip, s), ['jobProgress']);
+  sub((s) => patchScanning(main, s), ['scanProgress']);
+  sub((s) => patchStrip(strip, s), ['jobProgress']);
 
   // Panel visibility and scroll reset follow the route.
   const onRoute = (s) => {
@@ -71,7 +74,7 @@ export function mountApp(root, store, actions, opts = {}) {
     main.scrollTop = 0;
   };
   onRoute(store.get());
-  store.subscribe(onRoute, ['route']);
+  sub(onRoute, ['route']);
 
   // Overlays: focus goes in on open and back to the opener on close.
   const focus = createFocusManager();
@@ -82,7 +85,7 @@ export function mountApp(root, store, actions, opts = {}) {
     focus.after(overlay, kind);
   };
   drawOverlay(store.get());
-  store.subscribe(drawOverlay, ['dialog', 'browser', 'report']);
+  sub(drawOverlay, ['dialog', 'browser', 'report', 'ask', 'compare', 'reportUi']);
 
   bind(toast, ['toast'], (s) => renderToast(s, actions));
 
@@ -92,7 +95,9 @@ export function mountApp(root, store, actions, opts = {}) {
     live.textContent = `${copy.plan.steps(n)}, ${formatBytes(planSaving(s))}. ${copy.strip.reclaimable} ${formatBytes(s.opps.summary.total)}.`;
   };
   announce(store.get());
-  store.subscribe(announce, ['plan', 'opps']);
+  sub(announce, ['plan', 'opps']);
 
-  return { layout, main, panel, strip, header, rail, overlay, toast, live };
+  /** Unsubscribe every region (view teardown). */
+  const dispose = () => offs.splice(0).forEach((off) => off());
+  return { layout, main, panel, strip, header, rail, overlay, toast, live, dispose };
 }

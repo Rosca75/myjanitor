@@ -25,7 +25,7 @@ export function renderStep(s, actions) {
     h('div', { class: 'step-head' },
       h('p', { class: 'step-head__summary', 'aria-live': 'polite', 'data-role': 'step-summary' }, line),
       h('p', { class: 'step-head__sub' }, st.detail.diagnostics.notes.join(' ') || opp.description)),
-    renderTable(s, actions));
+    renderTable(st, actions, { exports: (format) => actions.startExport({ type: 'results', format, opportunity_id: opp.id, selected_only: false }) }));
 }
 
 /** Right panel for the step route. @param {any} s @param {any} actions */

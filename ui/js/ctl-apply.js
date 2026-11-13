@@ -70,12 +70,18 @@ export function applyActions(c) {
     /** "Undo last action" (strip and completed summary). */
     undoLast: guard(async () => { set({ completed: null }); await api.undoLast(); set({ jobs: await api.jobsList() }); }),
     dismissCompleted: () => set({ completed: null }),
-    /** "View report" / "Last report". @param {number} [runId] */
-    viewReport: guard(async (runId) => {
-      const report = runId ? await api.reportGet({ run_id: runId }) : await api.reportLast();
-      set({ report });
+    /** Move a queued job up (-1) or down (+1) among the queued ones. @param {number} id @param {number} delta */
+    moveJob: guard(async (id, delta) => {
+      const queued = get().jobs.filter((j) => j.state === 'queued').map((j) => j.id);
+      const i = queued.indexOf(id);
+      const j = i + delta;
+      if (i < 0 || j < 0 || j >= queued.length) return;
+      [queued[i], queued[j]] = [queued[j], queued[i]];
+      await api.jobsReorder({ job_ids: queued });
+      set({ jobs: await api.jobsList() });
     }),
-    closeReport: () => set({ report: null }),
+    /** Show or hide the job queue when nothing is running. */
+    toggleQueue: () => set({ queueOpen: !get().queueOpen }),
   };
 }
 

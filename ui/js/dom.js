@@ -126,10 +126,15 @@ export function icon(name, size = 16) {
 export function replaceKeepingFocus(container, node) {
   const active = document.activeElement;
   const key = active && container.contains?.(active) ? active.getAttribute?.('data-fk') : null;
+  const from = key ? active.selectionStart : undefined; // keep the caret of a text box being typed in
+  const to = key ? active.selectionEnd : undefined;
   container.replaceChildren(node);
   if (key) {
     const again = container.querySelector(`[data-fk="${key}"]`);
     if (again && typeof again.focus === 'function') again.focus();
+    if (again && typeof again.setSelectionRange === 'function' && typeof from === 'number' && typeof to === 'number') {
+      try { again.setSelectionRange(from, to); } catch { /* not a text input */ }
+    }
   }
 }
 

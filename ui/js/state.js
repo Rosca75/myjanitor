@@ -4,6 +4,7 @@
  * `set`, with subscriptions. Views read from it and never keep shared state of
  * their own; the controller (controller.js) is the only writer.
  */
+import { initialModel } from './lib/rulebuilder.js';
 
 /**
  * @template T
@@ -43,6 +44,18 @@ export function createStore(initial) {
 export const emptySummary = { total: 0, reversible: 0, opt_in: 0, review_only: 0, opportunities: 0 };
 export const emptyCounts = { all: 0, clean: 0, optimise: 0, archive: 0, review_only: 0 };
 
+/** Custom search (Clean view): quick query, rule builder, presets and results. */
+export function initialCustom() {
+  return {
+    mode: 'query', // 'query' | 'builder'
+    query: '', caret: 0, errors: [], parsedRule: null, suggestions: [], suggestIndex: -1,
+    builder: initialModel(), builderErrors: [],
+    title: '', action: 'trash', topmost: false, advancedOpen: false,
+    presets: [], presetsLoading: false, presetName: '', presetDesc: '',
+    running: false, result: null, step: null,
+  };
+}
+
 /** Initial application state. */
 export function initialState() {
   return {
@@ -76,8 +89,23 @@ export function initialState() {
     settings: null,
     cache: null,
 
-    category: { name: null, items: [] }, // Clean / Optimise / Archive lists
+    category: { name: null, items: [], loading: false, error: null }, // Clean / Optimise / Archive lists
     report: null,
+    reportUi: { filter: 'all', shown: {} },
+    /** Features the backend answered with not_implemented / unsupported: key -> ErrorInfo. */
+    unavail: {},
+    /** History: expanded runs, their entries (per run), selection, results of the last restore. */
+    historyUi: { loading: false, error: null, expanded: {}, details: {}, selected: {}, result: null, undoDays: null, loadingMore: false },
+    /** Generic yes/no dialog (undo a run, purge quarantine), or null. */
+    ask: null,
+    /** Disk usage view. */
+    disk: { loading: false, error: null, root: null, expanded: {}, tab: 'folders', sort: 'size', focusPath: null, breakdown: {}, loadingPaths: {} },
+    /** Compare before / after dialog, or null. */
+    compare: null,
+    /** Latest file being processed per job id (job://progress `current`). */
+    jobCurrent: {},
+    /** Job queue forced open by the user even when nothing runs. */
+    queueOpen: false,
     /** Step review. */
     step: null,
     /** Folder browser modal, or null. */
@@ -85,7 +113,7 @@ export function initialState() {
     /** Confirmation dialog sequence, or null. */
     dialog: null,
     /** Custom search state (Clean view). */
-    custom: { query: '', result: null, errors: [] },
+    custom: initialCustom(),
     toast: null,
   };
 }

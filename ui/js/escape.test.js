@@ -74,7 +74,7 @@ test('a hostile name in a dialog and in the report is text only', async () => {
   assert.ok(env.$('.callout__title').textContent.includes(HOSTILE));
   assertNoInjectedMarkup(env.root);
   env.store.set({ dialog: null, report: { run_id: 1, title: HOSTILE, started: 1, totals: { files: 1, succeeded: 1, skipped: 0, failed: 0, bytes_before: 1, bytes_after: 0, bytes_saved: 1 }, sections: [{ title: HOSTILE }] } });
-  assert.ok(env.$('.report__sections').textContent.includes(HOSTILE));
+  assert.ok(env.$('.rsec__title').textContent.includes(HOSTILE));
   assertNoInjectedMarkup(env.root);
 });
 
