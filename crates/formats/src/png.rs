@@ -460,6 +460,114 @@ pub fn filter_adaptive(pixels: &[u8], row: usize, bpp: usize) -> Vec<u8> {
     out
 }
 
+/// A decoded image, normalised to RGBA with 16 bits per channel (8-bit values are replicated, so
+/// the same picture stored at different depths or as palette/greyscale/RGB compares equal).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decoded {
+    pub width: u32,
+    pub height: u32,
+    pub rgba16: Vec<u16>,
+}
+
+/// Largest image [`decode_rgba16`] will decode (32 megapixels = 256 MiB of samples).
+pub const MAX_DECODE_PIXELS: u64 = 32 * 1024 * 1024;
+
+fn sample(row: &[u8], n: usize, depth: usize) -> u16 {
+    match depth {
+        16 => u16::from_be_bytes([row.get(n * 2).copied().unwrap_or(0), row.get(n * 2 + 1).copied().unwrap_or(0)]),
+        8 => u16::from(row.get(n).copied().unwrap_or(0)),
+        d => {
+            let bit = n * d;
+            let byte = row.get(bit / 8).copied().unwrap_or(0);
+            u16::from((byte >> (8 - d - bit % 8)) & ((1u8 << d) - 1))
+        }
+    }
+}
+
+fn scale16(v: u16, depth: usize) -> u16 {
+    match depth {
+        16 => v,
+        8 => v * 257,
+        d => (u32::from(v) * 65_535 / ((1u32 << d) - 1)) as u16,
+    }
+}
+
+/// Decode to RGBA16 (every colour type, bit depth, `PLTE`, `tRNS` and Adam7). Used to verify that an
+/// external optimiser (oxipng) kept every pixel, whatever reductions it applied.
+pub fn decode_rgba16(buf: &[u8]) -> Result<Decoded> {
+    let png = parse(buf)?;
+    if png.is_animated() {
+        return Err(Error::unsupported("PNG", "animated PNG"));
+    }
+    let ih = png.ihdr()?;
+    if u64::from(ih.width) * u64::from(ih.height) > MAX_DECODE_PIXELS {
+        return Err(Error::unsupported("PNG", "image too large to verify"));
+    }
+    let (_, raw) = inflate_idat(&png, &ih)?;
+    let plte = png.chunks.iter().find(|c| &c.kind == b"PLTE").map(|c| c.data.as_slice()).unwrap_or(&[]);
+    let trns = png.chunks.iter().find(|c| &c.kind == b"tRNS").map(|c| c.data.as_slice()).unwrap_or(&[]);
+    let (w, h, depth) = (ih.width as usize, ih.height as usize, usize::from(ih.bit_depth));
+    let mut out = vec![0u16; w * h * 4];
+    let key = |i: usize| -> Option<u16> { (trns.len() >= i * 2 + 2).then(|| u16::from_be_bytes([trns[i * 2], trns[i * 2 + 1]])) };
+    let mut put = |x: usize, y: usize, row: &[u8], i: usize| {
+        let at = (y * w + x) * 4;
+        let px = match ih.color_type {
+            0 => {
+                let s = sample(row, i, depth);
+                let v = scale16(s, depth);
+                [v, v, v, if key(0).is_some_and(|k| k & ((1u32 << depth) - 1) as u16 == s) { 0 } else { 65_535 }]
+            }
+            2 => {
+                let s = [sample(row, i * 3, depth), sample(row, i * 3 + 1, depth), sample(row, i * 3 + 2, depth)];
+                let transparent = (0..3).all(|c| key(c).is_some_and(|k| k == s[c]));
+                [scale16(s[0], depth), scale16(s[1], depth), scale16(s[2], depth), if transparent { 0 } else { 65_535 }]
+            }
+            3 => {
+                let idx = usize::from(sample(row, i, depth));
+                let c = |o: usize| u16::from(plte.get(idx * 3 + o).copied().unwrap_or(0)) * 257;
+                [c(0), c(1), c(2), trns.get(idx).map_or(65_535, |&a| u16::from(a) * 257)]
+            }
+            4 => {
+                let v = scale16(sample(row, i * 2, depth), depth);
+                [v, v, v, scale16(sample(row, i * 2 + 1, depth), depth)]
+            }
+            _ => [0, 1, 2, 3].map(|c| scale16(sample(row, i * 4 + c, depth), depth)),
+        };
+        out[at..at + 4].copy_from_slice(&px);
+    };
+    if ih.interlace == 0 {
+        let row_len = ih.row_bytes(w as u64) as usize;
+        let pixels = unfilter(&raw, row_len, ih.bpp())?;
+        for y in 0..h {
+            let row = &pixels[y * row_len..(y + 1) * row_len];
+            for x in 0..w {
+                put(x, y, row, x);
+            }
+        }
+    } else {
+        const PASSES: [(usize, usize, usize, usize); 7] =
+            [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)];
+        let mut at = 0usize;
+        for (x0, y0, dx, dy) in PASSES {
+            if w <= x0 || h <= y0 {
+                continue;
+            }
+            let (pw, ph) = ((w - x0).div_ceil(dx), (h - y0).div_ceil(dy));
+            let row_len = ih.row_bytes(pw as u64) as usize;
+            let len = ph * (1 + row_len);
+            let pixels = unfilter(raw.get(at..at + len).ok_or_else(|| Error::parse("PNG", "interlaced data too short"))?, row_len, ih.bpp())?;
+            at += len;
+            for j in 0..ph {
+                let row = &pixels[j * row_len..(j + 1) * row_len];
+                for i in 0..pw {
+                    put(x0 + i * dx, y0 + j * dy, row, i);
+                }
+            }
+        }
+    }
+    Ok(Decoded { width: ih.width, height: ih.height, rgba16: out })
+}
+
 /// Test-support builders for hand-made PNGs (also used by `mj-optimise` tests).
 #[doc(hidden)]
 pub mod build {
@@ -625,6 +733,49 @@ mod tests {
             assert_eq!(unfilter(&f, 30, bpp).unwrap(), pixels);
         }
         assert!(unfilter(&[9, 0, 0], 2, 1).is_err());
+    }
+
+    #[test]
+    fn decode_normalises_depths_and_palettes() {
+        let img = decode_rgba16(&rgb_png(4, 2, &[], 1)).unwrap();
+        assert_eq!((img.width, img.height), (4, 2));
+        // pixel (x=2, y=1): r = 6, g = 2, b = 1
+        let at = (4 + 2) * 4;
+        assert_eq!(&img.rgba16[at..at + 4], &[6 * 257, 2 * 257, 257, 65_535]);
+        // 2-bit greyscale 3x2 (rows padded to a byte): 0 1 2 / 3 0 1
+        let raw = [0u8, 0b0001_1000, 0, 0b1100_0100];
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        let g = write(&[build::ihdr(3, 2, 2, 0, 0), build::chunk(b"IDAT", &z), build::chunk(b"IEND", &[])], &[]);
+        let d = decode_rgba16(&g).unwrap();
+        let grey: Vec<u16> = d.rgba16.chunks(4).map(|p| p[0]).collect();
+        assert_eq!(grey, [0, 21845, 43690, 65535, 0, 21845]);
+        // palette + tRNS: index 1 is transparent
+        let pz = miniz_oxide::deflate::compress_to_vec_zlib(&[0u8, 0, 1], 6);
+        let p = write(
+            &[build::ihdr(2, 1, 8, 3, 0), build::chunk(b"PLTE", &[255, 0, 0, 0, 255, 0]), build::chunk(b"tRNS", &[255, 0]), build::chunk(b"IDAT", &pz), build::chunk(b"IEND", &[])],
+            &[],
+        );
+        let d = decode_rgba16(&p).unwrap();
+        assert_eq!(d.rgba16, [65535, 0, 0, 65535, 0, 65535, 0, 0]);
+    }
+
+    #[test]
+    fn decode_handles_adam7() {
+        // 8x8 greyscale where pixel (x, y) = y * 8 + x, stored interlaced with filter 0.
+        let mut raw = Vec::new();
+        for (x0, y0, dx, dy) in [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] {
+            for y in (y0..8).step_by(dy) {
+                raw.push(0);
+                for x in (x0..8).step_by(dx) {
+                    raw.push((y * 8 + x) as u8);
+                }
+            }
+        }
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        let png = write(&[build::ihdr(8, 8, 8, 0, 1), build::chunk(b"IDAT", &z), build::chunk(b"IEND", &[])], &[]);
+        let d = decode_rgba16(&png).unwrap();
+        let grey: Vec<u16> = d.rgba16.chunks(4).map(|p| p[0] / 257).collect();
+        assert_eq!(grey, (0..64).collect::<Vec<u16>>());
     }
 
     #[test]
