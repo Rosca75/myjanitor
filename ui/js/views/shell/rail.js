@@ -8,6 +8,7 @@ const ITEMS = ['overview', 'clean', 'optimise', 'archive', 'history'];
 
 /** The rail item to highlight for the current route. @param {any} s */
 export function activeNav(s) {
+  if (s.route.name === 'disk') return 'overview';
   if (s.route.name !== 'step') return s.route.name;
   const opp = findOpp(s, s.step?.id) ?? s.step?.detail?.opportunity;
   return opp?.category && ['clean', 'optimise', 'archive'].includes(opp.category) ? opp.category : 'overview';

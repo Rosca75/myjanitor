@@ -21,10 +21,11 @@ import { renderClean } from './views/clean/index.js';
 import { renderOptimise } from './views/optimise/index.js';
 import { renderArchive } from './views/archive/index.js';
 import { renderHistory } from './views/history/index.js';
+import { renderDisk } from './views/disk/index.js';
 import { renderSettings } from './views/settings/index.js';
 
 /** Route name to view function. */
-export const VIEWS = { overview: renderOverview, step: renderStep, clean: renderClean, optimise: renderOptimise, archive: renderArchive, history: renderHistory, settings: renderSettings };
+export const VIEWS = { overview: renderOverview, step: renderStep, clean: renderClean, optimise: renderOptimise, archive: renderArchive, history: renderHistory, disk: renderDisk, settings: renderSettings };
 
 const MAIN_KEYS = ['route', 'scan', 'detectors', 'opps', 'tab', 'sort', 'showSmall', 'plan', 'drives', 'completed', 'step', 'category', 'history', 'quarantine', 'settings', 'cache', 'tools', 'custom', 'info', 'scope', 'historyUi', 'disk', 'unavail', 'drives', 'tools'];
 

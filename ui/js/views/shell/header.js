@@ -35,6 +35,13 @@ function stepHeader(s, actions) {
 export function renderHeader(s, actions, nowMs = Date.now()) {
   const r = s.route.name;
   if (r === 'step') return stepHeader(s, actions);
+  if (r === 'disk') {
+    return h('header', { class: 'header header--step' },
+      h('nav', { class: 'crumbs', 'aria-label': 'Breadcrumb' },
+        h('button', { type: 'button', class: 'crumbs__back', 'aria-label': copy.header.backLabel, 'data-fk': 'back', on: { click: () => actions.navigate('overview') } }, icon('chevronLeft', 14), copy.disk.back),
+        h('span', { class: 'crumbs__sep', 'aria-hidden': 'true' }, '/'),
+        h('h1', { class: 'header__title' }, copy.disk.title)));
+  }
   if (r !== 'overview') return h('header', { class: 'header' }, h('h1', { class: 'header__title' }, copy.nav[r] ?? copy.appName));
   const scanning = isScanning(s);
   const scanned = s.opps.scanned_at && !scanning;

@@ -9,6 +9,7 @@ import { tabs } from '../../components/tabs.js';
 import { oppCard } from '../../components/card.js';
 import { splitCards } from '../../state.js';
 import { renderHero } from './hero.js';
+import { platformNote } from '../category.js';
 
 /** Banner after an apply finished (state 5). @param {any} s @param {any} actions */
 function completedBanner(s, actions) {
@@ -30,12 +31,13 @@ const tabItems = (counts) => ['all', 'clean', 'optimise', 'review_only'].map((k)
 /** @param {any} s @param {any} actions */
 export function renderResults(s, actions) {
   const { main, small } = splitCards(s.opps.items);
-  const handlers = { onReview: (id) => actions.openStep(id), onAdd: (id) => actions.addToPlan(id) };
+  const handlers = { onReview: (id) => actions.openStep(id), onAdd: (id) => actions.addToPlan(id), platformNote: platformNote(s) };
   const smallSize = small.reduce((a, o) => a + o.size_before, 0);
   const grid = (list) => h('div', { class: 'grid', 'aria-label': copy.tabs.label }, list.map((o) => oppCard(o, handlers)));
   return h('div', { class: 'view view--overview' },
     s.completed && completedBanner(s, actions),
     renderHero(s),
+    h('p', { class: 'explore' }, button({ label: copy.disk.open, variant: 'link', size: 'sm', icon: 'folder', fk: 'explore-disk', onClick: () => actions.navigate('disk') })),
     h('div', { class: 'toolbar' },
       tabs({ items: tabItems(s.opps.counts), active: s.tab, onSelect: (k) => actions.setTab(k), label: copy.tabs.label, fk: 'tab' }),
       h('label', { class: 'sort' }, h('span', { class: 'sort__label' }, copy.sort.label),
