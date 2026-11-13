@@ -1,0 +1,23 @@
+/* Clean, Optimise, Archive, History and Settings views. */
+.intro__title { font-size: var(--text-2xl); font-weight: var(--weight-bold); }
+.intro__text { color: var(--text-muted); margin-top: var(--space-1); max-width: 640px; }
+.custom { margin-top: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-card); display: flex; flex-direction: column; gap: var(--space-2); }
+.custom__title { font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.custom__intro, .custom__help { color: var(--text-muted); font-size: var(--text-sm); }
+.custom__help--error { color: var(--danger-text); }
+.custom__form { display: flex; gap: var(--space-2); max-width: 640px; }
+.custom__result { display: flex; align-items: center; gap: var(--space-2); font-weight: var(--weight-medium); }
+.runs { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-4); }
+.run { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); padding: var(--space-3) var(--space-4); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-card); }
+.run__main { display: flex; flex-direction: column; min-width: 0; }
+.run__meta, .run__steps { color: var(--text-muted); font-size: var(--text-xs); }
+.run__side { display: flex; align-items: center; gap: var(--space-3); flex: none; }
+.run__until { color: var(--text-muted); font-size: var(--text-xs); }
+.drawer { margin-top: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-card); display: flex; flex-direction: column; gap: var(--space-3); align-items: flex-start; max-width: 640px; }
+.drawer__title { font-size: var(--text-lg); font-weight: var(--weight-semibold); }
+.kvs { display: flex; flex-direction: column; gap: var(--space-2); width: 100%; }
+.kv { display: flex; justify-content: space-between; gap: var(--space-4); }
+.kv__k { color: var(--text-muted); }
+.tools { display: flex; flex-direction: column; gap: var(--space-2); }
+.tool { display: flex; align-items: center; gap: var(--space-3); }
+.tool__v { color: var(--text-muted); font-size: var(--text-xs); }

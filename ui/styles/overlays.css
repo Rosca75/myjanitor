@@ -1,0 +1,42 @@
+/* Overlays: scrim, modal, confirmation dialog, folder browser. */
+.scrim { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding-top: 10vh; background: var(--scrim); overflow: auto; }
+.modal { width: min(var(--dialog-width), calc(100vw - var(--space-8))); background: var(--surface); border-radius: var(--radius-dialog); box-shadow: var(--shadow-raised); padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-4); max-height: 86vh; overflow: auto; }
+.modal:focus-visible { outline-offset: -2px; }
+.modal__head { display: flex; align-items: flex-start; gap: var(--space-4); }
+.modal__intro { min-width: 0; }
+.modal__title { font-size: var(--text-dialog); font-weight: var(--weight-bold); }
+.modal__body { color: var(--text-muted); font-size: var(--text-lg); margin-top: var(--space-1); }
+.alert-icon { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: var(--radius-pill); background: var(--warning-soft); color: var(--warning-text); }
+.alert-icon .icon { stroke-width: 2.6; }
+.alert-icon--danger { background: var(--danger-soft); color: var(--danger-text); }
+.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
+.stat { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-3) var(--space-4); background: var(--surface-raised); border-radius: var(--radius-tile); }
+.stat__label { font-size: var(--text-xs); color: var(--text-muted); }
+.stat__value { font-size: var(--text-title); font-weight: var(--weight-bold); }
+.stat--good .stat__value { color: var(--success-text); }
+.modal__row { display: flex; align-items: center; gap: var(--space-4); }
+.modal__label { font-size: var(--text-lg); width: 90px; }
+.modal__row .select { flex: 1; height: 32px; }
+.callout { padding: var(--space-3) var(--space-4); background: var(--warning-soft); border-left: 3px solid var(--warning-strong); border-radius: var(--radius-sm); }
+.callout__title { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--warning-text); }
+.callout__body { font-size: var(--text-xs); color: var(--text-muted); }
+.modal__online { display: flex; flex-direction: column; gap: var(--space-2); align-items: flex-start; margin-top: calc(var(--space-2) * -1); }
+.ack { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-lg); cursor: pointer; }
+.ack__hint { color: var(--text-muted); font-size: var(--text-sm); padding-left: 26px; margin-top: calc(var(--space-2) * -1); }
+.modal__foot { display: flex; align-items: center; gap: var(--space-3); border-top: 1px solid var(--border); padding-top: var(--space-5); margin-top: var(--space-2); }
+.modal__spacer { flex: 1; }
+.btn--acting { height: 34px; min-width: 150px; font-size: var(--text-md); }
+.modal--permanent .ack__hint { color: var(--danger-text); }
+
+.modal--browser { width: min(720px, calc(100vw - var(--space-8))); }
+.browser { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--space-4); min-height: 280px; }
+.browser__places { display: flex; flex-direction: column; gap: var(--space-1); border-right: 1px solid var(--border); padding-right: var(--space-3); }
+.browser__place { justify-content: flex-start; }
+.browser__main { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
+.browser__path { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.browser__current { font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser__list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.browser__entry { display: flex; align-items: center; gap: var(--space-3); width: 100%; height: 32px; padding: 0 var(--space-3); background: none; border: 0; border-bottom: 1px solid var(--border); text-align: left; cursor: pointer; }
+.browser__entry:hover { background: var(--select-soft); }
+.browser__empty { color: var(--text-muted); padding: var(--space-4) 0; }
+.report__sections { padding-left: var(--space-4); list-style: disc; color: var(--text-muted); }
