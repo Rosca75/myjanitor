@@ -23,6 +23,13 @@ pub mod temp;
 pub mod winapp2;
 pub mod zeroed;
 
+mod fsio;
+mod inflate;
+mod lnk;
+mod rules;
+#[cfg(test)]
+mod testkit;
+
 use mj_core::Detector;
 
 /// Every detector of this crate, in card order. The engine calls this once at start-up.
