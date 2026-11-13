@@ -1,5 +1,5 @@
 //! Directory listing and a simple sequential walk. Owner: W2-A.
-//! The parallel production walker lives in `mj-scan`; this is the primitive.
+//! The parallel production walker lives in `mj-scan`; these are the primitives.
 
 use std::path::Path;
 
@@ -8,7 +8,18 @@ use mj_core::{CancelToken, EntryKind, Error, Result};
 use crate::traits::DirItem;
 
 /// List one directory without following links.
+///
+/// Linux and other Unix: `std::fs::read_dir` (`getdents64`, entry type from
+/// `d_type`, no stat). Windows: `FindFirstFileExW` with `FindExInfoBasic` and
+/// `FIND_FIRST_EX_LARGE_FETCH` through a `\\?\` long path; a reparse point is
+/// classified by its tag, so junctions and symlinks are `Link` while cloud
+/// placeholders stay files or directories.
 pub fn read_dir(dir: &Path) -> Result<Vec<DirItem>> {
+    native_read_dir(dir)
+}
+
+#[cfg(not(windows))]
+fn native_read_dir(dir: &Path) -> Result<Vec<DirItem>> {
     let rd = std::fs::read_dir(dir).map_err(|e| Error::io(dir, e))?;
     let mut out = Vec::new();
     for item in rd {
@@ -21,6 +32,56 @@ pub fn read_dir(dir: &Path) -> Result<Vec<DirItem>> {
             Err(_) => EntryKind::Other,
         };
         out.push(DirItem { name: item.file_name(), path: item.path(), kind });
+    }
+    Ok(out)
+}
+
+#[cfg(windows)]
+fn native_read_dir(dir: &Path) -> Result<Vec<DirItem>> {
+    use super::metadata::entry_from_win32;
+    use super::win::*;
+    use crate::ffi::windows::{wide_path, INVALID_HANDLE_VALUE};
+
+    let pattern = dir.join("*");
+    let w = wide_path(&pattern);
+    let mut fd = WIN32_FIND_DATAW::zeroed();
+    // SAFETY: `w` is NUL-terminated and `fd` is a writable WIN32_FIND_DATAW; both outlive the call.
+    let h = unsafe {
+        FindFirstFileExW(
+            w.as_ptr(),
+            FIND_EX_INFO_BASIC,
+            &mut fd,
+            FIND_EX_SEARCH_NAME_MATCH,
+            std::ptr::null_mut(),
+            FIND_FIRST_EX_LARGE_FETCH,
+        )
+    };
+    let mut out = Vec::new();
+    if h == INVALID_HANDLE_VALUE || h.is_null() {
+        let err = last_error();
+        // An empty drive root has no "." entry and answers "file not found".
+        if err.raw_os_error() == Some(ERROR_FILE_NOT_FOUND) && std::fs::symlink_metadata(dir).is_ok() {
+            return Ok(out);
+        }
+        return Err(Error::io(dir, err));
+    }
+    let _close = FindHandle(h);
+    loop {
+        let name = fd.name();
+        if name != "." && name != ".." {
+            let path = dir.join(&name);
+            let e = entry_from_win32(&path, fd.dwFileAttributes, Some(fd.dwReserved0), 0, 0, 0, 0);
+            out.push(DirItem { name, path, kind: e.kind });
+        }
+        // SAFETY: `h` is a valid find handle and `fd` a writable WIN32_FIND_DATAW.
+        let ok = unsafe { FindNextFileW(h, &mut fd) };
+        if ok == 0 {
+            let err = last_error();
+            if err.raw_os_error() == Some(ERROR_NO_MORE_FILES) {
+                break;
+            }
+            return Err(Error::io(dir, err));
+        }
     }
     Ok(out)
 }
