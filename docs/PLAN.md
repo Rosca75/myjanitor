@@ -17,8 +17,8 @@ State: todo / in progress / done / blocked.
 | 2 | W2-E | Action engine and safety | Opus | in progress |
 | 2 | W2-F | Frontend shell on mock IPC | Sonnet | done |
 | 3 | W3-A | Optimisation framework, ZIP, OOXML | Opus | todo |
-| 3 | W3-B | PDF, archiving, file-system compression | Opus | todo |
-| 3 | W3-C | Images, external-tool media adapters | Sonnet | todo |
+| 3 | W3-B | PDF, archiving, file-system compression | Opus | in progress |
+| 3 | W3-C | Images, external-tool media adapters | Sonnet | in progress |
 | 3 | W3-D | Real IPC wiring, derived screens | Sonnet | todo |
 | 3 | W3-E | Settings, schedules, CLI, context menu, portable | Sonnet | todo |
 | 4 | W4-1 | Integration pass | Opus | todo |

@@ -126,3 +126,16 @@ One entry per non-trivial decision: *context → options → choice → why*.
 ## D-122 Bundle targets and CSP
 - **Choice:** `bundle.targets = ["appimage", "deb"]` (Linux); Windows ships as a portable exe built with `--no-bundle`, as in the reference. CSP drops `'unsafe-inline'` for styles: the UI sets dynamic sizes through the CSSOM only.
 - **Why:** proven packaging path; stricter CSP costs nothing for a vanilla UI.
+
+## D-007 Autonomous merge to main (owner amendment)
+- **Context:** during the session the owner amended the brief: the session manages commit, push and merge autonomously, the final MVP must land on `main`, and no PR review is requested.
+- **Choice:** at the end, open a PR from the working branch and merge it into `main` once every gate is green.
+
+## D-008 Per-workstream decision and dependency files
+- **Context:** parallel worktrees appending to `docs/DECISIONS.md` and `docs/DEPENDENCIES.md` would conflict on merge.
+- **Choice:** each workstream writes `docs/decisions/<id>.md` and `docs/dependencies/<id>.md`; the root files hold orchestrator and Wave 1 entries and point to those folders.
+
+## D-009 W3-B and W3-C start before Wave 2 exit
+- **Context:** the brief gates each wave on the previous one. W2-A (scan) and W2-E (actions) were still running when the other four Wave 2 workstreams had merged.
+- **Choice:** start W3-B (PDF, archiving, FS compression) and W3-C (images, media adapters) early.
+- **Why:** they own disjoint files and depend only on the frozen Wave 1 contracts, not on W2-A or W2-E output. W3-A, W3-D and W3-E wait for the Wave 2 exit.
