@@ -362,6 +362,16 @@ impl SizeBreakdown {
         v
     }
 
+    /// Structured parts, largest first (`OptimiseOutput::breakdown`).
+    pub fn parts(&self) -> Vec<mj_core::SizePart> {
+        self.sorted().into_iter().map(|(c, n)| mj_core::SizePart { part: c.label().into(), bytes: n }).collect()
+    }
+
+    /// Review-table columns `part:<name>` = bytes, read by the UI's size-parts bar (D2-06).
+    pub fn part_columns(&self) -> Vec<(String, String)> {
+        self.sorted().into_iter().map(|(c, n)| (format!("part:{}", c.label()), n.to_string())).collect()
+    }
+
     /// One line for a table column: `images 4.2 MB · fonts 1.1 MB · other 3 KB`.
     pub fn summary(&self) -> String {
         self.sorted()
@@ -828,6 +838,7 @@ mod tests {
                     lossy: false,
                     skipped: Some("signed".into()),
                     notes: vec![],
+                    ..OptimiseOutput::default()
                 });
             }
             let q = job.params.number("q", 100.0);
@@ -839,6 +850,7 @@ mod tests {
                 lossy: q < 100.0,
                 skipped: None,
                 notes: vec![],
+                ..OptimiseOutput::default()
             })
         }
         fn analyse(&self, _: &DetectContext<'_>) -> Result<DetectorOutput> {

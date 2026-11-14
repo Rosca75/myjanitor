@@ -328,7 +328,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "schedule_run_now",
         request: Some("IdRequest"),
-        response: "ApplyStarted",
+        response: "Job",
         module: "schedules",
         spawns: true,
     },

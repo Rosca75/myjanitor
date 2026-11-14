@@ -1,0 +1,7 @@
+{
+  "bytes": 60664,
+  "dir": "/fixture/app/quarantine",
+  "items": 2,
+  "oldest": 1794663949607527233,
+  "purge_after_days": 30
+}

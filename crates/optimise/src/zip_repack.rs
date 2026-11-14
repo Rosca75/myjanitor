@@ -152,7 +152,7 @@ fn skipped(before: u64, reason: impl Into<String>) -> OptimiseOutput {
         bytes_after: before,
         lossy: false,
         skipped: Some(reason.into()),
-        notes: Vec::new(),
+        ..OptimiseOutput::default()
     }
 }
 
@@ -272,9 +272,8 @@ impl Optimiser for ZipRepack {
         Ok(OptimiseOutput {
             bytes_before: before,
             bytes_after: out.bytes_after,
-            lossy: false,
-            skipped: None,
             notes: vec![format!("{} entries recompressed at the maximum level", out.entries)],
+            ..OptimiseOutput::default()
         })
     }
 

@@ -1,6 +1,6 @@
 //! Integration tests: run the built `myjanitor-cli` against a temp data folder.
-//! Only commands whose engine bodies exist are exercised for real; the
-//! scan, apply, undo pipeline is `#[ignore]`d until the engine facade lands.
+//! The scan → plan → apply → undo pipeline runs across separate processes against
+//! a generated tree; every removal goes to the test's own quarantine.
 //! Nothing here installs schedules or registry entries (OS integration is
 //! switched off through the environment) or touches a folder outside a temp dir.
 
@@ -22,6 +22,8 @@ fn cli(data: &Path, home: &Path, args: &[&str]) -> Run {
         .arg(data)
         .env("HOME", home)
         .env("USERPROFILE", home)
+        // The freedesktop Trash would follow XDG_DATA_HOME: keep it inside the sandbox too.
+        .env("XDG_DATA_HOME", home.join(".local/share"))
         .env("MYJANITOR_NO_OS_INTEGRATION", "1")
         .env("MYJANITOR_UTC_OFFSET_MINUTES", "0")
         .stdin(Stdio::null())
@@ -189,14 +191,13 @@ fn context_menu_and_schedule_installs_honour_the_kill_switch() {
     assert_eq!(cli(&data, &home, &["schedule", "install", "nothing"]).code, 1);
 }
 
-/// Pipeline over a real tree: scan, list, plan, dry-run, apply, undo.
-/// Needs the engine's scan/plan/apply/undo bodies (W3-D1).
+/// Pipeline over a real tree across separate processes: scan, list, show, plan add,
+/// dry-run, apply --yes, history, report, undo; then the `clean` one-shot form.
 #[test]
-#[ignore = "needs W3-D1 engine bodies"]
 fn scan_list_apply_undo_pipeline() {
     let (t, data, home) = sandbox("cli-pipeline");
     let tree = t.mkdir("photos").unwrap();
-    let bytes = vec![7u8; 300_000];
+    let bytes: Vec<u8> = (0..300_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
     t.write("photos/a.bin", &bytes).unwrap();
     t.write("photos/copy of a.bin", &bytes).unwrap();
     let before = mj_core::testutil::snapshot(&tree).unwrap();
@@ -205,14 +206,37 @@ fn scan_list_apply_undo_pipeline() {
     assert_eq!(scan.code, 0, "{}", scan.err);
     let list = cli(&data, &home, &["list", "--json"]);
     assert_eq!(list.code, 0, "{}", list.err);
-    assert_eq!(cli(&data, &home, &["plan", "add", "det:exact_duplicates"]).code, 0);
-    assert_eq!(cli(&data, &home, &["dry-run"]).code, 0);
+    let v: serde_json::Value = serde_json::from_str(&list.out).unwrap();
+    assert!(list.out.contains("det:exact_duplicates"), "{v}");
+    let show = cli(&data, &home, &["show", "det:exact_duplicates", "--json"]);
+    assert_eq!(show.code, 0, "{}", show.err);
+    assert!(show.out.contains("a.bin"), "{}", show.out);
+    let add = cli(&data, &home, &["plan", "add", "det:exact_duplicates", "--action", "quarantine"]);
+    assert_eq!(add.code, 0, "{}", add.err);
+    let dry = cli(&data, &home, &["dry-run"]);
+    assert_eq!(dry.code, 0, "{}", dry.err);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before, "a dry run changes nothing");
-    let apply = cli(&data, &home, &["apply", "--yes", "--originals", "quarantine"]);
-    assert_eq!(apply.code, 0, "{}", apply.err);
-    assert_ne!(mj_core::testutil::snapshot(&tree).unwrap(), before);
-    assert_eq!(cli(&data, &home, &["history"]).code, 0);
+    let apply = cli(&data, &home, &["apply", "--yes"]);
+    assert_eq!(apply.code, 0, "{}{}", apply.out, apply.err);
+    let after = mj_core::testutil::snapshot(&tree).unwrap();
+    assert_eq!(after.len(), 1, "one copy left: {after:?}");
+    assert!(std::fs::read_dir(data.join("quarantine")).unwrap().next().is_some(), "held in the quarantine");
+    let hist = cli(&data, &home, &["history", "--json"]);
+    assert_eq!(hist.code, 0, "{}", hist.err);
+    let h: serde_json::Value = serde_json::from_str(&hist.out).unwrap();
+    assert_eq!(h["runs"][0]["undoable"], true, "{}", hist.out);
+    let report = cli(&data, &home, &["report"]);
+    assert_eq!(report.code, 0, "{}", report.err);
     let undo = cli(&data, &home, &["undo", "--last"]);
-    assert_eq!(undo.code, 0, "{}", undo.err);
+    assert_eq!(undo.code, 0, "{}{}", undo.out, undo.err);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before, "undo restores the tree");
+    assert_eq!(cli(&data, &home, &["undo", "--last"]).code, 1, "nothing left to undo");
+
+    // One-shot form: estimate only by default, then apply.
+    let est = cli(&data, &home, &["clean", p, "--detectors", "exact_duplicates"]);
+    assert_eq!(est.code, 0, "{}{}", est.out, est.err);
+    assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before, "clean without --apply changes nothing");
+    let unknown = cli(&data, &home, &["clean", p, "--detectors", "no_such_detector", "--dry-run"]);
+    assert_ne!(unknown.code, 0, "an unknown detector is an error: {}", unknown.out);
+    assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before);
 }

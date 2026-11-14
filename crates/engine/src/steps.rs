@@ -32,7 +32,7 @@ fn summary_of(rec: &OpportunityRecord) -> StepSummary {
 
 /// True when the parameters make the step lossy (a lossy setting switched on, or the
 /// values of a lossy preset).
-fn params_lossy(rec: &OpportunityRecord, params: &mj_core::ParamValues) -> bool {
+pub(crate) fn params_lossy(rec: &OpportunityRecord, params: &mj_core::ParamValues) -> bool {
     let o = &rec.opportunity;
     let setting = o.settings.iter().any(|s| {
         s.lossy

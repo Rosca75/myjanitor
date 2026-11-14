@@ -5,7 +5,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// Tool ids MyJanitor knows about.
-pub const KNOWN_TOOLS: &[&str] = &["ffmpeg", "ffprobe", "avifenc", "cjxl", "cwebp", "7z", "zstd", "oxipng", "jpegtran"];
+pub const KNOWN_TOOLS: &[&str] =
+    &["ffmpeg", "ffprobe", "avifenc", "cjxl", "cwebp", "7z", "zstd", "oxipng", "jpegtran", "gifsicle"];
 
 /// Detection result for one tool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -41,6 +41,35 @@ pub struct AppInfo {
     pub elevated: bool,
     /// False when the undo journal could not be persisted (History survives only this session).
     pub journal_persistent: bool,
+    /// Platform features this build can use here (UI labels such as "Windows only" come from
+    /// this list, not from the platform name): `recycle_bin`, `freedesktop_trash`,
+    /// `wof_compression`, `btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
+    /// `context_menu`, `os_schedules`. Volume-dependent features are also reported per drive
+    /// by `drives_list`.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    /// How the app was opened from a context-menu entry (`--optimise <path>` /
+    /// `--duplicates <path>`): the scope is already set to `path`; the UI opens the
+    /// matching view. Nothing is scanned or applied automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<LaunchIntent>,
+}
+
+/// Context-menu entry point (`AppInfo::launch`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchIntent {
+    /// `optimise` or `duplicates`.
+    pub mode: LaunchMode,
+    #[serde(with = "mj_core::pathutil::serde_path")]
+    pub path: PathBuf,
+}
+
+/// What a context-menu launch asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    Optimise,
+    Duplicates,
 }
 
 // ---------------------------------------------------------------- scope + folder browser
@@ -608,7 +637,7 @@ pub struct PlanApplyRequest {
     pub confirmations: Vec<StepConfirmation>,
 }
 
-/// `plan_apply` / `schedule_run_now` response.
+/// `plan_apply` response (and `Engine::schedule_run`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyStarted {
     pub run_id: RunId,
@@ -715,6 +744,10 @@ pub struct HistoryRunDetail {
     pub run: HistoryRun,
     pub total: u64,
     pub entries: Vec<JournalEntry>,
+    /// Restore pre-check: entries of this page whose original location is occupied right
+    /// now (something else is at that path), so a restore would be refused (`conflict`).
+    #[serde(default)]
+    pub occupied: Vec<mj_core::EntryId>,
 }
 
 /// Request naming one run (`undo_run`, `report_get`).

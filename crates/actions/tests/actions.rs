@@ -73,6 +73,7 @@ impl Optimiser for HalfOptimiser {
             lossy: self.lossy,
             skipped: None,
             notes: vec![],
+            ..OptimiseOutput::default()
         })
     }
     fn analyse(&self, _: &DetectContext<'_>) -> Result<DetectorOutput> {

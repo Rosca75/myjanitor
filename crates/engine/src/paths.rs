@@ -20,9 +20,9 @@
 //! takes one `data_dir`), so the *config* directory is reported for the OS
 //! integration files and future use but holds nothing yet.
 //!
-//! The OS integration code (context menu, schedule registration) lives in
-//! `settings/` and `schedules/` and is re-exported here as the public surface
-//! of this crate for the CLI: see [`integration`].
+//! The OS integration code (context menu, schedule registration) lives in the
+//! public modules `crate::settings` and `crate::schedules`; [`integration`]
+//! keeps the short paths the CLI uses.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -30,7 +30,8 @@ use std::path::{Path, PathBuf};
 /// Marker files enabling portable mode (either name).
 pub const PORTABLE_MARKERS: &[&str] = &["portable", "myjanitor.portable"];
 
-/// Public surface of the OS integration code (context menu, scheduler registration).
+/// Short paths to the OS integration code (context menu, scheduler registration), which
+/// lives in the public `settings` and `schedules` modules.
 pub mod integration {
     pub use crate::schedules::next::{local_offset_minutes, next_run};
     pub use crate::schedules::os as scheduler;

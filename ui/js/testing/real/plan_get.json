@@ -1,0 +1,52 @@
+{
+  "checklist": [
+    {
+      "code": "undo_window",
+      "level": "ok",
+      "text": "Every reversible step can be undone from History for 30 days"
+    },
+    {
+      "code": "skipped_confidential",
+      "level": "ok",
+      "text": "2 signed, sensitivity-labelled or encrypted files are skipped"
+    }
+  ],
+  "estimate": {
+    "bytes_after": 0,
+    "bytes_before": 303104,
+    "confidence": "exact",
+    "files": 1,
+    "skipped": 0
+  },
+  "id": 12,
+  "name": "Your plan",
+  "steps": [
+    {
+      "action": {
+        "kind": "trash"
+      },
+      "estimate": {
+        "bytes_after": 0,
+        "bytes_before": 303104,
+        "confidence": "exact",
+        "files": 1,
+        "skipped": 0
+      },
+      "id": 18,
+      "lossy": false,
+      "opportunity": "det:exact_duplicates",
+      "params": {
+        "keep_rule": "oldest",
+        "preferred_folder": ""
+      },
+      "safety": "reversible",
+      "selection": {
+        "exclude": [],
+        "include": []
+      },
+      "summary": "To Trash",
+      "title": "Exact duplicates"
+    }
+  ],
+  "updated": 1794663949653659944
+}

@@ -32,6 +32,19 @@ test('history: runs grouped with date, steps, files, bytes and status; entries e
   assert.match(refused.querySelector('[data-role="entry-error"]').textContent, /original location is occupied/);
 });
 
+test('history: the restore pre-check (occupied) disables Restore and says why before any click', async () => {
+  const env = await rich();
+  const run = env.backend.model.runs[0];
+  const entry = env.backend.model.journals.get(run.run_id).find((e) => e.state === 'done');
+  entry.occupied = true;
+  await go(env, 'history');
+  await env.click(env.$('.run .run__toggle'));
+  const row = env.$('.entry[data-entry="' + entry.id + '"]');
+  assert.match(row.querySelector('[data-role="entry-occupied"]').textContent, /original location/);
+  assert.ok(row.querySelector('button[disabled]'), 'Restore disabled');
+  assert.equal(env.sent('restore_entries').length, 0);
+});
+
 test('history: Restore on an entry sends restore_entries and shows refusals with the reason', async () => {
   const env = await rich();
   await go(env, 'history');

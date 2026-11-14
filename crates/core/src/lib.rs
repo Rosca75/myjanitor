@@ -70,7 +70,9 @@ pub use index::{FileIndex, ScanStats, SubtreeTotals};
 pub use job::{ItemOutcome, ItemStatus, Job, JobId, JobKind, JobOutcome, JobProgress, JobState, RunId};
 pub use journal::{EntryId, JournalEntry, JournalState, RunKind, RunRecord, TrashTicket};
 pub use opportunity::{Availability, Category, Opportunity, OpportunityId, SavingsSummary, SubGroup};
-pub use optimiser::{ArchiveJob, Archiver, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo};
+pub use optimiser::{
+    ArchiveJob, Archiver, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, SizePart,
+};
 pub use params::{ParamValue, ParamValues, SettingKind, SettingSpec, StepPreset};
 pub use plan::{ChecklistItem, ChecklistLevel, Plan, PlanStep, SelectionOverrides, StepConfirmation, StepId};
 pub use progress::{NullProgress, Phase, Progress, ProgressSink, ThrottledSink};

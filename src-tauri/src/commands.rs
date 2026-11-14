@@ -421,7 +421,7 @@ pub async fn schedule_from_plan(
 
 /// Run a schedule now (scan its scope, then apply its steps).
 #[tauri::command]
-pub async fn schedule_run_now(state: State<'_, AppState>, req: IdRequest) -> Result<ApplyStarted, ErrorInfo> {
+pub async fn schedule_run_now(state: State<'_, AppState>, req: IdRequest) -> Result<Job, ErrorInfo> {
     run(state, move |e| e.schedule_run_now(req)).await
 }
 

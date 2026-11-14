@@ -24,10 +24,10 @@ mod presets;
 mod reports;
 mod results;
 mod scan_ops;
-mod schedules;
+pub mod schedules;
 mod scope;
 mod search;
-mod settings;
+pub mod settings;
 mod steps;
 mod store;
 mod tools;
@@ -36,3 +36,6 @@ pub use engine::{Engine, EngineConfig};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fault_tests;

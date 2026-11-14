@@ -85,7 +85,7 @@ fn skipped(before: u64, reason: impl Into<String>) -> OptimiseOutput {
         bytes_after: before,
         lossy: false,
         skipped: Some(reason.into()),
-        notes: Vec::new(),
+        ..OptimiseOutput::default()
     }
 }
 
@@ -198,8 +198,9 @@ pub fn run(
         bytes_before: before,
         bytes_after: out.bytes_after,
         lossy: rep.lossy,
-        skipped: None,
         notes: rep.notes,
+        breakdown: directory(job.src).map(|d| breakdown(&d).parts()).unwrap_or_default(),
+        ..OptimiseOutput::default()
     })
 }
 

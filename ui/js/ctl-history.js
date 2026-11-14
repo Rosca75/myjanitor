@@ -15,7 +15,7 @@ export function historyActions(c) {
     setDetail(runId, { loading: true, error: null, offset });
     try {
       const r = await api.historyRunDetail({ run_id: runId, offset, limit: 100 });
-      if (gens.current(key, g)) setDetail(runId, { loading: false, entries: r.entries, total: r.total, offset });
+      if (gens.current(key, g)) setDetail(runId, { loading: false, entries: r.entries, total: r.total, occupied: r.occupied ?? [], offset });
     } catch (e) {
       if (gens.current(key, g)) setDetail(runId, { loading: false, error: e, entries: [], total: 0 });
     }

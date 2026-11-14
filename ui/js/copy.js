@@ -396,6 +396,7 @@ export const copy = {
     dismiss: 'Dismiss',
     reportLink: 'View report',
     retained: 'Kept at',
+    occupied: 'Something else is at the original location now: move it away before restoring.',
   },
 
   report: {
@@ -446,7 +447,7 @@ export const copy = {
     undo: 'Undo',
     report: 'View report',
     dismiss: 'Dismiss',
-    kinds: { apply: 'Apply', dry_run: 'Dry run', undo: 'Restore', purge_quarantine: 'Purge', export: 'Export' },
+    kinds: { apply: 'Apply', dry_run: 'Dry run', undo: 'Restore', purge_quarantine: 'Purge', export: 'Export', schedule: 'Scheduled run' },
   },
 
   search: {

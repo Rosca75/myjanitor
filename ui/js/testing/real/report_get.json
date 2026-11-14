@@ -1,0 +1,60 @@
+{
+  "finished": 1794663949644742726,
+  "run_id": 1794663949600,
+  "sections": [
+    {
+      "action": "To quarantine",
+      "items": [
+        {
+          "bytes_after": 0,
+          "bytes_before": 5000,
+          "path": "/fixture/tree/work/report.tmp",
+          "status": "done"
+        }
+      ],
+      "title": "Temporary files",
+      "totals": {
+        "bytes_after": 0,
+        "bytes_before": 5000,
+        "bytes_saved": 5000,
+        "failed": 0,
+        "files": 1,
+        "skipped": 0,
+        "succeeded": 1
+      }
+    },
+    {
+      "action": "Optimised",
+      "items": [
+        {
+          "bytes_after": 357,
+          "bytes_before": 55664,
+          "path": "/fixture/tree/img/a.png",
+          "status": "done"
+        }
+      ],
+      "title": "PNG images",
+      "totals": {
+        "bytes_after": 357,
+        "bytes_before": 55664,
+        "bytes_saved": 55307,
+        "failed": 0,
+        "files": 1,
+        "skipped": 0,
+        "succeeded": 1
+      }
+    }
+  ],
+  "started": 1794663949600636716,
+  "title": "Plan · 2 steps",
+  "totals": {
+    "bytes_after": 357,
+    "bytes_before": 60664,
+    "bytes_saved": 60307,
+    "failed": 0,
+    "files": 2,
+    "skipped": 0,
+    "succeeded": 2
+  },
+  "undo_until": 1797255949608469771
+}

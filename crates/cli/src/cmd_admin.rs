@@ -233,7 +233,7 @@ pub fn schedule(a: &Parsed) -> Res {
 pub fn run_profile(a: &Parsed) -> Res {
     let ctx = Ctx::open(a)?;
     let s = find_schedule(&ctx, &a.positionals[0])?;
-    let started = match ctx.engine.schedule_run_now(IdRequest { id: s.id.clone() }) {
+    let started = match ctx.engine.schedule_run(IdRequest { id: s.id.clone() }) {
         Ok(st) => st,
         Err(mj_core::Error::InvalidInput(m)) if m.starts_with("nothing to do") => {
             println!("{}: {m}", s.name);

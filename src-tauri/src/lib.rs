@@ -7,6 +7,7 @@
 pub mod commands;
 pub mod events;
 pub mod instance;
+pub mod launch;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,7 +20,17 @@ const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
 /// Start the app. The engine is built with the platform's app folders and an empty
 /// scope: nothing is scanned or changed until the user asks.
 pub fn run() {
-    let (data_dir, cache_dir, portable) = mj_engine::paths::default_dirs();
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let launch = launch::parse(&args, &cwd);
+    let (data_dir, cache_dir, portable) = match &launch.data_dir {
+        Some(root) => {
+            let d = mj_engine::paths::AppDirs::under(root);
+            (d.data, d.cache, false)
+        }
+        None => mj_engine::paths::default_dirs(),
+    };
+    let intent = launch.intent;
     let lock = match instance::acquire(&data_dir) {
         Ok(l) => l,
         Err(msg) => {
@@ -31,6 +42,7 @@ pub fn run() {
         .setup(move |app| {
             let mut cfg = mj_engine::EngineConfig::new(data_dir, cache_dir);
             cfg.portable = portable;
+            cfg.launch = intent;
             cfg.events = Arc::new(events::TauriSink::new(app.handle().clone()));
             let engine = mj_engine::Engine::new(cfg).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
             app.manage(commands::AppState { engine });

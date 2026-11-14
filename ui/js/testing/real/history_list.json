@@ -1,0 +1,23 @@
+{
+  "runs": [
+    {
+      "bytes_saved": 60307,
+      "done": 2,
+      "failed": 0,
+      "finished": 1794663949644742726,
+      "items": 2,
+      "kind": "apply",
+      "run_id": 1794663949600,
+      "started": 1794663949600636716,
+      "steps": [
+        "Temporary files",
+        "PNG images"
+      ],
+      "title": "Plan · 2 steps",
+      "undo_until": 1797255949608469771,
+      "undoable": true,
+      "undone": 0
+    }
+  ],
+  "total": 1
+}

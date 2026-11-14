@@ -94,7 +94,9 @@ pub struct OptimiseJob<'a> {
 }
 
 /// What an optimiser produced.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Build it with `..OptimiseOutput::default()` so additive fields never break callers.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OptimiseOutput {
     pub bytes_before: u64,
     /// Size of `dst` (equal to `bytes_before` when skipped).
@@ -106,6 +108,40 @@ pub struct OptimiseOutput {
     pub skipped: Option<String>,
     #[serde(default)]
     pub notes: Vec<String>,
+    /// Extension (lower case, no dot) of the format `dst` holds when the optimiser converted
+    /// the file to another type (WebP, Opus, MP4...). `None`: same type as the source. The
+    /// action engine names the result with it (W4-INT; previously a `notes` entry).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_extension: Option<String>,
+    /// Stored bytes of the *input* per part (`images`, `fonts`, `content`...), largest first
+    /// (OPT-ENG-09). Empty when the optimiser does not know.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub breakdown: Vec<SizePart>,
+    /// The rewrite exists for privacy (GPS / metadata strip): an output of the *same* size is
+    /// kept even though keep-if-not-smaller would drop it. A larger output is never kept.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub privacy: bool,
+}
+
+/// One part of a file's size (OPT-ENG-09).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SizePart {
+    /// `images`, `fonts`, `media`, `objects`, `caches`, `content`, `styles`, `metadata`, `other`.
+    pub part: String,
+    pub bytes: u64,
+}
+
+impl OptimiseOutput {
+    /// The converted type's extension: the field, else the legacy `output_extension=<ext>`
+    /// note. Only short ASCII alphanumeric extensions are accepted (never a path).
+    pub fn converted_extension(&self) -> Option<String> {
+        let raw = self.output_extension.clone().or_else(|| {
+            self.notes.iter().find_map(|n| n.strip_prefix("output_extension=").map(|s| s.trim().to_string()))
+        })?;
+        let ext = raw.trim_start_matches('.').to_ascii_lowercase();
+        let ok = !ext.is_empty() && ext.len() <= 10 && ext.bytes().all(|b| b.is_ascii_alphanumeric());
+        ok.then_some(ext)
+    }
 }
 
 /// An optimiser. Implementations live in `mj-optimise`.
@@ -155,4 +191,25 @@ pub trait Archiver: Send + Sync {
 
     /// Integrity test (OPT-ARC-02): every source file is present with identical content.
     fn verify(&self, archive: &Path, sources: &[PathBuf], base: &Path, cancel: &CancelToken) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OptimiseOutput;
+
+    #[test]
+    fn converted_extension_reads_the_field_then_the_legacy_note_and_rejects_paths() {
+        let mut o = OptimiseOutput { output_extension: Some(".WebP".into()), ..OptimiseOutput::default() };
+        assert_eq!(o.converted_extension().as_deref(), Some("webp"));
+        o.output_extension = None;
+        o.notes = vec!["output_extension=opus".into()];
+        assert_eq!(o.converted_extension().as_deref(), Some("opus"));
+        o.notes = vec!["output_extension=../../x".into()];
+        assert_eq!(o.converted_extension(), None);
+        assert_eq!(OptimiseOutput::default().converted_extension(), None);
+        // Old JSON (no new fields) still loads.
+        let old: OptimiseOutput =
+            serde_json::from_str(r#"{"bytes_before":1,"bytes_after":1,"lossy":false,"notes":[]}"#).unwrap();
+        assert_eq!(old, OptimiseOutput { bytes_before: 1, bytes_after: 1, ..OptimiseOutput::default() });
+    }
 }

@@ -1,0 +1,78 @@
+{
+  "allocated": 749568,
+  "children": [
+    {
+      "allocated": 749568,
+      "children": [
+        {
+          "allocated": 348160,
+          "children": [],
+          "files": 3,
+          "is_dir": true,
+          "name": "downloads",
+          "path": "/fixture/tree/downloads",
+          "size": 342087
+        },
+        {
+          "allocated": 303104,
+          "children": [],
+          "files": 1,
+          "is_dir": true,
+          "name": "photos",
+          "path": "/fixture/tree/photos",
+          "size": 300000
+        },
+        {
+          "allocated": 57344,
+          "children": [],
+          "files": 1,
+          "is_dir": true,
+          "name": "img",
+          "path": "/fixture/tree/img",
+          "size": 55664
+        },
+        {
+          "allocated": 28672,
+          "children": [],
+          "files": 3,
+          "is_dir": true,
+          "name": "proj",
+          "path": "/fixture/tree/proj",
+          "size": 20014
+        },
+        {
+          "allocated": 8192,
+          "children": [],
+          "files": 1,
+          "is_dir": true,
+          "name": "work",
+          "path": "/fixture/tree/work",
+          "size": 5000
+        },
+        {
+          "allocated": 4096,
+          "children": [],
+          "files": 1,
+          "is_dir": true,
+          "name": "contracts",
+          "path": "/fixture/tree/contracts",
+          "size": 2087
+        }
+      ],
+      "files": 10,
+      "is_dir": true,
+      "name": "myjanitor-test-5510-0-434183770-engine_tree",
+      "other": {
+        "count": 1,
+        "size": 0
+      },
+      "path": "/fixture/tree",
+      "size": 724852
+    }
+  ],
+  "files": 10,
+  "is_dir": true,
+  "name": "All locations",
+  "path": "",
+  "size": 724852
+}

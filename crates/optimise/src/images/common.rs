@@ -61,13 +61,17 @@ pub fn skipped(bytes_before: u64, reason: impl Into<String>) -> OptimiseOutput {
         bytes_after: bytes_before,
         lossy: false,
         skipped: Some(reason.into()),
-        notes: Vec::new(),
+        ..OptimiseOutput::default()
     }
 }
 
 /// Result for a written `dst`.
 pub fn done(bytes_before: u64, bytes_after: u64, lossy: bool, notes: Vec<String>) -> OptimiseOutput {
-    OptimiseOutput { bytes_before, bytes_after, lossy, skipped: None, notes }
+    let mut o = OptimiseOutput { bytes_before, bytes_after, lossy, notes, ..OptimiseOutput::default() };
+    // Conversions name their format in a note; the structured field is what the action
+    // engine reads (the note stays for the report).
+    o.output_extension = o.converted_extension();
+    o
 }
 
 /// How one candidate is described in the step review table.

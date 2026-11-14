@@ -109,6 +109,10 @@ function coreActions(c) {
       set({ info, scope, scan: scanState, scanProgress: progress ?? null, plan, jobs, tools, jobProgress: Object.fromEntries(jobs.map((j) => [j.id, j.progress])) });
       await Promise.all([soft(refreshOpps(), null), refreshHistory()]);
       set({ ready: true });
+      // Opened from a context-menu entry: the backend already set the scope; open the
+      // matching view. Nothing is scanned or applied automatically.
+      if (info?.launch?.mode === 'optimise') c.actions.navigate('optimise');
+      else if (info?.launch?.mode === 'duplicates') c.actions.navigate('clean');
     },
     refreshOpps: guard(refreshOpps),
     refreshHistory: guard(refreshHistory),
