@@ -121,3 +121,28 @@ first (reversible over irreversible, skip over guess, report over act).
 - Limits: only field names are compared (not value types or enum spellings, which the
   `ipc_examples_parse` test covers by deserialising the examples); events are not
   replayed from a real session.
+
+## D-4I08 Scan orchestration (item 7): confirmed, one gap left
+- Confirmed: the engine scans through `mj_scan::scan_with_cache`, prunes and saves the
+  cache (temp file + `sync_all` + rename) only when the generation is still current;
+  detectors receive real sync roots, Downloads, font folders, the protected-path list
+  (built-in + user + MyJanitor's own folders) and now the kept languages.
+- Not done: the Windows one-pass list-with-metadata (`FindFirstFileExW` data reused
+  instead of a per-entry `GetFileAttributesExW`). It needs a new `Platform` listing method
+  and unverifiable FFI on this Linux host; the MFT fast path already avoids per-file opens
+  when elevated. Logged as a perf follow-up.
+
+## D-4I09 Error paths and control (item 8)
+- `crates/engine/src/fault_tests.rs` swaps analysers for doubles through
+  `Arc::get_mut` right after `Engine::new`, so the real engine runs: a panicking detector
+  becomes a disabled card (scan survives); a panicking optimiser fails its item only
+  (original intact, no `.mj-` temp left, no `intent` left in the journal); a cancel in the
+  middle of a file removes the half-written temp output, keeps the original and never
+  starts the next file; a lossy optimiser is refused without confirmation and runs with
+  it (no ffmpeg needed); a second apply is `conflict`; pause/resume/stop in the detector
+  phase publish nothing and the next scan works.
+- Not exercised here: permission-denied paths (the test container runs as root, so
+  `chmod 000` does not deny anything; the reporting code is covered by `mj-scan` /
+  `mj-actions` unit tests) and a full destination disk (no way to fill a volume safely in
+  this environment; `ENOSPC` takes the same `io` error path as any failed write, which
+  the panicking/failing optimiser tests cover).

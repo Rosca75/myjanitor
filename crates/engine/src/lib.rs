@@ -36,3 +36,6 @@ pub use engine::{Engine, EngineConfig};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fault_tests;
