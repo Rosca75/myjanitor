@@ -144,3 +144,9 @@ One entry per non-trivial decision: *context → options → choice → why*.
 - **Context:** Wave 2 workstreams returned contract change requests (media conditions in the rule tree, detector context roots and protected-path predicate, pixel counts for keep rules, file id in the changed-since-scan check, error codes `needs_elevation`/`confidential`, extra journal fields, cache-aware scan call, confirmation pass-through). The engine facade also decides what gets deleted, so it is data-loss relevant.
 - **Choice:** W3-D1 (Opus) applies the contract revision and builds the engine facade and Tauri commands; W3-D2 (Sonnet) builds the derived screens against `docs/IPC.md`.
 - **Why:** the brief's rule of thumb assigns code that could lose user data to Opus; UI screens stay with Sonnet.
+
+## D-011 CI toolchain pinned to the development toolchain
+- **Context:** the first CI runs failed in clippy: CI pinned Rust 1.92.0, whose clippy reports `nonminimal_bool` on an expression that 1.97.0 (used for every local gate) accepts.
+- **Options:** (a) rewrite code to satisfy every clippy version between the MSRV and current; (b) pin CI to the toolchain the gates are run with.
+- **Choice:** (b), `RUST_VERSION: 1.97.0` in `.github/workflows/ci.yml`.
+- **Why:** lints differ between releases, so one pinned version is the only stable definition of "clippy clean". `rust-version = 1.88` remains the declared minimum for building, not for linting.
