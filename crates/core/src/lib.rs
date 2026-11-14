@@ -54,7 +54,9 @@ pub mod testutil;
 pub mod time;
 pub mod tools;
 
-pub use action::{Action, ActionItem, ActionKind, ArchiveFormat, FsCompressAlgo, OriginalsPolicy, OutputMode};
+pub use action::{
+    Action, ActionItem, ActionKind, ArchiveFormat, FsCompressAlgo, KeepCopy, OriginalsPolicy, OutputMode,
+};
 pub use badge::Badges;
 pub use cancel::CancelToken;
 pub use candidate::{

@@ -185,6 +185,8 @@ export function createHandlers(m, sim, emit) {
       if (req.ids) { const ids = new Set(req.ids); list = list.filter((r) => ids.has(r.id)); } else if (req.sub_group) list = list.filter((r) => r.sub_group === req.sub_group);
       for (const r of list) {
         if (r.badges.includes('protected') || o.safety === 'review_only') continue;
+        // F-02: "Select all" (no ids) never selects the copy a group keeps.
+        if (req.selected && !req.ids && r.badges.includes('keeper')) continue;
         if (req.selected) sel.add(r.id); else sel.delete(r.id);
       }
       m.selection.set(o.id, sel);

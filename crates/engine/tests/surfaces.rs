@@ -164,7 +164,8 @@ fn paging_sorting_and_selection() {
     let s = e
         .selection_set(SelectionSetRequest { opportunity_id: oid(id), ids: None, sub_group: None, selected: true })
         .unwrap();
-    assert_eq!(s.selected, 36, "select all includes keepers when the user asks");
+    // F-02: "Select all" never selects the copy each group keeps (it used to: 36).
+    assert_eq!(s.selected, 24, "select all leaves every group's kept copy unchecked");
     let s = e.selection_reset(OpportunityRequest { opportunity_id: oid(id) }).unwrap();
     assert_eq!(s.selected, 24);
 

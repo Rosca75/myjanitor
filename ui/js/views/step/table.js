@@ -85,7 +85,10 @@ export function renderTable(st, ops, o = {}) {
   const rows = st.page?.rows ?? [];
   const total = st.page?.total ?? 0;
   const selectable = rows.filter((r) => r.actionable);
-  const allOn = selectable.length > 0 && selectable.every((r) => r.selected);
+  // "Select all" never selects a group's kept copy (the engine enforces it too, F-02).
+  const hasKeepers = rows.some((r) => (r.badges ?? []).includes('keeper'));
+  const pickable = selectable.filter((r) => !(r.badges ?? []).includes('keeper'));
+  const allOn = pickable.length > 0 && pickable.every((r) => r.selected);
   const first = total ? st.offset + 1 : 0;
   const last = st.offset + rows.length;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -111,7 +114,7 @@ export function renderTable(st, ops, o = {}) {
     opp.sub_groups.length > 0 && tabs({ items: groupTabs, active: st.subGroup, onSelect: (k) => ops.setSubGroup(k), label: 'Groups', fk: 'sub' }),
     h('table', { class: 'table', on: { keydown: (e) => onTableKey(e, st, ops, total) } },
       h('thead', {}, h('tr', {},
-        h('th', { class: 'cell cell--check', scope: 'col' }, checkbox({ checked: allOn, label: copy.step.selectAll, disabled: !selectable.length, fk: 'select-all', onChange: (on) => ops.selectAll(on) })),
+        h('th', { class: 'cell cell--check', scope: 'col' }, checkbox({ checked: allOn, label: hasKeepers ? copy.step.selectAllButKept : copy.step.selectAll, disabled: !pickable.length, fk: 'select-all', onChange: (on) => ops.selectAll(on) })),
         heads.map(([label, key]) => th(label, key, st, ops)),
         th(copy.step.colSize, 'size', st, ops, 'cell--num'),
         th(copy.step.colAfter, 'saving', st, ops, 'cell--num'),

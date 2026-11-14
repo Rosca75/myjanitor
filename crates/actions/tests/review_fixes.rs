@@ -154,3 +154,76 @@ fn f01_dry_run_reports_the_refusal() {
     assert_eq!(r.skipped[0].error.as_ref().unwrap().code, "protected");
     let _ = JournalState::Skipped;
 }
+
+fn keep_of(f: &Fixture, path: &Path, identical: bool) -> mj_core::KeepCopy {
+    let md = mj_platform::ScanPlatform::metadata(&f.platform, path).unwrap();
+    mj_core::KeepCopy { path: path.to_path_buf(), expected: md.stamp(), expected_id: md.file_id, identical }
+}
+
+#[test]
+fn f02_engine_refuses_to_remove_a_copy_whose_kept_copy_is_gone_or_different() {
+    for action in [Action::Trash, Action::Quarantine { purge_after_days: 30 }, Action::PermanentDelete] {
+        let f = Fixture::new("f02");
+        let a = f.write("a/photo.jpg", &[9u8; 4000]);
+        let b = f.write("b/photo.jpg", &[9u8; 4000]);
+        // 1. The kept copy is itself the item: refused.
+        let mut item = f.item(&a, action.clone());
+        item.keep = Some(keep_of(&f, &a, true));
+        let (_, out) = f.apply(&[item], &confirmed());
+        assert_eq!((out.succeeded, out.skipped), (0, 1), "{action:?}: {out:?}");
+        // 2. Both copies in one batch, each keeping the other: the second is refused
+        //    because its kept copy is gone by then.
+        let mut ia = f.item(&a, action.clone());
+        ia.keep = Some(keep_of(&f, &b, true));
+        let mut ib = f.item(&b, action.clone());
+        ib.keep = Some(keep_of(&f, &a, true));
+        let (_, out) = f.apply(&[ia, ib], &confirmed());
+        assert_eq!((out.succeeded, out.skipped), (1, 1), "{action:?}: {out:?}");
+        assert_eq!(out.errors[0].error.as_ref().unwrap().code, "conflict");
+        assert!(a.exists() != b.exists(), "{action:?}: exactly one copy survives");
+    }
+}
+
+#[test]
+fn f02_engine_verifies_the_kept_copy_content_right_before_removing() {
+    let f = Fixture::new("f02-content");
+    let a = f.write("a/doc.bin", &[1u8; 4000]);
+    let b = f.write("b/doc.bin", &[1u8; 4000]);
+    let mut item = f.item(&b, Action::PermanentDelete);
+    item.keep = Some(keep_of(&f, &a, true));
+    // The kept copy was edited after the scan (same size): the duplicate is no longer a
+    // duplicate and must stay.
+    std::fs::write(&a, [2u8; 4000]).unwrap();
+    let (_, out) = f.apply(std::slice::from_ref(&item), &confirmed());
+    assert_eq!(out.skipped, 1, "{out:?}");
+    assert!(b.exists());
+    // A hard link to the item is not a second copy.
+    std::fs::remove_file(&a).unwrap();
+    std::fs::hard_link(&b, &a).unwrap();
+    let mut item = f.item(&b, Action::PermanentDelete);
+    item.keep = Some(keep_of(&f, &a, true));
+    let (_, out) = f.apply(&[item], &confirmed());
+    assert_eq!(out.skipped, 1, "{out:?}");
+    assert!(b.exists());
+    // The kept copy is fine: removal proceeds.
+    std::fs::remove_file(&a).unwrap();
+    std::fs::write(&a, [1u8; 4000]).unwrap();
+    let mut item = f.item(&b, Action::PermanentDelete);
+    item.keep = Some(keep_of(&f, &a, true));
+    let (_, out) = f.apply(&[item], &confirmed());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    assert!(!b.exists() && a.exists());
+}
+
+#[test]
+fn f02_non_identical_group_keeps_a_copy_that_still_matches_its_scan() {
+    let f = Fixture::new("f02-similar");
+    let a = f.write("a/img.jpg", &[1u8; 4000]);
+    let b = f.write("b/img.jpg", &[3u8; 5000]);
+    let mut item = f.item(&b, Action::Trash);
+    item.keep = Some(keep_of(&f, &a, false));
+    std::fs::write(&a, [1u8; 10]).unwrap();
+    let (_, out) = f.apply(&[item], &opts());
+    assert_eq!(out.skipped, 1, "{out:?}");
+    assert!(b.exists());
+}

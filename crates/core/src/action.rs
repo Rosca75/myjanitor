@@ -227,13 +227,43 @@ pub struct ActionItem {
     /// with it. Every other protected path below a folder makes the action engine refuse it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub owned_tree: bool,
+    /// F-02: for a removal of a group member (duplicates, similar images, versions...),
+    /// the member that must survive. The action engine refuses the removal unless that
+    /// copy still exists and still matches right before acting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<KeepCopy>,
+}
+
+/// The group member that must survive the removal of the others (F-02).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeepCopy {
+    #[serde(with = "crate::pathutil::serde_path")]
+    pub path: PathBuf,
+    /// Its stamp at scan time.
+    pub expected: FileStamp,
+    /// Its file id at scan time, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_id: Option<crate::entry::FileId>,
+    /// Byte-identical group: the kept copy must still hold exactly the removed item's
+    /// content (full byte comparison). Otherwise it must still match its scan stamp.
+    pub identical: bool,
 }
 
 impl ActionItem {
     /// An item with no link source, no scan file id and no optional checks; callers set
     /// the optional fields they know.
     pub fn new(path: PathBuf, target: TargetKind, action: Action, root: PathBuf, expected: FileStamp) -> Self {
-        ActionItem { path, target, action, link_source: None, root, expected, expected_id: None, owned_tree: false }
+        ActionItem {
+            path,
+            target,
+            action,
+            link_source: None,
+            root,
+            expected,
+            expected_id: None,
+            owned_tree: false,
+            keep: None,
+        }
     }
 }
 

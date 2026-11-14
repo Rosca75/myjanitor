@@ -189,7 +189,11 @@ ascending order. `groups` contains the groups referenced by the page's rows.
 ### `selection_set`
 `SelectionSetRequest` → `StepSummary`. Checks or unchecks rows. With `ids`
 omitted, applies to the whole `sub_group` (or the whole step). Protected rows
-never become selected. Emits `opportunities://changed`.
+never become selected. With `ids` omitted and `selected: true` ("Select all"),
+the copy each group keeps (`keeper` badge) is not selected either; only an
+explicit `ids` pick selects it, and apply still keeps one member of every group
+(a group whose every member is selected is skipped and reported, checklist code
+`groups_every_copy_selected`). Emits `opportunities://changed`.
 
 ```json SelectionSetRequest
 {"opportunity_id":"opt:audio","ids":[1041,1042],"selected":false}

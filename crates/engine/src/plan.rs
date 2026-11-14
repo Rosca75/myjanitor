@@ -65,10 +65,19 @@ pub(crate) fn removes(a: &Action) -> bool {
 }
 
 /// Estimate of a step from its record's selection.
-pub(crate) fn step_estimate(rec: &OpportunityRecord, skip: Badges) -> Estimate {
+pub(crate) fn step_estimate(rec: &OpportunityRecord, skip: Badges, action: &Action) -> Estimate {
     let mut e = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
+    // F-02: members of a group whose every copy is selected are skipped at apply.
+    let survivors = if crate::results::removes_copy(action) {
+        crate::results::group_survivors(rec, skip)
+    } else {
+        Default::default()
+    };
     for c in &rec.candidates {
-        if is_selected(rec, c, skip) {
+        let lost = c.group.is_some_and(|g| matches!(survivors.get(&g), Some(None)));
+        if lost && is_selected(rec, c, skip) {
+            e.skipped += 1;
+        } else if is_selected(rec, c, skip) {
             e.files += 1;
             if !c.badges.contains(Badges::ONLINE_ONLY) {
                 e.bytes_before += c.size;
@@ -124,6 +133,7 @@ impl Engine {
         let mut online_only = 0u64;
         let mut warned = 0u64;
         let mut empty_steps = Vec::new();
+        let mut lose_every_copy = 0u64;
         let measured = st.measured.clone();
         for step in &mut st.plan.steps {
             let rec = results.get(&step.opportunity);
@@ -134,7 +144,7 @@ impl Engine {
                     step.selection = rec.selection.clone();
                     step.estimate = match measured.get(&step.id) {
                         Some((a, sel, est)) if *a == step.action && *sel == rec.selection => *est,
-                        _ => step_estimate(rec, skip),
+                        _ => step_estimate(rec, skip, &step.action),
                     };
                     if !removes(&step.action) && !matches!(step.action, Action::None) {
                         // Copies free nothing; optimisations keep their estimate.
@@ -160,6 +170,9 @@ impl Engine {
                                 warned += 1;
                             }
                         }
+                    }
+                    if crate::results::removes_copy(&step.action) {
+                        lose_every_copy += crate::results::groups_losing_every_copy(rec, skip);
                     }
                     if step.estimate.files == 0 {
                         empty_steps.push(step.title.clone());
@@ -262,6 +275,17 @@ impl Engine {
                 level: ChecklistLevel::Info,
                 code: "online_only".into(),
                 text: format!("{} online-only: they free no space here", plural(online_only, "item is", "items are")),
+            });
+        }
+        if lose_every_copy > 0 {
+            list.push(ChecklistItem {
+                level: ChecklistLevel::Warning,
+                code: "groups_every_copy_selected".into(),
+                text: format!(
+                    "{} every copy selected: one copy of each group is always kept, so {} skipped",
+                    plural(lose_every_copy, "group has", "groups have"),
+                    if lose_every_copy == 1 { "it is" } else { "they are" }
+                ),
             });
         }
         if !empty_steps.is_empty() {

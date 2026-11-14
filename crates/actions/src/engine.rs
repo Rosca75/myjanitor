@@ -296,6 +296,78 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
     Ok(md)
 }
 
+/// True for actions after which the item's content is gone from the scanned tree (the
+/// group invariant of F-02 applies to them).
+fn removes_copy(action: &Action) -> bool {
+    matches!(action, Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete)
+}
+
+/// F-02: the group member that must survive this removal still exists and still matches.
+/// `full` compares content byte for byte for an identical group (else the scan stamp);
+/// without `full` (dry runs) the scan stamp and file id are compared only. Returns the
+/// kept copy's fresh metadata.
+fn check_keep(ctx: &ExecContext<'_>, item: &ActionItem, full: bool) -> Result<Option<mj_core::FileEntry>> {
+    let Some(keep) = item.keep.as_ref().filter(|_| removes_copy(&item.action)) else {
+        return Ok(None);
+    };
+    let gone = |why: &str| {
+        Err(Error::Conflict(format!(
+            "skipped: {} is the copy kept of this group and {why}; nothing was removed",
+            keep.path.display()
+        )))
+    };
+    if mj_core::pathutil::path_key(&keep.path) == mj_core::pathutil::path_key(&item.path) {
+        return gone("cannot be removed itself");
+    }
+    let md = match ctx.platform.metadata(&keep.path) {
+        Ok(m) => m,
+        Err(_) => return gone("no longer exists"),
+    };
+    if md.kind != EntryKind::File {
+        return gone("is no longer a regular file");
+    }
+    if let (Some(a), Some(b)) = (keep.expected_id, md.file_id) {
+        if a != b {
+            return gone("was replaced since the scan");
+        }
+    }
+    let item_id = ctx.platform.metadata(&item.path).ok().and_then(|m| m.file_id).or(item.expected_id);
+    if let (Some(a), Some(b)) = (item_id, md.file_id) {
+        if a == b {
+            return gone("is the same file (a hard link)");
+        }
+    }
+    if keep.identical && full {
+        match fsops::compare_files(&keep.path, &item.path) {
+            Ok(Some(_)) => {}
+            Ok(None) => return gone("no longer has the same content"),
+            Err(_) => return gone("cannot be read"),
+        }
+    } else if !crate::guard::stamp_matches(keep.expected, &md) {
+        return gone("changed since the scan");
+    }
+    Ok(Some(md))
+}
+
+/// Re-stat of the kept copy right before acting: still the file verified by [`check_keep`].
+fn restat_keep(ctx: &ExecContext<'_>, item: &ActionItem, verified: &mj_core::FileEntry) -> Result<()> {
+    let Some(keep) = &item.keep else { return Ok(()) };
+    let fresh = ctx.platform.metadata(&keep.path).map_err(|_| {
+        Error::Conflict(format!("skipped: {} (the copy kept) disappeared; nothing was removed", keep.path.display()))
+    })?;
+    if fresh.kind != EntryKind::File
+        || fresh.size != verified.size
+        || fresh.modified != verified.modified
+        || fresh.file_id != verified.file_id
+    {
+        return Err(Error::Conflict(format!(
+            "skipped: {} (the copy kept) changed; nothing was removed",
+            keep.path.display()
+        )));
+    }
+    Ok(())
+}
+
 trait KindLabel {
     fn label_text(self) -> &'static str;
 }
@@ -323,6 +395,12 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
         e.bytes_before = fsops::tree_size(&item.path);
         e.bytes_after = e.bytes_before;
     }
+    // F-02: never remove the last copy of a group; the copy kept is verified now (full
+    // comparison) and re-stat'ed right before acting.
+    let kept = match check_keep(ctx, item, true) {
+        Ok(k) => k,
+        Err(err) => return skip(ctx, e, err),
+    };
     // Audit hash (before acting; link actions compute it while verifying).
     if md.kind == EntryKind::File
         && md.size <= opts.audit_hash_limit
@@ -336,14 +414,14 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
     let undo_until = Some(now.add_days(i64::from(ctx.settings.general.undo_days)));
     match &item.action {
         Action::Trash => match opts.trash_route {
-            TrashRoute::Platform => act_retain(ctx, item, e, RetainPlan::Trash, undo_until),
+            TrashRoute::Platform => act_retain(ctx, item, e, RetainPlan::Trash, undo_until, kept.as_ref()),
             TrashRoute::Quarantine => {
                 let days = ctx.settings.general.quarantine_days;
-                quarantine_item(ctx, item, e, days, now)
+                quarantine_item(ctx, item, e, days, now, kept.as_ref())
             }
         },
-        Action::Quarantine { purge_after_days } => quarantine_item(ctx, item, e, *purge_after_days, now),
-        Action::PermanentDelete => act_retain(ctx, item, e, RetainPlan::Delete, None),
+        Action::Quarantine { purge_after_days } => quarantine_item(ctx, item, e, *purge_after_days, now, kept.as_ref()),
+        Action::PermanentDelete => act_retain(ctx, item, e, RetainPlan::Delete, None, kept.as_ref()),
         Action::Move { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, true, undo_until),
         Action::Copy { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, false, undo_until),
         Action::Hardlink | Action::Reflink => link_replace(ctx, item, e, undo_until),
@@ -408,9 +486,13 @@ fn act_retain(
     mut e: JournalEntry,
     plan: RetainPlan,
     undo_until: Option<Timestamp>,
+    kept: Option<&mj_core::FileEntry>,
 ) -> Result<ItemOutcome> {
     retain::note_plan(&mut e, &plan);
     run_acted(ctx, item, e, |e| {
+        if let Some(k) = kept {
+            restat_keep(ctx, item, k)?;
+        }
         e.reversible = !matches!(plan, RetainPlan::Delete);
         retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now())?;
         e.bytes_after = 0;
@@ -425,6 +507,7 @@ fn quarantine_item(
     mut e: JournalEntry,
     days: u32,
     now: Timestamp,
+    kept: Option<&mj_core::FileEntry>,
 ) -> Result<ItemOutcome> {
     e.action = ActionKind::Quarantine;
     let plan = match retain::plan(
@@ -440,7 +523,7 @@ fn quarantine_item(
     };
     // Undoable while the item is held: the shorter of the retention and the undo window.
     let until = now.add_days(i64::from(days.min(ctx.settings.general.undo_days)));
-    act_retain(ctx, item, e, plan, Some(until))
+    act_retain(ctx, item, e, plan, Some(until), kept)
 }
 
 /// Destination of a move / copy, keeping the structure below the scan root when asked.
@@ -941,6 +1024,7 @@ fn keeps_output(out: &mj_core::OptimiseOutput, before: u64, after: u64) -> bool 
 /// (bytes before, bytes after, confidence) of one item, read-only.
 fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Result<(u64, u64, Confidence)> {
     let md = preflight(ctx, opts, item)?;
+    check_keep(ctx, item, false)?;
     let before = if md.kind == EntryKind::Dir { fsops::tree_size(&item.path) } else { md.reclaimable() };
     match &item.action {
         Action::Copy { dest, keep_structure } => {
