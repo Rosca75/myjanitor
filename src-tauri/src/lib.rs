@@ -6,16 +6,29 @@
 
 pub mod commands;
 pub mod events;
+pub mod instance;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::Manager;
 
-/// Start the app.
+/// How long shutdown waits for a running scan or job to stop between items.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
+
+/// Start the app. The engine is built with the platform's app folders and an empty
+/// scope: nothing is scanned or changed until the user asks.
 pub fn run() {
-    tauri::Builder::default()
-        .setup(|app| {
-            let (data_dir, cache_dir, portable) = mj_engine::paths::default_dirs();
+    let (data_dir, cache_dir, portable) = mj_engine::paths::default_dirs();
+    let lock = match instance::acquire(&data_dir) {
+        Ok(l) => l,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(1);
+        }
+    };
+    let app = tauri::Builder::default()
+        .setup(move |app| {
             let mut cfg = mj_engine::EngineConfig::new(data_dir, cache_dir);
             cfg.portable = portable;
             cfg.events = Arc::new(events::TauriSink::new(app.handle().clone()));
@@ -24,8 +37,18 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(mj_handlers!())
-        .run(tauri::generate_context!())
-        .expect("error while running MyJanitor");
+        .build(tauri::generate_context!())
+        .expect("error while building MyJanitor");
+    app.run(move |handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            // Graceful shutdown: stop work between items, save the scan cache. The
+            // journal is synced after every record already.
+            if let Some(state) = handle.try_state::<commands::AppState>() {
+                state.engine.shutdown(SHUTDOWN_WAIT);
+            }
+            let _ = &lock;
+        }
+    });
 }
 
 #[cfg(test)]
