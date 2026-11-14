@@ -23,5 +23,5 @@ State: todo / in progress / done / blocked.
 | 3 | W3-E | Settings, schedules, CLI, context menu, portable | Sonnet | done |
 | 4 | W4-1 | Integration pass | Opus | todo |
 | 4 | W4-2 | Adversarial review of destructive paths | Opus | todo |
-| 4 | W4-3 | CI | Sonnet | todo |
+| 4 | W4-3 | CI | Sonnet | in progress |
 | 4 | W4-4 | Docs | Sonnet | todo |
