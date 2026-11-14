@@ -437,6 +437,21 @@ pub fn left_behind_note(src: &Path, dst: &Path, left: u64) -> Error {
     ))
 }
 
+/// Number of outputs made durable by [`sync_output`] in this process (diagnostics and
+/// tests: proves the engine synced an output before it moved an original away).
+pub static SYNCED_OUTPUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// F-11: flush a new output file to disk (`fsync`), so that a power cut after the original
+/// was moved away or replaced cannot leave an empty or truncated file under a `done`
+/// journal record. Failure is an error: the original then stays where it is.
+pub fn sync_output(path: &Path) -> Result<()> {
+    // Opened for writing (never truncated): Windows flushes only a writable handle.
+    let f = OpenOptions::new().write(true).open(path).map_err(|e| Error::io(path, e))?;
+    f.sync_all().map_err(|e| Error::io(path, e))?;
+    SYNCED_OUTPUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
 /// Total size of the regular files of a file or folder (links count 0; bounded depth).
 pub fn tree_size(path: &Path) -> u64 {
     let mut total = 0u64;

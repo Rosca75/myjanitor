@@ -713,3 +713,22 @@ fn f10_online_only_state_is_rechecked_at_act_time() {
     let (_, out) = f.apply(&[f.item(&f.root().join("OneDrive/folder/a.txt"), Action::Dehydrate)], &opts());
     assert_eq!(out.succeeded, 1, "{out:?}");
 }
+
+#[test]
+fn f11_optimiser_and_archive_outputs_are_synced_before_the_original_goes() {
+    use std::sync::atomic::Ordering;
+    let f = Fixture::new("f11");
+    let file = f.write("doc.bin", &[b'a'; 4000]);
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(Halve)];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    let n = mj_actions::fsops::SYNCED_OUTPUTS.load(Ordering::SeqCst);
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(
+        &f.ctx(run, services),
+        &[f.item(&file, optimise_to(OriginalsPolicy::Quarantine))],
+        &opts(),
+    )
+    .unwrap();
+    assert_eq!(out.succeeded, 1);
+    assert!(mj_actions::fsops::SYNCED_OUTPUTS.load(Ordering::SeqCst) > n, "the output was fsynced");
+}

@@ -41,7 +41,8 @@ pub fn write_new(dst: &Path, bytes: &[u8]) -> Result<()> {
 pub fn move_into_place(tmp: &Path, dst: &Path) -> Result<()> {
     match mj_platform::action::rename_no_replace_io(tmp, dst) {
         Ok(()) => {
-            let f = std::fs::File::open(dst).map_err(|e| Error::io(dst, e))?;
+            // Opened for writing (never truncated): Windows flushes only a writable handle.
+            let f = std::fs::OpenOptions::new().write(true).open(dst).map_err(|e| Error::io(dst, e))?;
             f.sync_all().map_err(|e| Error::io(dst, e))?;
             if let Some(parent) = dst.parent() {
                 let _ = mj_platform::action::sync_dir(parent);

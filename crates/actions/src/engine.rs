@@ -940,6 +940,12 @@ fn optimise(
         if preserve_times {
             let _ = fsops::set_mtime(&temp, item.expected.mtime);
         }
+        // F-11: whatever wrote it (an in-house rewriter or ffmpeg, cwebp, avifenc...), the
+        // output is on disk before the original moves or is replaced.
+        if let Err(err) = fsops::sync_output(&temp) {
+            cleanup();
+            return Err(err);
+        }
         e.bytes_after = new_size;
         match &plan {
             None => {
@@ -1005,6 +1011,10 @@ fn optimise(
                 e.created = vec![target];
                 e.reversible = true;
             }
+        }
+        // F-11: the directory entries of the new name (and of the moved original) too.
+        if let Some(parent) = item.path.parent() {
+            let _ = mj_platform::action::sync_dir(parent);
         }
         // F-06: undo discards this output only while it still has this content.
         e.output_sha256 = e.created.first().and_then(|p| fsops::hash_file(p).ok()).map(|h| h.sha256);
@@ -1079,6 +1089,14 @@ fn archive(
                 return Err(err);
             }
         };
+        // F-11: the archive is on disk before its sources go.
+        if let Err(err) = fsops::sync_output(&dst) {
+            let _ = std::fs::remove_file(&dst);
+            return Err(err);
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = mj_platform::action::sync_dir(parent);
+        }
         e.bytes_after = size;
         e.reversible = true;
         // F-06: undo removes the archive only while it still has this content.
