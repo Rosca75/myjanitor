@@ -835,3 +835,28 @@ fn f16_cleanup_never_deletes_a_destination_this_run_did_not_create() {
         .collect();
     assert_eq!(foreign.len(), 1, "the file that took the temp name is still there");
 }
+
+#[test]
+fn f18_restore_refuses_an_item_whose_content_is_not_what_was_moved() {
+    let f = Fixture::new("f18");
+    let file = f.write("report.txt", b"the original report");
+    let dest = f.t.join("archive-folder");
+    let (run, out) = f.apply(&[f.item(&file, Action::Move { dest: dest.clone(), keep_structure: false })], &opts());
+    assert_eq!(out.succeeded, 1);
+    // At the destination the user replaced the moved file with another one.
+    std::fs::write(dest.join("report.txt"), b"a different report!").unwrap();
+    let undo = f.undo_run(run);
+    assert_eq!(undo.failed, 1, "{undo:?}");
+    assert_eq!(undo.errors[0].error.as_ref().unwrap().code, "conflict");
+    assert!(!file.exists(), "nothing unrelated was moved back");
+    assert_eq!(std::fs::read(dest.join("report.txt")).unwrap(), b"a different report!");
+    // Trash: a reused trash name holding another file is refused the same way.
+    let other = f.write("note.txt", b"note version one");
+    let (run, out) = f.apply(&[f.item(&other, Action::Trash)], &opts());
+    assert_eq!(out.succeeded, 1);
+    let loc = f.journal.entries_of(run)[0].trash.as_ref().unwrap().location.clone().unwrap();
+    std::fs::write(&loc, b"note version two").unwrap();
+    let undo = f.undo_run(run);
+    assert_eq!(undo.failed, 1, "{undo:?}");
+    assert!(!other.exists());
+}
