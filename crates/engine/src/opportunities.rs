@@ -308,15 +308,25 @@ impl Engine {
                 items.push(o);
             }
         }
+        // Disabled cards always come after the available ones.
+        let rank_of = |o: &mj_core::Opportunity| !o.availability.is_available();
         match req.sort {
-            OpportunitySort::Saving => {
-                items.sort_by(|a, b| b.saving.cmp(&a.saving).then_with(|| a.title.cmp(&b.title)))
-            }
-            OpportunitySort::Count => items.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.title.cmp(&b.title))),
-            OpportunitySort::Safety => {
-                items.sort_by(|a, b| safety_order(a.safety).cmp(&safety_order(b.safety)).then(b.saving.cmp(&a.saving)))
-            }
-            OpportunitySort::Name => items.sort_by_key(|a| a.title.to_lowercase()),
+            OpportunitySort::Saving => items.sort_by(|a, b| {
+                rank_of(a).cmp(&rank_of(b)).then(b.saving.cmp(&a.saving)).then_with(|| a.title.cmp(&b.title))
+            }),
+            OpportunitySort::Count => items.sort_by(|a, b| {
+                rank_of(a).cmp(&rank_of(b)).then(b.count.cmp(&a.count)).then_with(|| a.title.cmp(&b.title))
+            }),
+            OpportunitySort::Safety => items.sort_by(|a, b| {
+                rank_of(a)
+                    .cmp(&rank_of(b))
+                    .then(safety_order(a.safety).cmp(&safety_order(b.safety)))
+                    .then(b.saving.cmp(&a.saving))
+                    .then_with(|| a.title.cmp(&b.title))
+            }),
+            OpportunitySort::Name => items.sort_by(|a, b| {
+                rank_of(a).cmp(&rank_of(b)).then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            }),
         }
         Ok(OpportunitiesList {
             generation: results.generation,

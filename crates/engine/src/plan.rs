@@ -162,17 +162,15 @@ impl Engine {
                     }
                 }
                 None => {
-                    step.estimate = Estimate::default();
+                    step.estimate = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
                     empty_steps.push(step.title.clone());
                 }
             }
         }
         drop(results);
         let plan = &mut st.plan;
-        plan.estimate = plan.steps.iter().fold(Estimate::default(), |acc, s| acc.add(&s.estimate));
-        if plan.steps.is_empty() {
-            plan.estimate.confidence = Confidence::Exact;
-        }
+        let zero = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
+        plan.estimate = plan.steps.iter().fold(zero, |acc, s| acc.add(&s.estimate));
         plan.updated = Timestamp::now();
         let mut list = Vec::new();
         if plan.steps.iter().any(|s| s.safety.is_undoable() && s.safety != SafetyClass::ReviewOnly) {

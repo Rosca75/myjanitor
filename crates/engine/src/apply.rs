@@ -122,7 +122,7 @@ impl Engine {
             return Ok(work);
         }
         let (mut online, mut no_keeper, mut outside) = (0u64, 0u64, 0u64);
-        let locked = rec.candidates.iter().filter(|c| c.default_selected && !(c.badges & skip).is_empty()).count();
+        let locked = rec.candidates.iter().filter(|c| !(c.badges & skip).is_empty()).count();
         for c in rec.candidates.iter().filter(|c| is_selected(rec, c, skip)) {
             if c.badges.contains(Badges::ONLINE_ONLY) && !matches!(action, Action::Copy { .. }) {
                 online += 1;
@@ -163,8 +163,10 @@ impl Engine {
                 },
                 expected_id: entry.and_then(|e| e.file_id),
             });
-            work.sizes
-                .push((entry.map(|e| e.reclaimable()).unwrap_or(c.size), entry.and_then(|e| e.file_id.zip(e.links))));
+            work.sizes.push((
+                if c.badges.contains(Badges::ONLINE_ONLY) { 0 } else { c.size },
+                entry.and_then(|e| e.file_id.zip(e.links)),
+            ));
         }
         let mut warn = |n: u64, what: &str| {
             if n > 0 {
@@ -214,8 +216,16 @@ impl Engine {
                 Ok(r) => {
                     let mut est = r.estimate;
                     if removes(&w.step.action) {
-                        est.bytes_after =
-                            est.bytes_after.saturating_add(hardlink_not_freed(w, &r.skipped)).min(est.bytes_before);
+                        // Removals: the scan's allocated sizes (folders = subtree totals) of the
+                        // items that pass every check, minus what other hard links keep.
+                        let mut before = 0u64;
+                        for (item, (size, _)) in w.items.iter().zip(&w.sizes) {
+                            if !r.skipped.iter().any(|s| s.path == item.path) {
+                                before += size;
+                            }
+                        }
+                        est.bytes_before = before;
+                        est.bytes_after = hardlink_not_freed(w, &r.skipped).min(before);
                     }
                     if matches!(w.step.action, Action::Copy { .. }) {
                         est.bytes_after = est.bytes_before;
@@ -249,9 +259,9 @@ impl Engine {
             }
         }
         let report = DryRunReport { plan_id, job_id: ctx.job_id, steps, total, error: error.as_ref().map(Error::info) };
-        self.emit(Event::DryRun(report));
         let plan = self.refresh_plan();
         let _ = self.plan_changed(plan);
+        self.emit(Event::DryRun(report));
         JobResult { outcome: None, error, report: false }
     }
 
@@ -422,15 +432,21 @@ impl Engine {
             Ok(o) => (Some(o), None),
             Err(e) => (None, Some(e)),
         };
-        let saved = outcome.as_ref().map(|o| o.bytes_saved).unwrap_or(0);
+        let done = self.after_apply_step(run.run_id, &w);
+        // Reclaimed bytes: for removals the scan's allocated sizes of the items done
+        // (the same figures the cards and the dry run show), else what the engine saved.
+        let saved = if removes(&w.step.action) {
+            w.items.iter().zip(&w.sizes).filter(|(i, _)| done.contains(&i.path)).map(|(_, s)| s.0).sum()
+        } else {
+            outcome.as_ref().map(|o| o.bytes_saved).unwrap_or(0)
+        };
         self.reclaimed.fetch_add(saved, Ordering::Relaxed);
-        self.after_apply_step(run.run_id, &w);
         self.emit(Event::HistoryChanged(HistoryChanged { run_id: Some(run.run_id) }));
         JobResult { outcome: outcome.or_else(|| Some(JobOutcome::default())), error, report: true }
     }
 
     /// Applied items leave their cards (and the index); the applied step leaves the plan.
-    fn after_apply_step(&self, run_id: RunId, w: &StepWork) {
+    fn after_apply_step(&self, run_id: RunId, w: &StepWork) -> Vec<PathBuf> {
         let done: Vec<PathBuf> = self
             .journal
             .entries_of(run_id)
@@ -464,6 +480,7 @@ impl Engine {
         let plan = self.refresh_plan();
         let _ = self.plan_changed(plan);
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
+        done
     }
 }
 
@@ -472,7 +489,9 @@ impl Engine {
 fn hardlink_not_freed(w: &StepWork, skipped: &[mj_core::ItemOutcome]) -> u64 {
     let mut by_id: HashMap<mj_core::FileId, (u32, u32, u64)> = HashMap::new();
     for (item, (size, id)) in w.items.iter().zip(&w.sizes) {
-        if skipped.iter().any(|s| s.path == item.path && s.status != ItemStatus::Done) {
+        if item.target != TargetKind::File
+            || skipped.iter().any(|s| s.path == item.path && s.status != ItemStatus::Done)
+        {
             continue;
         }
         if let Some((id, links)) = id {
