@@ -118,3 +118,25 @@ fn f04_folder_that_gained_a_file_after_the_scan_is_not_deleted() {
     wait_jobs(e);
     assert_eq!(std::fs::read(&doc).unwrap(), b"two years of work");
 }
+
+#[test]
+fn f08_unreadable_journal_blocks_every_acting_command_but_not_reading() {
+    let app = TempDir::new("f08-app").unwrap();
+    // A month file the journal cannot read (a folder in its place).
+    std::fs::create_dir_all(app.join("journal/entries-2026-11.jsonl")).unwrap();
+    let tree = pair_tree();
+    let events = std::sync::Arc::new(TimedSink::default());
+    let e = mj_engine::Engine::new(config(&app, events)).unwrap();
+    e.scope_add_root(ScopePathRequest { path: tree.path().to_path_buf() }).unwrap();
+    assert!(!e.app_info().unwrap().journal_persistent);
+    scan(&e);
+    let id = "det:exact_duplicates";
+    assert!(!rows(&e, id).is_empty(), "reading still works");
+    e.plan_add_step(PlanAddStepRequest { opportunity_id: oid(id), action: None, params: None }).unwrap();
+    let err = e.plan_apply(PlanApplyRequest::default()).unwrap_err();
+    assert_eq!(err.code(), "conflict", "{err}");
+    assert!(err.to_string().contains("journal"), "{err}");
+    assert_eq!(e.quarantine_purge(QuarantinePurgeRequest { older_than_days: Some(0) }).unwrap_err().code(), "conflict");
+    assert_eq!(e.undo_last().unwrap_err().code(), "conflict");
+    assert!(exists(&path(&tree, "photos/a.bin")) && exists(&path(&tree, "downloads/a.bin")));
+}

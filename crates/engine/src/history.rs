@@ -146,6 +146,7 @@ impl Engine {
 
     /// Queue an undo of `entries` as its own undo run.
     fn queue_undo(self: &Arc<Self>, of: Option<RunId>, title: String, entries: Vec<EntryId>) -> Result<Job> {
+        self.require_writable()?;
         if entries.is_empty() {
             return Err(Error::InvalidInput("nothing can be undone".into()));
         }
@@ -184,6 +185,7 @@ impl Engine {
 
     /// Undo every undoable entry of the newest run that has one.
     pub fn undo_last(self: &Arc<Self>) -> Result<Job> {
+        self.require_writable()?;
         let now = Timestamp::now();
         let mut runs = self.journal.runs();
         runs.sort_by_key(|r| std::cmp::Reverse(r.run_id));
@@ -198,6 +200,7 @@ impl Engine {
 
     /// Undo one run.
     pub fn undo_run(self: &Arc<Self>, req: RunRequest) -> Result<Job> {
+        self.require_writable()?;
         let run =
             self.journal.run(req.run_id).ok_or_else(|| Error::InvalidInput(format!("unknown run {}", req.run_id.0)))?;
         if run.kind == RunKind::Undo {
@@ -211,6 +214,7 @@ impl Engine {
 
     /// Restore selected entries.
     pub fn restore_entries(self: &Arc<Self>, req: RestoreEntriesRequest) -> Result<Job> {
+        self.require_writable()?;
         let now = Timestamp::now();
         let mut ids = Vec::new();
         for id in &req.entry_ids {
@@ -238,6 +242,7 @@ impl Engine {
 
     /// Permanently delete quarantined items older than the given age (queued job).
     pub fn quarantine_purge(self: &Arc<Self>, req: QuarantinePurgeRequest) -> Result<Job> {
+        self.require_writable()?;
         let days = req.older_than_days.unwrap_or(lock(&self.settings).general.quarantine_days);
         let info = self.quarantine_info()?;
         let job = self.new_job(JobKind::PurgeQuarantine, None, None, "Empty quarantine", info.items, info.bytes);

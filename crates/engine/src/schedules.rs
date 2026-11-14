@@ -202,6 +202,7 @@ impl Engine {
     /// queuing of the apply jobs run as a `schedule` job (`job://state`, `job://done`
     /// carry progress and any error; the apply jobs then appear as `apply` jobs).
     pub fn schedule_run_now(self: &Arc<Self>, req: IdRequest) -> Result<Job> {
+        self.require_writable()?;
         let sched = self.runnable_schedule(&req.id)?;
         if self.scan_running() {
             return Err(Error::Conflict("a scan is running: wait for it or stop it first".into()));
@@ -252,6 +253,7 @@ impl Engine {
     }
 
     fn run_schedule(self: &Arc<Self>, id: &str, cancel: Option<&CancelToken>) -> Result<ApplyStarted> {
+        self.require_writable()?;
         let sched = self.runnable_schedule(id)?;
         self.scope_set(ScopeSetRequest { scope: sched.scope.clone() })?;
         let generation = self.scan_start(ScanStartRequest::default())?.generation;

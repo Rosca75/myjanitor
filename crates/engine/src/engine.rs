@@ -112,6 +112,10 @@ pub struct Engine {
     /// Bytes freed by runs applied this session.
     pub(crate) reclaimed: AtomicU64,
     pub(crate) shutting_down: AtomicBool,
+    /// F-08: why the persistent journal could not be opened (`None` when it is open, or
+    /// when `persist` is off and the in-memory journal is intended). While set, every
+    /// command that changes files refuses ([`Engine::require_writable`]).
+    pub(crate) journal_error: Option<String>,
     next_id: AtomicU64,
 }
 
@@ -124,10 +128,15 @@ impl Engine {
                 std::fs::create_dir_all(d).map_err(|e| mj_core::Error::io(d, e))?;
             }
         }
-        let journal = if cfg.persist {
-            Journal::open(&cfg.journal_dir).unwrap_or_else(|_| Journal::in_memory())
+        // F-08: an unreadable journal is never silently replaced by one in memory for
+        // acting: reading (scan, review, History) keeps working, changing files does not.
+        let (journal, journal_error) = if cfg.persist {
+            match Journal::open(&cfg.journal_dir) {
+                Ok(j) => (j, None),
+                Err(e) => (Journal::in_memory(), Some(format!("{}: {e}", cfg.journal_dir.display()))),
+            }
         } else {
-            Journal::in_memory()
+            (Journal::in_memory(), None)
         };
         let cache =
             if cfg.persist { ScanCache::open(&cfg.cache_dir.join("scan-cache.bin")) } else { ScanCache::in_memory() };
@@ -151,6 +160,7 @@ impl Engine {
             run_meta: Mutex::new(Default::default()),
             reclaimed: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
+            journal_error,
             next_id: AtomicU64::new(1),
             cfg,
         };
@@ -184,6 +194,18 @@ impl Engine {
             let _ = self.cache.save();
         }
         crate::history::save_run_meta(self);
+    }
+
+    /// Refuse a command that changes files when the journal is not durable (F-08).
+    pub(crate) fn require_writable(&self) -> mj_core::Result<()> {
+        if let Some(why) = &self.journal_error {
+            return Err(mj_core::Error::Conflict(format!(
+                "the undo journal could not be opened ({why}). MyJanitor changes no file without it: \
+                 check that this folder is readable and writable (permissions, antivirus, a full disk), \
+                 then restart MyJanitor"
+            )));
+        }
+        Ok(())
     }
 
     /// Emit an event (never while holding a lock).

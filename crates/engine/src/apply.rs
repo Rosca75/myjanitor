@@ -425,6 +425,7 @@ impl Engine {
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(Error::Conflict("MyJanitor is shutting down".into()));
         }
+        self.require_writable()?;
         let plan = lock(&self.plan).plan.clone();
         if plan.steps.is_empty() {
             return Err(Error::InvalidInput("the plan is empty".into()));
