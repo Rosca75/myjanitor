@@ -41,6 +41,10 @@ pub struct Glob {
     mode: GlobMode,
     case_insensitive: bool,
     has_separator: bool,
+    /// The longest run of literal characters (folded): a text that does not contain it
+    /// cannot match, which rejects most texts before the O(pattern x text) table is built
+    /// (protected-path patterns are tested against every candidate of every card).
+    required: Vec<char>,
 }
 
 fn fold(c: char, ci: bool) -> char {
@@ -94,7 +98,20 @@ impl Glob {
             }
             i += 1;
         }
-        Glob { has_separator: src.contains('/'), pattern: pattern.to_string(), toks, mode, case_insensitive }
+        let mut required: Vec<char> = Vec::new();
+        let mut run: Vec<char> = Vec::new();
+        for t in toks.iter().chain(std::iter::once(&Tok::One)) {
+            match t {
+                Tok::Lit(c) => run.push(*c),
+                _ => {
+                    if run.len() > required.len() {
+                        required = std::mem::take(&mut run);
+                    }
+                    run.clear();
+                }
+            }
+        }
+        Glob { has_separator: src.contains('/'), pattern: pattern.to_string(), toks, mode, case_insensitive, required }
     }
 
     /// Compile with the platform's default case rule (insensitive on Windows).
@@ -137,6 +154,9 @@ impl Glob {
     }
 
     fn match_chars(&self, t: &[char]) -> bool {
+        if !self.required.is_empty() && !t.windows(self.required.len()).any(|w| w == self.required.as_slice()) {
+            return false;
+        }
         let (p, n) = (self.toks.len(), t.len());
         let path = self.mode == GlobMode::Path;
         // dp[i * (n + 1) + j]: toks[i..] matches t[j..]

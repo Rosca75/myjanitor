@@ -103,7 +103,9 @@ pub fn standard_tree() -> TempDir {
 
 /// Poll `f` until it returns `Some` (20 s timeout).
 pub fn wait<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // `MJ_TEST_WAIT_SECS` raises the limit for the large-tree benchmark.
+    let secs = std::env::var("MJ_TEST_WAIT_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(30);
+    let deadline = Instant::now() + Duration::from_secs(secs);
     loop {
         if let Some(v) = f() {
             return v;

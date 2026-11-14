@@ -146,3 +146,24 @@ first (reversible over irreversible, skip over guess, report over act).
   `mj-actions` unit tests) and a full destination disk (no way to fill a volume safely in
   this environment; `ENOSPC` takes the same `io` error path as any failed write, which
   the panicking/failing optimiser tests cover).
+
+## D-4I10 Large-tree performance (item 9)
+- `crates/engine/tests/perf_large.rs` (`#[ignore]`): 200 000 files / 211 000 folders
+  generated in a temp dir (60 % in `node_modules` folders, temp files, 20 000 duplicate
+  pairs, plain files); scan → detectors → opportunities → paging → plan → dry run → warm
+  rescan, peak RSS from `/proc/self/status`. Run:
+  `CARGO_INCREMENTAL=0 MJ_TEST_WAIT_SECS=900 cargo test --profile ci -p mj-engine --test perf_large -- --ignored --nocapture`.
+- Hot spot found: per-candidate badging (`ProtectedPaths::is_protected`, also used by the
+  guard for every item of a dry run/apply). Each call re-normalised ~50 built-in folders
+  and exact paths (`path_key` twice per `is_within`) and ran the O(pattern × text) glob
+  table for 11 built-in patterns. Fixes: folder prefixes and exact keys computed once per
+  `ProtectedPaths`; `Glob` keeps its longest literal run and rejects a text that lacks it
+  before building the table. Same semantics (existing tests unchanged).
+- Numbers (profile `ci`, 4 cores, this container), before → after:
+  scan + detectors cold 11.4 s → 5.7 s; warm rescan 11.3 s → 5.3 s; dry run over 211 000
+  selected items 20.0 s → 6.9 s; exact-duplicates badging at 48 600 candidates 1.86 s →
+  0.32 s. Paging stays 2–95 ms per page (194 000-row card), `opportunities_list` 15 ms,
+  `plan_add_step` ≤ 40 ms. Peak RSS 1.6 GiB, inflated by the test's event recorder (it
+  clones every event); not measured separately.
+- Left: the dry run reads 1 KiB of every selected file for content badges (by content,
+  not by extension, so a renamed signed PDF is still caught; kept on purpose).

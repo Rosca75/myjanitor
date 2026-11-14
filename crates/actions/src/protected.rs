@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use mj_core::glob::{Glob, GlobMode};
-use mj_core::pathutil::{is_within, path_key};
+use mj_core::pathutil::path_key;
 
 fn env_path(k: &str) -> Option<PathBuf> {
     std::env::var_os(k).map(PathBuf::from).filter(|p| p.is_absolute())
@@ -160,9 +160,32 @@ pub struct ProtectedPaths {
     patterns: Vec<Glob>,
     user: Vec<PathBuf>,
     user_patterns: Vec<Glob>,
+    /// `path_key` of every folder and user folder (with a trailing `/`) and of every exact
+    /// entry, computed once: `is_protected` runs for every candidate of every card, and
+    /// re-normalising ~50 built-in paths per call made badging the scan's hot spot
+    /// (W4-INT: 1.9 s of a 2.3 s exact-duplicates analysis at 48 000 candidates).
+    folder_prefixes: Vec<String>,
+    exact_keys: Vec<String>,
+}
+
+/// `path_key` of `root` as the prefix a path below it starts with.
+fn prefix_key(root: &Path) -> String {
+    let r = path_key(root);
+    if r.ends_with('/') {
+        r
+    } else {
+        format!("{r}/")
+    }
 }
 
 impl ProtectedPaths {
+    /// Recompute the cached keys after the lists changed.
+    fn rekey(mut self) -> Self {
+        self.folder_prefixes = self.folders.iter().chain(self.user.iter()).map(|f| prefix_key(f)).collect();
+        self.exact_keys = self.exact.iter().map(|e| path_key(e)).collect();
+        self
+    }
+
     /// Built-ins plus the user's protected paths. A user entry containing `*`, `?` or `[`
     /// is a pattern (`**/Clients/**`), any other entry a folder.
     pub fn new(user: &[PathBuf]) -> Self {
@@ -173,7 +196,10 @@ impl ProtectedPaths {
             patterns: builtin_patterns().iter().map(|p| Glob::platform(p, GlobMode::Path)).collect(),
             user: folders.into_iter().cloned().collect(),
             user_patterns: pats.iter().map(|p| Glob::platform(&p.to_string_lossy(), GlobMode::Path)).collect(),
+            folder_prefixes: Vec::new(),
+            exact_keys: Vec::new(),
         }
+        .rekey()
     }
 
     /// Nothing protected (tests only; never used by the engine).
@@ -184,6 +210,8 @@ impl ProtectedPaths {
             patterns: Vec::new(),
             user: Vec::new(),
             user_patterns: Vec::new(),
+            folder_prefixes: Vec::new(),
+            exact_keys: Vec::new(),
         }
     }
 
@@ -191,7 +219,7 @@ impl ProtectedPaths {
     /// at their default places).
     pub fn with_app_dirs(mut self, dirs: &[PathBuf]) -> Self {
         self.folders.extend(dirs.iter().cloned());
-        self
+        self.rekey()
     }
 
     /// Add user patterns.
@@ -203,8 +231,11 @@ impl ProtectedPaths {
     /// True when `path` is protected.
     pub fn is_protected(&self, path: &Path) -> bool {
         let key = path_key(path);
-        self.folders.iter().chain(self.user.iter()).any(|f| is_within(f, path))
-            || self.exact.iter().any(|e| path_key(e) == key)
+        // Same rule as `is_within`: the folder itself or anything below it.
+        let below =
+            |prefix: &String| key.starts_with(prefix.as_str()) || prefix.strip_suffix('/') == Some(key.as_str());
+        self.folder_prefixes.iter().any(below)
+            || self.exact_keys.contains(&key)
             || self.patterns.iter().chain(self.user_patterns.iter()).any(|g| g.matches_path(path))
     }
 
