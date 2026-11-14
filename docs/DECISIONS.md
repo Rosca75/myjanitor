@@ -195,3 +195,9 @@ Checked against the code at the commit that carries this index. The code is righ
 - **`miniz_oxide` "same version as Tauri's PNG stack" (DEPENDENCIES.md, earlier text).** `Cargo.lock` holds 0.8.9 and 0.9.1.
 - **Settings that are stored but read by nothing:** `performance.low_memory`, `performance.cpu_priority`, `performance.parallel_jobs`, `optimise.preserve_ads`, `optimise.lossless_only`. W3-D1 and W4-INT already note that jobs run one at a time.
 - **Adversarial review 1** (20 findings) was delivered after the workstreams wrote their files. Its findings are not yet resolved in any decision entry: the fix pass owns that, and the definition of done requires each finding to be fixed or accepted with a reason in this file.
+
+## D-012 Adversarial review 1: F-12 accepted
+- **Context:** review 1 found 20 issues in destructive paths (`docs/review/adversarial-review-1.md`). 19 are fixed with regression tests (`docs/review/adversarial-review-1-fixes.md`).
+- **Accepted:** F-12 (Low): check-then-act by path without directory-handle anchoring; a parent directory swapped between the last re-check and the act is not caught.
+- **Why accepted:** closing it needs handle-relative operations (`openat`/`NtCreateFile` with a root handle) throughout the action engine, a rewrite too large for this pass. Mitigations in place: the guard check is repeated immediately before acting, links are never followed, file identity and folder stamps are compared, and the window is a few system calls wide. Exploiting it requires another process on the same machine racing the user's own action inside the user's own folders.
+- **Also partly accepted:** F-09: cross-volume copies on Windows do not carry alternate data streams or ACLs (documented in README limitations).
