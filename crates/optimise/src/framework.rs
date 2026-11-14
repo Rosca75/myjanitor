@@ -129,6 +129,7 @@ pub fn optimise_item(
         link_source: None,
         root: root.to_path_buf(),
         expected,
+        expected_id: None,
     }
 }
 

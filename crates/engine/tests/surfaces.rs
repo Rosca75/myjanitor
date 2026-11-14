@@ -190,7 +190,10 @@ fn plan_editing_and_reorder() {
     }
     let dup = e.plan_add_step(PlanAddStepRequest { opportunity_id: oid(ids[0]), action: None, params: None });
     assert_eq!(dup.unwrap_err().code(), "conflict");
-    let disabled = e.plan_add_step(PlanAddStepRequest { opportunity_id: oid("opt:video"), action: None, params: None });
+    // `pdf_lossy` is disabled on every machine (no bundled image codec), unlike tool-gated optimisers
+    // such as video, which become available when ffmpeg is installed.
+    let disabled =
+        e.plan_add_step(PlanAddStepRequest { opportunity_id: oid("opt:pdf_lossy"), action: None, params: None });
     assert_eq!(disabled.unwrap_err().code(), "unsupported");
     let bad_action = e.plan_add_step(PlanAddStepRequest {
         opportunity_id: oid("det:empty_folders"),
