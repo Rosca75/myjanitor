@@ -98,6 +98,20 @@ impl Guard {
         if path_key(root) == path_key(path) {
             return Err(Error::Protected(path.to_path_buf()));
         }
+        // F-19: on Windows a name ending in a dot or a space, or an 8.3 short name, has
+        // two spellings that different APIs resolve differently (`C:\Windows.` is
+        // `C:\Windows` to `std::fs`, `PROGRA~1` is `Program Files`); such a path below the
+        // root is refused rather than guessed at.
+        if cfg!(windows) {
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            if let Some(c) = rel.components().find(|c| windows_ambiguous_name(&c.as_os_str().to_string_lossy())) {
+                return Err(Error::InvalidInput(format!(
+                    "{} has a Windows name with more than one spelling ({}): skipped; rename it to act on it",
+                    path.display(),
+                    c.as_os_str().to_string_lossy()
+                )));
+            }
+        }
         if self.protected.is_protected(path) {
             return Err(Error::Protected(path.to_path_buf()));
         }
@@ -298,6 +312,28 @@ impl Guard {
     }
 }
 
+/// F-19: a Windows file-name component that the Win32 path normaliser and the verbatim
+/// (`\\?\`) APIs can resolve to different files: a trailing dot or space, or the shape
+/// of an 8.3 short name (`PROGRA~1`, `DOCUME~2.TXT`). Pure, so it is tested everywhere.
+pub fn windows_ambiguous_name(name: &str) -> bool {
+    if name == "." || name == ".." {
+        return false;
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return true;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s, Some(e)),
+        None => (name, None),
+    };
+    let Some((base, num)) = stem.rsplit_once('~') else { return false };
+    (1..=6).contains(&base.chars().count())
+        && !base.contains(['.', ' '])
+        && !num.is_empty()
+        && num.chars().all(|c| c.is_ascii_digit())
+        && ext.is_none_or(|e| e.chars().count() <= 3)
+}
+
 /// True when the fresh metadata still has the scanned size and mtime.
 pub fn stamp_matches(expected: FileStamp, md: &FileEntry) -> bool {
     md.size == expected.size && md.modified.unwrap_or_default() == expected.mtime
@@ -356,6 +392,25 @@ mod tests {
         item.target = TargetKind::File;
         item.root = t.join("other");
         assert_eq!(g.check_item(&item, &p, false).unwrap_err().code(), "invalid_input");
+    }
+
+    #[test]
+    fn f19_windows_names_with_two_spellings_are_recognised() {
+        for bad in ["PROGRA~1", "DOCUME~2.TXT", "Windows.", "Windows ", "report.pdf.", "x~12"] {
+            assert!(windows_ambiguous_name(bad), "{bad}");
+        }
+        for ok in ["Program Files", "file~old.txt", "a~b", "long-name~1.backup", "~1", ".", "..", "notes.txt"] {
+            assert!(!windows_ambiguous_name(ok), "{ok}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn f19_guard_refuses_ambiguous_windows_names() {
+        let g = Guard::new(vec![PathBuf::from(r"C:\scan")], ProtectedPaths::empty());
+        assert_eq!(g.check_lexical(Path::new(r"C:\scan\PROGRA~1")).unwrap_err().code(), "invalid_input");
+        assert_eq!(g.check_lexical(Path::new(r"C:\scan\Windows.")).unwrap_err().code(), "invalid_input");
+        assert!(g.check_lexical(Path::new(r"C:\scan\Program Files")).is_ok());
     }
 
     #[test]
