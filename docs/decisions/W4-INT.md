@@ -167,3 +167,11 @@ first (reversible over irreversible, skip over guess, report over act).
   clones every event); not measured separately.
 - Left: the dry run reads 1 KiB of every selected file for content badges (by content,
   not by extension, so a renamed signed PDF is still caught; kept on purpose).
+
+## D-4I11 GUI smoke (item 10)
+- `cargo build -p myjanitor` (debug), then
+  `MYJANITOR_NO_OS_INTEGRATION=1 xvfb-run -a target/debug/myjanitor --data-dir <tmp>`:
+  stayed up 20 s until killed, no panic in the log (only libEGL DRI3 notices from Xvfb),
+  and created its data/cache/journal/quarantine and `myjanitor.lock` under the temp folder
+  only. A second run with `--duplicates <tmp tree>` also stayed up 15 s and left the tree
+  untouched.
