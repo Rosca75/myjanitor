@@ -17,16 +17,16 @@ function shareBar(share) {
 function row(r, s, actions) {
   const n = r.node;
   const rate = compressionRate(n.size, n.allocated);
-  const label = r.other ? copy.disk.smaller(formatCount(n.files)) : displayPath(n.name || n.path);
+  const label = r.other ? copy.disk.smaller(n.files) : displayPath(n.name || n.path);
   const toggle = r.expandable
     ? h('button', { type: 'button', class: 'tree__toggle', 'aria-label': r.open ? copy.disk.collapse(label) : copy.disk.expand(label), 'data-fk': `dt-${fk(n.path)}`, on: { click: () => actions.toggleDiskNode(n.path) } }, icon(r.open ? 'chevronDown' : 'chevronRight', 12))
     : h('span', { class: 'tree__toggle tree__toggle--none' });
   const indent = h('span', { class: 'tree__indent' });
   indent.style.setProperty('width', `${r.depth * 18}px`);
   return h('tr', { class: ['row', 'trow', r.other && 'trow--other'], role: 'row', 'aria-level': String(r.depth + 1), 'aria-expanded': r.expandable ? String(r.open) : undefined, 'data-path': n.path },
-    h('td', { class: 'cell cell--tree' }, indent, toggle, r.other ? h('span', { class: 'tree__name tree__name--other' }, label)
+    h('td', { class: 'cell' }, h('div', { class: 'cell--tree' }, indent, toggle, r.other ? h('span', { class: 'tree__name tree__name--other' }, label)
       : h('button', { type: 'button', class: 'tree__name', title: displayPath(n.path), 'data-fk': `dn-${fk(n.path)}`, on: { click: () => actions.focusDisk(n.path) } }, icon(n.is_dir ? 'folder' : 'file', 14), pathText(label, { max: 44, class: 'tree__text' })),
-      s.disk.loadingPaths[n.path] && h('span', { class: 'note' }, ` ${copy.disk.loadingMore}`)),
+      s.disk.loadingPaths[n.path] && h('span', { class: 'note' }, ` ${copy.disk.loadingMore}`))),
     h('td', { class: 'cell cell--share' }, shareBar(r.share), h('span', { class: 'share__text' }, formatPercent(r.share))),
     h('td', { class: 'cell cell--num' }, formatBytes(n.size)),
     h('td', { class: 'cell cell--num' }, formatBytes(n.allocated)),

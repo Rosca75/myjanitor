@@ -9,6 +9,7 @@ import { pathText } from '../../components/path.js';
 import { loadingBlock, emptyBlock, errorBlock } from '../../components/states.js';
 import { disabledHint } from '../../components/states.js';
 import { canRestore } from '../../lib/history.js';
+import { reasonText } from '../../errors.js';
 
 const TONE = { done: 'success', undone: 'success', failed: 'danger', undo_failed: 'danger', skipped: 'neutral', purged: 'neutral', intent: 'warning' };
 
@@ -21,7 +22,7 @@ function entryRow(e, s, actions) {
     h('td', { class: 'cell cell--name' },
       pathText(e.original, { max: 54 }),
       e.retained_at && h('div', { class: 'entry__sub' }, `${copy.historyView.retained} `, pathText(e.retained_at, { max: 48 })),
-      e.error && h('div', { class: 'entry__error', role: 'note', 'data-role': 'entry-error' }, [e.error.message, e.error.hint].filter(Boolean).join(' '))),
+      e.error && h('div', { class: 'entry__error', role: 'note', 'data-role': 'entry-error' }, reasonText(e.error, e.original))),
     h('td', { class: 'cell' }, e.action),
     h('td', { class: 'cell' }, badge(copy.historyView.entryStates[e.state] ?? e.state, TONE[e.state] ?? 'neutral')),
     h('td', { class: 'cell cell--num' }, e.bytes_after === 0 ? formatBytes(e.bytes_before) : `${formatBytes(e.bytes_before)} → ${formatBytes(e.bytes_after)}`),

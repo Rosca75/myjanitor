@@ -149,7 +149,7 @@
 .disk__body { margin-top: var(--space-3); }
 .table--tree { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .table--tree th { padding: 0 var(--space-3); }
-.cell--tree { display: flex; align-items: center; gap: var(--space-1); height: var(--row-height); border-bottom: 0; min-width: 0; }
+.cell--tree { display: flex; align-items: center; gap: var(--space-1); min-width: 0; }
 .trow td { height: var(--row-height); }
 .tree__indent { flex: none; display: inline-block; }
 .tree__toggle { flex: none; display: inline-grid; place-items: center; width: 20px; height: 20px; background: none; border: 0; padding: 0; border-radius: var(--radius-sm); color: var(--decor); cursor: pointer; }
@@ -165,7 +165,7 @@
 .sbar__fill { display: block; height: 100%; background: var(--select); border-radius: inherit; }
 .treemap__bar { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
 .treemap__where { color: var(--text-muted); display: inline-flex; gap: var(--space-1); }
-.tmap { position: relative; width: 100%; aspect-ratio: 1000 / 520; background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
+.tmap { position: relative; width: 100%; height: min(520px, 58vh); background: var(--surface); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); }
 .tile2 { position: absolute; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 2px; padding: var(--space-2); overflow: hidden; border: 1px solid var(--border-strong); background: var(--surface-sunken); color: var(--text); text-align: left; font: inherit; cursor: pointer; border-radius: 0; }
 button.tile2:hover { background: var(--select-soft); }
 div.tile2 { cursor: default; }

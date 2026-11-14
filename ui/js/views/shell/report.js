@@ -8,6 +8,7 @@ import { badge } from '../../components/badge.js';
 import { modal } from '../../components/modal.js';
 import { pathText } from '../../components/path.js';
 import { disabledHint } from '../../components/states.js';
+import { reasonText } from '../../errors.js';
 
 const TONE = { done: 'success', skipped: 'neutral', failed: 'danger' };
 const SHOWN = 100;
@@ -16,7 +17,7 @@ const SHOWN = 100;
 function reason(item) {
   const e = item.error;
   if (!e) return '';
-  return h('span', { class: 'reason' }, h('strong', { class: 'reason__code' }, copy.report.codes[e.code] ?? e.code), ' ', [e.message, e.hint].filter(Boolean).join(' '));
+  return h('span', { class: 'reason' }, h('strong', { class: 'reason__code' }, copy.report.codes[e.code] ?? e.code), ' ', reasonText(e, item.path));
 }
 
 /** @param {any} item */

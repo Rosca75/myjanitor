@@ -9,3 +9,14 @@ export function toErrorInfo(e) {
 
 /** `not_implemented` and `unsupported`: show the feature disabled, not as a failure. @param {any} e */
 export const isUnavailable = (e) => ['not_implemented', 'unsupported'].includes(e?.code);
+
+/**
+ * The engine's message often ends with `: <path>`; where the path is already
+ * shown next to it, drop that tail so the reason reads once.
+ * @param {{ message?: string, hint?: string }} e @param {string} path
+ */
+export function reasonText(e, path) {
+  const m = String(e.message ?? '');
+  const short = path && m.endsWith(`: ${path}`) ? m.slice(0, -(path.length + 2)) : m;
+  return [short, e.hint].filter(Boolean).join('. ').replace(/\.\./g, '.');
+}

@@ -16,12 +16,12 @@ export function runStatus(run) {
 }
 
 /**
- * Can this entry be restored right now? Done, reversible and inside its undo
+ * Can this entry be restored right now? Done (or refused earlier and worth another try), reversible and inside its undo
  * window (an entry without a deadline is taken as open).
  * @param {any} entry @param {number} [nowNs]
  */
 export function canRestore(entry, nowNs = Date.now() * 1e6) {
-  return entry.state === 'done' && !!entry.reversible && (entry.undo_deadline === undefined || entry.undo_deadline > nowNs);
+  return (entry.state === 'done' || entry.state === 'undo_failed') && !!entry.reversible && (entry.undo_deadline === undefined || entry.undo_deadline > nowNs);
 }
 
 /** Entries whose earlier restore was refused (the original place was in use, ...). @param {any[]} entries */
