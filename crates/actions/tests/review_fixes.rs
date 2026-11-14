@@ -581,3 +581,109 @@ fn f07_hardlink_needs_confirmation_and_undo_after_an_edit_refuses_without_damage
     assert_eq!(std::fs::read(&keeper).unwrap(), b"version 2, edited later");
     assert_eq!(std::fs::read(&dup).unwrap(), b"version 2, edited later");
 }
+
+#[test]
+fn f09_cross_volume_move_that_cannot_delete_all_of_its_source_keeps_the_copy_and_says_so() {
+    let f = Fixture::new("f09");
+    f.write("proj/a.txt", b"a");
+    f.write("proj/locked/b.txt", b"b");
+    f.write("proj/c/d.txt", b"d");
+    let src = f.root().join("proj");
+    let before = snapshot(&src);
+    let dst = f.t.join("other-volume/proj");
+    std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+    let locked = src.join("locked/b.txt");
+    // Deleting one file of the source fails (an in-use file, antivirus, permissions).
+    let how = mj_actions::fsops::move_item_with(&src, &dst, true, &|p, dir| {
+        if p == locked {
+            Err(std::io::Error::other("in use"))
+        } else if dir {
+            std::fs::remove_dir(p)
+        } else {
+            std::fs::remove_file(p)
+        }
+    })
+    .unwrap();
+    // The failed file and its two folders stay; everything else was removed.
+    assert_eq!(how, mj_actions::fsops::MoveHow::CopiedSourceLeft { left: 3 });
+    assert_eq!(snapshot(&dst), before, "the destination holds the complete verified copy");
+    assert!(locked.exists() && !src.join("a.txt").exists());
+}
+
+#[test]
+fn f09_failed_cross_volume_copy_leaves_the_source_untouched_and_no_partial_copy() {
+    let f = Fixture::new("f09-copy");
+    f.write("proj/a.txt", b"a");
+    let src = f.root().join("proj");
+    #[cfg(unix)]
+    {
+        // A special file cannot be copied: the copy fails half way.
+        let fifo = src.join("z.fifo");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+        let before = snapshot_names(&src);
+        let dst = f.t.join("other-volume/proj");
+        std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
+        let r = mj_actions::fsops::move_item_with(&src, &dst, true, &|_, _| panic!("nothing may be deleted"));
+        assert!(r.is_err());
+        assert!(!dst.exists(), "the partial copy was removed");
+        assert_eq!(snapshot_names(&src), before);
+    }
+}
+
+#[cfg(unix)]
+fn snapshot_names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<_> =
+        std::fs::read_dir(dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    v.sort();
+    v
+}
+
+/// A folder on another filesystem when this machine has one (`/dev/shm`), removed on drop.
+struct OtherVolume(PathBuf);
+
+impl OtherVolume {
+    fn new(label: &str) -> Option<OtherVolume> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let shm = Path::new("/dev/shm");
+            let tmp = std::env::temp_dir();
+            let (a, b) = (std::fs::metadata(shm).ok()?, std::fs::metadata(&tmp).ok()?);
+            if a.dev() == b.dev() {
+                return None;
+            }
+            let p = shm.join(format!("mj-test-{label}-{}", std::process::id()));
+            std::fs::create_dir(&p).ok()?;
+            Some(OtherVolume(p))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = label;
+            None
+        }
+    }
+}
+
+impl Drop for OtherVolume {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+#[test]
+fn f09_cross_volume_quarantine_is_journalled_and_undone_exactly() {
+    let Some(vol) = OtherVolume::new("f09") else { return eprintln!("SKIPPED: no second filesystem") };
+    let mut f = Fixture::new("f09-q");
+    f.qdir = vol.0.join("q");
+    f.guard = Guard::new(vec![f.root()], ProtectedPaths::empty().with_app_dirs(&[f.qdir.clone()]));
+    f.write("proj/a.txt", b"a");
+    f.write("proj/c/d.txt", b"d");
+    let before = snapshot(&f.root());
+    let item = f.item(&f.root().join("proj"), Action::Quarantine { purge_after_days: 30 });
+    let (run, out) = f.apply(&[item], &opts());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    let e = f.journal.entries_of(run).pop().unwrap();
+    assert!(e.reversible && e.error.is_none() && e.retained_at.as_ref().is_some_and(|r| r.exists()));
+    assert_eq!(f.undo_run(run).succeeded, 1);
+    assert_eq!(snapshot(&f.root()), before);
+}

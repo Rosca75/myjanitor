@@ -331,11 +331,36 @@ pub fn remove_item(path: &Path) -> Result<()> {
 pub enum MoveHow {
     Renamed,
     Copied,
+    /// F-09: across volumes, the complete copy at the destination verified, but part of
+    /// the source could not be deleted afterwards: `left` entries remain at the source.
+    /// The destination holds everything; the caller records the move as done (the copy
+    /// is what undo restores) and names what was left behind.
+    CopiedSourceLeft {
+        left: u64,
+    },
 }
 
 /// Move `src` to `dst` (must not exist): rename on one volume, else copy + verify + fsync +
 /// delete. The source is only removed after the copy verified.
 pub fn move_item(src: &Path, dst: &Path) -> Result<MoveHow> {
+    move_item_with(src, dst, false, &|p, dir| if dir { fs::remove_dir(p) } else { fs::remove_file(p) })
+}
+
+/// [`move_item`] with the cross-volume path forced (`force_copy`) and the removal of each
+/// source entry injectable (tests).
+pub fn move_item_with(
+    src: &Path,
+    dst: &Path,
+    force_copy: bool,
+    remove: &dyn Fn(&Path, bool) -> std::io::Result<()>,
+) -> Result<MoveHow> {
+    if force_copy {
+        if exists(dst) {
+            return Err(Error::Conflict(format!("{} already exists; nothing was overwritten", dst.display())));
+        }
+        copy_item_verified(src, dst)?;
+        return Ok(remove_source(src, remove));
+    }
     match rename_no_replace_io(src, dst) {
         Ok(()) => {
             if let Some(p) = dst.parent() {
@@ -347,15 +372,69 @@ pub fn move_item(src: &Path, dst: &Path) -> Result<MoveHow> {
             Ok(MoveHow::Renamed)
         }
         Err(e) if is_cross_device(&e) => {
+            // Copy, verify (size + xxh64 re-read) and fsync everything first; a failure
+            // there removes the partial copy and leaves the source untouched.
             copy_item_verified(src, dst)?;
-            remove_item(src)?;
-            Ok(MoveHow::Copied)
+            Ok(remove_source(src, remove))
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(Error::Conflict(format!("{} already exists; nothing was overwritten", dst.display())))
         }
         Err(e) => Err(Error::io(src, e)),
     }
+}
+
+/// F-09: delete the source of a verified cross-volume copy entry by entry, deepest first,
+/// carrying on past failures so as little as possible is left in two places; links are
+/// removed, never followed.
+fn remove_source(src: &Path, remove: &dyn Fn(&Path, bool) -> std::io::Result<()>) -> MoveHow {
+    let mut left = 0u64;
+    let is_dir = fs::symlink_metadata(src).map(|m| m.is_dir()).unwrap_or(false);
+    if !is_dir {
+        if remove(src, false).is_err() {
+            left += 1;
+        }
+    } else {
+        // Post-order: (path, children pushed?)
+        let mut stack = vec![(src.to_path_buf(), false, 0usize)];
+        while let Some((p, expanded, depth)) = stack.pop() {
+            if expanded {
+                if remove(&p, true).is_err() {
+                    left += 1;
+                }
+                continue;
+            }
+            stack.push((p.clone(), true, depth));
+            let Ok(rd) = fs::read_dir(&p) else { continue };
+            for e in rd.flatten() {
+                let cp = e.path();
+                let dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                if dir && depth < MAX_DEPTH {
+                    stack.push((cp, false, depth + 1));
+                } else if remove(&cp, false).is_err() {
+                    left += 1;
+                }
+            }
+        }
+    }
+    if let Some(parent) = src.parent() {
+        let _ = sync_dir(parent);
+    }
+    if left == 0 {
+        MoveHow::Copied
+    } else {
+        MoveHow::CopiedSourceLeft { left }
+    }
+}
+
+/// The note journalled when a cross-volume move left part of its source behind.
+pub fn left_behind_note(src: &Path, dst: &Path, left: u64) -> Error {
+    Error::Conflict(format!(
+        "moved by copying: the complete copy is at {}, but {left} item(s) could not be deleted at {}; \
+         remove them there by hand (Restore needs that place to be free)",
+        dst.display(),
+        src.display()
+    ))
 }
 
 /// Total size of the regular files of a file or folder (links count 0; bounded depth).

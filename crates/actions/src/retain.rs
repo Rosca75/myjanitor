@@ -135,9 +135,17 @@ pub fn retain(
                 quarantined_at: now,
             };
             quarantine::write_manifest(quarantine_dir, &m)?;
-            if let Err(e) = fsops::move_item(path, slot) {
-                quarantine::cleanup_slot(quarantine_dir, entry.run_id, entry.id);
-                return Err(e);
+            match fsops::move_item(path, slot) {
+                Err(e) => {
+                    quarantine::cleanup_slot(quarantine_dir, entry.run_id, entry.id);
+                    return Err(e);
+                }
+                // F-09: the slot holds the complete verified copy: the entry stays
+                // restorable (manifest kept) and names what is left at the source.
+                Ok(fsops::MoveHow::CopiedSourceLeft { left }) => {
+                    entry.error = Some(fsops::left_behind_note(path, slot, left).info());
+                }
+                Ok(_) => {}
             }
             entry.retained_at = Some(slot.clone());
         }
@@ -145,7 +153,9 @@ pub fn retain(
             if let Some(parent) = dest.parent() {
                 fsops::create_dirs(parent)?;
             }
-            fsops::move_item(path, dest)?;
+            if let fsops::MoveHow::CopiedSourceLeft { left } = fsops::move_item(path, dest)? {
+                entry.error = Some(fsops::left_behind_note(path, dest, left).info());
+            }
             entry.retained_at = Some(dest.clone());
         }
         RetainPlan::Delete => {

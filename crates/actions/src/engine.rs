@@ -460,10 +460,17 @@ fn run_acted(
         record(ctx, &mut e, JournalState::Skipped, Some(&err))?;
         return Ok(outcome(&e, ItemStatus::Skipped, Some(&err)));
     }
+    e.error = None;
     match act(&mut e) {
         Ok(()) => {
-            record(ctx, &mut e, JournalState::Done, None)?;
-            Ok(outcome(&e, ItemStatus::Done, None))
+            // A completed action may carry a note (F-09: a cross-volume move that left
+            // part of its source behind); it is journalled with the `done` record.
+            let note = e.error.take();
+            e.state = JournalState::Done;
+            e.at = Timestamp::now();
+            e.error = note;
+            ctx.journal.append(&e)?;
+            Ok(ItemOutcome { error: e.error.clone(), ..outcome(&e, ItemStatus::Done, None) })
         }
         Err(err) => {
             let err = if safety::needs_elevation(&err, ctx.guard.protected()) {
@@ -654,7 +661,11 @@ fn move_or_copy(
             fsops::create_dirs(parent)?;
         }
         let r = if is_move {
-            fsops::move_item(&item.path, &target).map(|_| ())
+            fsops::move_item(&item.path, &target).map(|how| {
+                if let fsops::MoveHow::CopiedSourceLeft { left } = how {
+                    e.error = Some(fsops::left_behind_note(&item.path, &target, left).info());
+                }
+            })
         } else {
             fsops::copy_item_verified(&item.path, &target)
         };
