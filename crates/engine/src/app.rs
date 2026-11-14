@@ -18,6 +18,21 @@ impl Engine {
             cache_dir: self.cfg.cache_dir.clone(),
             elevated: self.platform().is_elevated(),
             journal_persistent: self.journal.is_persistent(),
+            capabilities: capabilities(self.cfg.portable),
         })
     }
+}
+
+/// Platform features of this build (`AppInfo::capabilities`). Portable mode never writes
+/// outside its folder, so it offers no context menu and no OS schedule.
+fn capabilities(portable: bool) -> Vec<String> {
+    let mut c: Vec<&str> = if cfg!(windows) {
+        vec!["recycle_bin", "wof_compression", "cloud_dehydrate", "hardlinks"]
+    } else {
+        vec!["freedesktop_trash", "btrfs_compression", "reflinks", "hardlinks"]
+    };
+    if !portable {
+        c.extend(["context_menu", "os_schedules"]);
+    }
+    c.into_iter().map(String::from).collect()
 }

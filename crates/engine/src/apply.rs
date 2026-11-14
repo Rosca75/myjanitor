@@ -122,6 +122,7 @@ impl Engine {
             return Ok(work);
         }
         let (mut online, mut no_keeper, mut outside) = (0u64, 0u64, 0u64);
+        let mut warned: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         let locked = rec.candidates.iter().filter(|c| !(c.badges & skip).is_empty()).count();
         for c in rec.candidates.iter().filter(|c| is_selected(rec, c, skip)) {
             if c.badges.contains(Badges::ONLINE_ONLY) && !matches!(action, Action::Copy { .. }) {
@@ -148,6 +149,9 @@ impl Engine {
                 || inspector_roots.iter().any(|r| mj_core::pathutil::is_within(&r.path, &c.path));
             if conf.is_some_and(|x| x.synced_online_only) && synced && removes(&action) {
                 item_action = Action::Dehydrate;
+            }
+            if let Some(w) = c.columns.get("warning").filter(|w| !w.is_empty()) {
+                *warned.entry(w.clone()).or_default() += 1;
             }
             let entry = index.get(&c.path);
             work.items.push(ActionItem {
@@ -177,6 +181,9 @@ impl Engine {
         warn(online, "online-only item(s) skipped: removing them would delete the cloud copy");
         warn(no_keeper, "item(s) skipped: no copy to link to");
         warn(outside, "item(s) skipped: outside the scanned locations");
+        for (text, n) in warned {
+            work.warnings.push(format!("{n} item(s): {text}"));
+        }
         Ok(work)
     }
 

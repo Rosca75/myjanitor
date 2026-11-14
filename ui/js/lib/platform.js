@@ -28,7 +28,11 @@ export function missingRequirement(oppId, info, drives, tools, words) {
   const need = NEEDS[oppId];
   if (!need) return null;
   const platform = info?.platform;
-  if (need === 'windows') return platform && platform !== 'windows' ? words.windowsOnly : null;
+  if (need === 'windows') {
+    // Real data first (AppInfo.capabilities); the platform name is the fallback for old backends.
+    if (Array.isArray(info?.capabilities)) return info.capabilities.includes('cloud_dehydrate') ? null : words.windowsOnly;
+    return platform && platform !== 'windows' ? words.windowsOnly : null;
+  }
   if (need === 'btrfs') return drives.length && !drives.some((d) => d.features?.btrfs_compression) ? words.btrfs : null;
   if (need === 'reflink') return drives.length && !drives.some((d) => d.features?.reflinks) ? words.reflink : null;
   if (need === 'compression') return drives.length && !drives.some((d) => d.features?.wof || d.features?.btrfs_compression) ? words.compression : null;

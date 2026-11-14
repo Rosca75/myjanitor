@@ -67,6 +67,10 @@ pub struct GeneralSettings {
     /// Quarantine folder override (default: `<data dir>/quarantine` on the same volume when possible).
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::pathutil::serde_path::opt")]
     pub quarantine_dir: Option<PathBuf>,
+    /// Interface languages to keep (CLN-DET-16), e.g. `["en", "fr", "pt-br"]`. Empty = the
+    /// system language. English is always kept by the detector. Fills the language-pack
+    /// detector's `kept_languages` parameter when the step leaves it empty.
+    pub kept_languages: Vec<String>,
 }
 
 impl Default for GeneralSettings {
@@ -77,6 +81,7 @@ impl Default for GeneralSettings {
             default_originals: OriginalsPolicy::RecycleBin,
             light_copy_suffix: "_light".into(),
             quarantine_dir: None,
+            kept_languages: Vec::new(),
         }
     }
 }

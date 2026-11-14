@@ -396,6 +396,7 @@ export const copy = {
     dismiss: 'Dismiss',
     reportLink: 'View report',
     retained: 'Kept at',
+    occupied: 'Something else is at the original location now: move it away before restoring.',
   },
 
   report: {

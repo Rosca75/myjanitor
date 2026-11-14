@@ -41,6 +41,13 @@ pub struct AppInfo {
     pub elevated: bool,
     /// False when the undo journal could not be persisted (History survives only this session).
     pub journal_persistent: bool,
+    /// Platform features this build can use here (UI labels such as "Windows only" come from
+    /// this list, not from the platform name): `recycle_bin`, `freedesktop_trash`,
+    /// `wof_compression`, `btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
+    /// `context_menu`, `os_schedules`. Volume-dependent features are also reported per drive
+    /// by `drives_list`.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
 
 // ---------------------------------------------------------------- scope + folder browser
@@ -715,6 +722,10 @@ pub struct HistoryRunDetail {
     pub run: HistoryRun,
     pub total: u64,
     pub entries: Vec<JournalEntry>,
+    /// Restore pre-check: entries of this page whose original location is occupied right
+    /// now (something else is at that path), so a restore would be refused (`conflict`).
+    #[serde(default)]
+    pub occupied: Vec<mj_core::EntryId>,
 }
 
 /// Request naming one run (`undo_run`, `report_get`).

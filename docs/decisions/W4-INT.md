@@ -42,3 +42,32 @@ first (reversible over irreversible, skip over guess, report over act).
   file that is otherwise listed, not as a card of its own.
 - Office optimisers fill `breakdown` and the review columns `part:<name>` = bytes
   (the UI's size-parts bar, D2-06); PDF fills `breakdown` from its report line.
+
+## D-4I03 Estimate warnings travel per candidate, not on `Estimate`
+- **Context:** `Estimate` is `Copy` and built literally in ~25 places, one of them in a
+  file another agent is editing right now; a `Vec<String>` field would break `Copy` and
+  every literal.
+- **Choice:** compatibility warnings (OPT-FSC-04 game libraries / DirectStorage) stay in
+  the reserved candidate column `warning`; the engine aggregates them: plan checklist item
+  `compatibility_warnings` (level warning) and one line per distinct warning in
+  `DryRunStep.warnings`.
+
+## D-4I04 Other additive contract follow-ups
+- `gifsicle` is a known tool id (detected and listed); there is still no GIF optimiser
+  card (an `OptimiserId` variant is a contract enumeration the UI keys on; no verified
+  GIF pass exists), so only the argument builder ships.
+- `Settings.general.kept_languages` (normalised: trimmed, lower case, `_`→`-`, deduped;
+  validated as `ll[-region]`): fills the language-pack detector's `kept_languages`
+  parameter when the step leaves it empty. Empty = system language as before.
+- `AppInfo.capabilities`: static per build and OS (`recycle_bin`/`freedesktop_trash`,
+  `wof_compression`/`btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
+  plus `context_menu` and `os_schedules` outside portable mode). Volume features stay
+  per drive in `drives_list`. `ui/js/lib/platform.js` labels "Windows only" from it
+  (platform name only as a fallback).
+- Restore pre-check: `HistoryRunDetail.occupied` lists the page's entries whose original
+  place is taken now (removals, moves, conversions; never in-place replacements, whose
+  place holds MyJanitor's own output). The History view disables Restore for them and
+  says why; the restore itself still re-checks and refuses (`conflict`).
+- Not done: report paging (`RunRequest` is `deny_unknown_fields`, so paging needs a new
+  request type and UI paging; reports are bounded by run size today); Btrfs zlib/lzo
+  reporting (a new `FsCompressAlgo` variant the UI and journal key on; not trivial).

@@ -88,6 +88,14 @@ pub fn sanitize(s: &mut Settings) {
 /// Tidy a settings value without changing its meaning: trimmed, de-duplicated
 /// exclusions and protected paths, canonical extension spelling.
 pub fn normalise(s: &mut Settings) {
+    let mut langs: Vec<String> = Vec::new();
+    for l in &s.general.kept_languages {
+        let l = l.trim().replace('_', "-").to_ascii_lowercase();
+        if !l.is_empty() && !langs.contains(&l) {
+            langs.push(l);
+        }
+    }
+    s.general.kept_languages = langs;
     let mut seen = std::collections::BTreeSet::new();
     s.safety.exclusions = s
         .safety
@@ -139,6 +147,14 @@ fn bad(msg: impl Into<String>) -> Error {
 /// Strict validation: the first problem is reported with the field it belongs to.
 pub fn validate(s: &Settings) -> Result<()> {
     let g = &s.general;
+    for l in &g.kept_languages {
+        let mut parts = l.split('-');
+        let lang = parts.next().unwrap_or("");
+        let region_ok = parts.all(|p| (2..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()));
+        if !(2..=3).contains(&lang.len()) || !lang.bytes().all(|b| b.is_ascii_lowercase()) || !region_ok {
+            return Err(bad(format!("general.kept_languages: `{l}` is not a language code (en, fr, pt-BR)")));
+        }
+    }
     if !(1..=MAX_DAYS).contains(&g.undo_days) {
         return Err(bad(format!("general.undo_days must be between 1 and {MAX_DAYS}")));
     }

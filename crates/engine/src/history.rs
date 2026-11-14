@@ -9,7 +9,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use mj_core::{lock, EntryId, Error, Job, JobKind, JournalState, Result, RunId, RunKind, Timestamp};
+use mj_core::{
+    lock, ActionKind, EntryId, Error, Job, JobKind, JournalEntry, JournalState, Result, RunId, RunKind, Timestamp,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::api::{
@@ -133,15 +135,13 @@ impl Engine {
             self.journal.run(req.run_id).ok_or_else(|| Error::InvalidInput(format!("unknown run {}", req.run_id.0)))?;
         let entries = self.journal.entries_of(run.run_id);
         let total = entries.len() as u64;
-        Ok(HistoryRunDetail {
-            run: self.history_run(&run, Timestamp::now()),
-            total,
-            entries: entries
-                .into_iter()
-                .skip(usize::try_from(req.offset).unwrap_or(usize::MAX))
-                .take(req.limit.clamp(1, 500) as usize)
-                .collect(),
-        })
+        let entries: Vec<JournalEntry> = entries
+            .into_iter()
+            .skip(usize::try_from(req.offset).unwrap_or(usize::MAX))
+            .take(req.limit.clamp(1, 500) as usize)
+            .collect();
+        let occupied = entries.iter().filter(|e| original_occupied(e)).map(|e| e.id).collect();
+        Ok(HistoryRunDetail { run: self.history_run(&run, Timestamp::now()), total, entries, occupied })
     }
 
     /// Queue an undo of `entries` as its own undo run.
@@ -257,4 +257,22 @@ impl Engine {
         self.enqueue(vec![(job.clone(), body)])?;
         Ok(job)
     }
+}
+
+/// Restore pre-check (read-only, one `lstat`): true when undoing `e` would find its original
+/// place taken. Removals and moves leave the place empty; a conversion leaves it empty and
+/// writes elsewhere; in-place replacements (optimise to the same name, links) hold MyJanitor's
+/// own output there, which undo handles, so they never count as occupied.
+fn original_occupied(e: &JournalEntry) -> bool {
+    if e.state != JournalState::Done || !e.reversible {
+        return false;
+    }
+    let vacated = match e.action {
+        ActionKind::Trash | ActionKind::Quarantine | ActionKind::Move => true,
+        ActionKind::Optimise | ActionKind::Archive => {
+            (e.retained_at.is_some() || e.trash.is_some()) && e.created.first().is_some_and(|c| c != &e.original)
+        }
+        _ => false,
+    };
+    vacated && std::fs::symlink_metadata(&e.original).is_ok()
 }

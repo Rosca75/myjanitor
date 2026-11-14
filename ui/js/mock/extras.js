@@ -132,7 +132,13 @@ export function createExtras(m, sim, emit, base) {
   };
 
   return {
-    app_info: () => ({ ...base.app_info(), platform: m.platform ?? 'windows' }),
+    app_info: () => {
+      const platform = m.platform ?? 'windows';
+      const capabilities = platform === 'windows'
+        ? ['recycle_bin', 'wof_compression', 'cloud_dehydrate', 'hardlinks', 'context_menu', 'os_schedules']
+        : ['freedesktop_trash', 'btrfs_compression', 'reflinks', 'hardlinks', 'context_menu', 'os_schedules'];
+      return { ...base.app_info(), platform, capabilities };
+    },
     search_parse: (req) => parseQuery(String(req.query ?? '')),
     search_suggest: (req) => suggest(String(req.query ?? ''), req.cursor ?? enc.encode(String(req.query ?? '')).length),
     search_run: (req) => {

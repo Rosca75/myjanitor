@@ -122,6 +122,7 @@ impl Engine {
         let mut protected = 0u64;
         let mut synced = 0u64;
         let mut online_only = 0u64;
+        let mut warned = 0u64;
         let mut empty_steps = Vec::new();
         let measured = st.measured.clone();
         for step in &mut st.plan.steps {
@@ -154,6 +155,9 @@ impl Engine {
                             }
                             if c.badges.contains(Badges::ONLINE_ONLY) {
                                 online_only += 1;
+                            }
+                            if c.columns.get("warning").is_some_and(|w| !w.is_empty()) {
+                                warned += 1;
                             }
                         }
                     }
@@ -239,6 +243,18 @@ impl Engine {
                 code: "sync_unknown".into(),
                 text: "Synced folders could not be detected on this computer: check that nothing you remove is synced"
                     .into(),
+            });
+        }
+        if warned > 0 {
+            // Per-candidate compatibility warnings (game libraries / DirectStorage, ...),
+            // carried in the reserved `warning` column (D-4I03).
+            list.push(ChecklistItem {
+                level: ChecklistLevel::Warning,
+                code: "compatibility_warnings".into(),
+                text: format!(
+                    "{} a compatibility warning: check the step before applying",
+                    plural(warned, "selected item has", "selected items have")
+                ),
             });
         }
         if online_only > 0 {

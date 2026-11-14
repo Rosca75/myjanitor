@@ -30,6 +30,7 @@ fn used_for(id: &str) -> Vec<String> {
         "zstd" => &["zstd archives"],
         "oxipng" => &["PNG images"],
         "jpegtran" => &["JPEG images"],
+        "gifsicle" => &["GIF images (no optimiser yet)"],
         _ => &[],
     };
     v.iter().map(|s| s.to_string()).collect()

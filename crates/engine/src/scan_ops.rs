@@ -90,6 +90,8 @@ pub(crate) struct ScanEnv {
     pub downloads: Vec<PathBuf>,
     pub fonts: Vec<PathBuf>,
     pub protected: Vec<String>,
+    /// `Settings::general::kept_languages`, comma-separated (empty = system language).
+    pub kept_languages: String,
 }
 
 impl ScanEnv {
@@ -120,7 +122,8 @@ impl ScanEnv {
         protected.extend(mj_actions::protected::builtin_patterns());
         protected.extend(settings.safety.protected_paths.iter().map(|p| mj_core::pathutil::encode_path(p)));
         protected.extend(engine.cfg.app_dirs().iter().map(|p| mj_core::pathutil::encode_path(p)));
-        ScanEnv { sync_roots: engine.platform().sync_roots().ok(), downloads, fonts, protected }
+        let kept_languages = settings.general.kept_languages.join(", ");
+        ScanEnv { sync_roots: engine.platform().sync_roots().ok(), downloads, fonts, protected, kept_languages }
     }
 
     /// Add the env keys, and fill W2-B's own folder parameters when the user left them empty.
@@ -135,6 +138,11 @@ impl ScanEnv {
         params.set(env::PROTECTED, ParamValue::Text(env::encode(&self.protected)));
         fill_text(params, "downloads_folders", &self.downloads);
         fill_text(params, "font_folders", &self.fonts);
+        if let Some(ParamValue::Text(t)) = params.0.get("kept_languages") {
+            if t.trim().is_empty() && !self.kept_languages.is_empty() {
+                params.set("kept_languages", ParamValue::Text(self.kept_languages.clone()));
+            }
+        }
     }
 }
 

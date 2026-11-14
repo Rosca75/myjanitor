@@ -108,7 +108,7 @@ export function createHandlers(m, sim, emit) {
   };
 
   return {
-    app_info: () => ({ name: 'MyJanitor', version: '0.1.0', platform: 'windows', bundle_id: 'com.myjanitor.app', portable: false, data_dir: 'C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor', cache_dir: m.cache.path, elevated: false, journal_persistent: true }),
+    app_info: () => ({ name: 'MyJanitor', version: '0.1.0', platform: 'windows', bundle_id: 'com.myjanitor.app', portable: false, data_dir: 'C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor', cache_dir: m.cache.path, elevated: false, journal_persistent: true, capabilities: ['recycle_bin', 'wof_compression', 'cloud_dehydrate', 'hardlinks', 'context_menu', 'os_schedules'] }),
 
     scope_get: () => m.scope,
     scope_set: (req) => (m.scope = { ...m.scope, ...req.scope }),
@@ -336,7 +336,10 @@ export function createHandlers(m, sim, emit) {
     history_run_detail: (req) => {
       const run = m.runs.find((r) => r.run_id === req.run_id) ?? (() => { throw fail('not_found', `Unknown run: ${req.run_id}`); })();
       const all = m.journals.get(run.run_id) ?? [];
-      return { run: structuredClone(run), total: all.length, entries: structuredClone(all.slice(req.offset ?? 0, (req.offset ?? 0) + (req.limit ?? 100))) };
+      const page = structuredClone(all.slice(req.offset ?? 0, (req.offset ?? 0) + (req.limit ?? 100)));
+      // Restore pre-check, as the engine does: an entry whose place is taken again (mock flag).
+      const occupied = page.filter((e) => e.state === 'done' && e.occupied).map((e) => e.id);
+      return { run: structuredClone(run), total: all.length, entries: page, occupied };
     },
     undo_last: () => {
       const run = m.runs.find((r) => r.undoable);

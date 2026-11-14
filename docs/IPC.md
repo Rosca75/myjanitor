@@ -85,7 +85,10 @@ Format: **request type** → **response type**. Examples of every type are in §
 ### `app_info`
 No request → `AppInfo`. Version, platform (`windows`/`linux`), folders, portable
 mode, elevation, and whether the undo journal is persistent (if `false`, show a
-warning that History will not survive a restart).
+warning that History will not survive a restart). `capabilities` lists the platform
+features this build can use here (`recycle_bin`, `freedesktop_trash`,
+`wof_compression`, `btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
+`context_menu`, `os_schedules`); the UI labels "Windows only" from it.
 
 ### `scope_get`
 No request → `ScanScope`. The session scope (scope chips).
@@ -269,7 +272,13 @@ No request → `Plan`.
 ### `plan_add_step`
 `PlanAddStepRequest` → `Plan`. "+ Add" on a card. `action` and `params` default
 to the opportunity's. Fails with `conflict` if already in the plan and
-`unsupported` for disabled opportunities. Emits `plan://changed`.
+`unsupported` for disabled opportunities. Emits `plan://changed`. A step's
+`params` are the single source of truth for an optimiser: values inside an
+`optimise` action, then `params`, are merged into the step and copied into the
+action, and `lossy` follows them (a lossy preset makes the step `lossy_opt_in`).
+The same holds for `plan_update_step`. Checklist codes include
+`compatibility_warnings` (selected rows carrying a `warning` column, e.g. a game
+library under transparent compression); the dry run lists those warnings per step.
 
 ```json PlanAddStepRequest
 {"opportunity_id":"det:dev_artefacts"}
@@ -366,6 +375,9 @@ through `cancelling`. Items already applied stay applied (and undoable).
 
 ### `history_run_detail`
 `RunDetailRequest` → `HistoryRunDetail`. Journal entries of one run (paged).
+`occupied` is the restore pre-check: ids of entries of this page whose original
+location is taken right now (a restore would be refused with `conflict`); the UI
+says so and disables Restore for them before the user clicks.
 
 ```json RunDetailRequest
 {"run_id":1794582245123,"offset":0,"limit":100}
@@ -551,7 +563,7 @@ Every example below is checked against the Rust types. Field order is free.
 #### AppInfo
 
 ```json AppInfo
-{"name":"MyJanitor","version":"0.1.0","platform":"windows","bundle_id":"com.myjanitor.app","portable":false,"data_dir":"C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor","cache_dir":"C:\\Users\\Michel\\AppData\\Local\\MyJanitor\\cache","elevated":false,"journal_persistent":true}
+{"name":"MyJanitor","version":"0.1.0","platform":"windows","bundle_id":"com.myjanitor.app","portable":false,"data_dir":"C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor","cache_dir":"C:\\Users\\Michel\\AppData\\Local\\MyJanitor\\cache","elevated":false,"journal_persistent":true,"capabilities":["recycle_bin","wof_compression","cloud_dehydrate","hardlinks","context_menu","os_schedules"]}
 ```
 
 #### ScanScope
@@ -783,7 +795,7 @@ it undoable) and, in undo runs, `undo_of` (the entry id this record reverses).
 #### HistoryRunDetail
 
 ```json HistoryRunDetail
-{"run":{"run_id":1794582245123,"kind":"apply","title":"Plan · 1 step","started":1794582245000000000,"steps":["Temporary files"],"items":1,"done":1,"failed":0,"undone":0,"bytes_saved":1200,"undoable":true},"total":1,"entries":[{"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"at":1794582246000000000,"state":"done","action":"quarantine","target":"file","original":"/home/me/a.tmp","original_stamp":{"size":1200,"mtime":1690000000000000000},"bytes_before":1200,"bytes_after":0,"retained_at":"/home/me/.local/share/myjanitor/quarantine/1794582245123/1794582245123000001/a.tmp","reversible":true}]}
+{"run":{"run_id":1794582245123,"kind":"apply","title":"Plan · 1 step","started":1794582245000000000,"steps":["Temporary files"],"items":1,"done":1,"failed":0,"undone":0,"bytes_saved":1200,"undoable":true},"total":1,"entries":[{"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"at":1794582246000000000,"state":"done","action":"quarantine","target":"file","original":"/home/me/a.tmp","original_stamp":{"size":1200,"mtime":1690000000000000000},"bytes_before":1200,"bytes_after":0,"retained_at":"/home/me/.local/share/myjanitor/quarantine/1794582245123/1794582245123000001/a.tmp","reversible":true}],"occupied":[]}
 ```
 
 #### QuarantineInfo
@@ -810,7 +822,7 @@ Every field is optional on input (defaults shown here); unknown fields are
 ignored. `type_groups` are the editable file-type groups (CLN-FLT-02).
 
 ```json Settings
-{"version":1,"general":{"undo_days":30,"quarantine_days":30,"default_originals":{"policy":"recycle_bin"},"light_copy_suffix":"_light"},"scan":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false},"safety":{"protected_paths":[],"exclusions":[],"skip_signed":true,"skip_labelled":true,"skip_encrypted":true,"synced_folder_warning":true},"optimise":{"lossless_only":true,"keep_if_not_smaller":true,"preserve_timestamps":true,"preserve_permissions":true,"preserve_ads":true},"performance":{"threads":0,"parallel_jobs":0,"low_memory":false,"cpu_priority":"normal"},"tool_paths":{},"integration":{"context_menu":false,"fs_compression_watcher":false,"watched_folders":[]},"type_groups":{"installers":["msi","exe","iso"]}}
+{"version":1,"general":{"undo_days":30,"quarantine_days":30,"default_originals":{"policy":"recycle_bin"},"light_copy_suffix":"_light","kept_languages":["en","fr"]},"scan":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false},"safety":{"protected_paths":[],"exclusions":[],"skip_signed":true,"skip_labelled":true,"skip_encrypted":true,"synced_folder_warning":true},"optimise":{"lossless_only":true,"keep_if_not_smaller":true,"preserve_timestamps":true,"preserve_permissions":true,"preserve_ads":true},"performance":{"threads":0,"parallel_jobs":0,"low_memory":false,"cpu_priority":"normal"},"tool_paths":{},"integration":{"context_menu":false,"fs_compression_watcher":false,"watched_folders":[]},"type_groups":{"installers":["msi","exe","iso"]}}
 ```
 
 ```json SettingsSetRequest
