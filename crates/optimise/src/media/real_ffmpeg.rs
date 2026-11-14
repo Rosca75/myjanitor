@@ -252,3 +252,82 @@ fn cancel_stops_a_running_encode() {
     assert_eq!(r.unwrap_err(), mj_core::Error::Cancelled);
     assert!(!dst.exists());
 }
+
+/// F-03 (adversarial review): two encodes sharing one temp dir used to write the same
+/// fixed scratch name, so one failed and the other returned an interleaved file that
+/// passed every check. Each encode now has a private scratch folder: both succeed and
+/// each output is exactly what the encode produces alone.
+#[test]
+fn f03_concurrent_encodes_sharing_a_temp_dir_never_exchange_outputs() {
+    let Some((exe, tools)) = ffmpeg() else { return };
+    let d = TempDir::new("ff-f03").unwrap();
+    let gen = |name: &str, src: &str| {
+        let out = d.join(name);
+        let mut a = args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src, "-t", "8", "-ac", "2"]);
+        a.extend(args(["-ar", "44100"]));
+        a.push(out.clone().into_os_string());
+        run(&exe, &a, &RunOptions::default()).unwrap().ensure_success("ffmpeg").unwrap();
+        out
+    };
+    let a = gen("a_tone.wav", "sine=frequency=440:sample_rate=44100");
+    let b = gen("b_noise.wav", "anoisesrc=color=pink:sample_rate=44100:seed=7");
+    let p = ParamValues::default();
+    let (ta, tb) = (TempDir::new("ff-f03-ta").unwrap(), TempDir::new("ff-f03-tb").unwrap());
+    let (ra, rb) = (d.join("ref_a.out"), d.join("ref_b.out"));
+    job_run(&Audio, &a, &ra, &ta, &p, &tools).unwrap();
+    job_run(&Audio, &b, &rb, &tb, &p, &tools).unwrap();
+    // Ogg streams carry a random serial number, so compare the decoded audio.
+    let pcm = |f: &Path| {
+        let mut a = args(["-nostdin", "-loglevel", "error", "-i"]);
+        a.push(f.as_os_str().to_owned());
+        a.extend(args(["-f", "md5", "-"]));
+        let o = run(&exe, &a, &RunOptions::default()).unwrap();
+        o.ensure_success("ffmpeg").unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let (ref_a, ref_b) = (pcm(&ra), pcm(&rb));
+    assert_ne!(ref_a, ref_b);
+    let shared = TempDir::new("ff-f03-shared").unwrap();
+    for i in 0..4 {
+        let (da, db) = (d.join(format!("a{i}.out")), d.join(format!("b{i}.out")));
+        let (ea, eb) = std::thread::scope(|s| {
+            let h1 = s.spawn(|| job_run(&Audio, &a, &da, &shared, &p, &tools));
+            let h2 = s.spawn(|| job_run(&Audio, &b, &db, &shared, &p, &tools));
+            (h1.join().unwrap(), h2.join().unwrap())
+        });
+        assert!(ea.is_ok() && eb.is_ok(), "round {i}: {ea:?} {eb:?}");
+        assert_eq!(pcm(&da), ref_a, "round {i}: output of a is a's own encoding");
+        assert_eq!(pcm(&db), ref_b, "round {i}: output of b is b's own encoding");
+    }
+    assert_eq!(std::fs::read_dir(shared.path()).unwrap().count(), 0, "every private scratch folder was removed");
+}
+
+/// F-17: a "video" that is really an HLS or concat playlist naming another local file is
+/// refused before ffmpeg reads it, and every input is opened with a local-files-only
+/// protocol whitelist and a forced demuxer.
+#[test]
+fn f17_playlists_posing_as_media_are_never_followed() {
+    let d = TempDir::new("ff-f17").unwrap();
+    let secret = d.write("secret.wav", b"RIFF....WAVEfmt private recording").unwrap();
+    let hls = d
+        .write("holiday.mp4", format!("#EXTM3U\n#EXTINF:1,\n{}\n#EXT-X-ENDLIST\n", secret.display()).as_bytes())
+        .unwrap();
+    let concat =
+        d.write("talk.m4a", format!("ffconcat version 1.0\nfile '{}'\n", secret.display()).as_bytes()).unwrap();
+    for f in [&hls, &concat] {
+        assert!(super::ffmpeg::require_container(f).is_err());
+        assert!(super::ffmpeg::demuxer_of(f).is_none());
+        let a = super::ffmpeg::input_args(f);
+        assert_eq!(a[..2], [std::ffi::OsString::from("-protocol_whitelist"), "file".into()]);
+    }
+    let p = ParamValues::default();
+    let tools = ffmpeg().map(|(_, t)| t).unwrap_or_default();
+    for (o, f) in [(&Audio as &dyn Optimiser, &concat), (&Video as &dyn Optimiser, &hls)] {
+        let dst = d.join("out.bin");
+        let r = job_run(o, f, &dst, &d, &p, &tools);
+        assert!(matches!(r, Err(mj_core::Error::Unsupported { .. })), "{r:?}");
+        assert!(!dst.exists());
+    }
+    let wav = tone_silence_tone(&d);
+    assert_eq!(super::ffmpeg::demuxer_of(&wav), Some("wav"));
+}

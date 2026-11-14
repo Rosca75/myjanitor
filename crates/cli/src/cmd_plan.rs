@@ -203,7 +203,7 @@ fn apply_loaded(ctx: &Ctx, a: &Parsed, policy: Option<OriginalsPolicy>) -> Res {
     let lossy: Vec<_> = plan.steps.iter().filter(|s| s.safety == SafetyClass::LossyOptIn).collect();
     let perm: Vec<_> = plan.steps.iter().filter(|s| s.safety == SafetyClass::Permanent).collect();
     if !lossy.is_empty() && !a.flag("confirm-lossy") {
-        return Err(Fail::Usage(format!("the plan has lossy step(s) ({}): they re-encode files. Add --confirm-lossy to run them, or remove them with `plan remove`.", lossy.iter().map(|s| s.title.as_str()).collect::<Vec<_>>().join(", "))));
+        return Err(Fail::Usage(format!("the plan has lossy step(s) ({}): they re-encode files or replace duplicates with hard links (which then share every later edit). Add --confirm-lossy to run them, or remove them with `plan remove`.", lossy.iter().map(|s| s.title.as_str()).collect::<Vec<_>>().join(", "))));
     }
     if !perm.is_empty() && !a.flag("confirm-permanent") {
         return Err(Fail::Usage(format!("the plan has permanent step(s) ({}): they cannot be undone. Add --confirm-permanent to run them, or remove them with `plan remove`.", perm.iter().map(|s| s.title.as_str()).collect::<Vec<_>>().join(", "))));

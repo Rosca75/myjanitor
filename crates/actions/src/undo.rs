@@ -347,12 +347,21 @@ fn undo_output(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
         return Err(Error::InvalidInput("no output recorded".into()));
     };
     let retained = e.retained_at.is_some() || e.trash.is_some();
-    // The output must still be what MyJanitor wrote (size check).
+    // F-06: the output must still be exactly what MyJanitor wrote (content hash; entries
+    // journalled before the hash existed fall back to the size). An edit made since,
+    // even one that keeps the size, is never discarded: the undo refuses and says so.
     if fsops::exists(&output) {
-        let size = std::fs::symlink_metadata(&output).map(|m| m.len()).unwrap_or(0);
-        if size != e.bytes_after && !(e.action == ActionKind::Archive && !retained) {
+        let changed = match &e.output_sha256 {
+            Some(want) => fsops::hash_file(&output).map(|h| h.sha256 != *want).unwrap_or(true),
+            None => {
+                let size = std::fs::symlink_metadata(&output).map(|m| m.len()).unwrap_or(0);
+                size != e.bytes_after && !(e.action == ActionKind::Archive && !retained)
+            }
+        };
+        if changed {
             return Err(Error::Conflict(format!(
-                "{} changed after it was written; nothing was changed",
+                "{} changed after it was written; nothing was changed (restore the original by hand if you still \
+                 want it)",
                 output.display()
             )));
         }

@@ -181,6 +181,9 @@ impl Engine {
                     None => req.sub_group.is_none() || c.sub_group == req.sub_group,
                 })
                 .filter(|c| !req.selected || blocked_reason(c, skip).is_none())
+                // F-02: "Select all" (no ids) never selects the copy a group keeps; only an
+                // explicit pick of that row does (and apply still keeps one per group).
+                .filter(|c| !(req.selected && req.ids.is_none() && c.badges.contains(Badges::KEEPER)))
                 .map(|c| (c.id, c.default_selected))
                 .collect();
             for (id, def) in targets {

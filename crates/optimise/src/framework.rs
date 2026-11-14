@@ -122,15 +122,13 @@ pub fn optimise_item(
     output: OutputMode,
     originals: OriginalsPolicy,
 ) -> ActionItem {
-    ActionItem {
-        path: path.to_path_buf(),
-        target: TargetKind::File,
-        action: Action::Optimise { optimiser, params, output, originals, keep_if_not_smaller: true },
-        link_source: None,
-        root: root.to_path_buf(),
+    ActionItem::new(
+        path.to_path_buf(),
+        TargetKind::File,
+        Action::Optimise { optimiser, params, output, originals, keep_if_not_smaller: true },
+        root.to_path_buf(),
         expected,
-        expected_id: None,
-    }
+    )
 }
 
 /// Light-copy output mode with the default suffix.
@@ -453,14 +451,19 @@ pub fn optimise_one(
     ctx: &BatchContext<'_>,
     params: &ParamValues,
 ) -> Result<OptimiseOutput> {
-    let scratch = ctx.work_dir.join("scratch");
-    let _ = std::fs::create_dir_all(&scratch);
+    // F-16: a destination that already exists is someone else's: refuse rather than
+    // let a failure below delete it.
+    if std::fs::symlink_metadata(dst).is_ok() {
+        return Err(Error::Conflict(format!("{} already exists; nothing was overwritten", dst.display())));
+    }
+    // F-03: one private scratch folder per file, never a folder shared by the batch.
+    let scratch = mj_core::scratch::ScratchDir::new(&ctx.work_dir.join("scratch"), "opt")?;
     let job = OptimiseJob {
         src,
         dst,
         params,
         tools: ctx.tools,
-        temp_dir: &scratch,
+        temp_dir: scratch.path(),
         cancel: ctx.cancel,
         progress: ctx.progress,
     };
@@ -475,7 +478,11 @@ pub fn optimise_one(
             _ => Err(Error::Internal("the optimiser reported success but wrote no file".into())),
         },
         Err(e) => {
-            let _ = std::fs::remove_file(dst);
+            // Not when the optimiser failed because `dst` appeared meanwhile (its
+            // `create_new` lost a race): that file is not ours.
+            if !matches!(&e, Error::Io { kind: "already_exists", .. } | Error::Conflict(_)) {
+                let _ = std::fs::remove_file(dst);
+            }
             Err(e)
         }
     }

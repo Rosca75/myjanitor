@@ -163,13 +163,15 @@ impl Optimiser for JpegLossless {
         if let (true, Ok(exe)) =
             (job.params.bool("optimise_huffman", true), crate::tools::require(job.tools, "jpegtran"))
         {
-            let (stage1, stage2) = (job.temp_dir.join("stage1.jpg"), job.temp_dir.join("stage2.jpg"));
-            std::fs::write(&stage1, &best).map_err(|e| Error::io(&stage1, e))?;
+            // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
+            let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "jpegtran")?;
+            let (stage1, stage2) = (scratch.join("stage1.jpg"), scratch.join("stage2.jpg"));
+            common::write_new(&stage1, &best)?;
             let args = jpegtran_args(&stage1, &stage2, job.params.bool("progressive", true));
             let o = run(
                 exe,
                 &args,
-                &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), ..Default::default() },
+                &RunOptions { cancel: Some(job.cancel), cwd: Some(scratch.path()), ..Default::default() },
             )?;
             if o.success() {
                 let cand = std::fs::read(&stage2).map_err(|e| Error::io(&stage2, e))?;

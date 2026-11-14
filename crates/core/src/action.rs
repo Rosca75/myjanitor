@@ -184,7 +184,12 @@ impl Action {
             Action::Copy { .. } | Action::Dehydrate | Action::FsCompress { .. } | Action::FsDecompress => {
                 SafetyClass::Reversible
             }
-            Action::Hardlink | Action::Reflink => SafetyClass::Reversible,
+            // F-07: after linking, the duplicate and its keeper are one file: an in-place
+            // edit through either name changes both, and the duplicate's own content can then
+            // never be restored. That is an opt-in with confirmation, never unattended.
+            Action::Hardlink => SafetyClass::LossyOptIn,
+            // A reflink is a copy-on-write clone: an edit of either copy leaves the other.
+            Action::Reflink => SafetyClass::Reversible,
             Action::PermanentDelete => SafetyClass::Permanent,
             Action::Optimise { output: OutputMode::LightCopy { .. }, .. } => SafetyClass::LightCopy,
             Action::Optimise { originals, .. } | Action::Archive { originals, .. } => {
@@ -222,6 +227,59 @@ pub struct ActionItem {
     /// with the same size and mtime is still detected as changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_id: Option<crate::entry::FileId>,
+    /// F-01: the folder is a regenerable artefact its detector owns as a whole
+    /// (`node_modules`, build output, a cache): version-control metadata inside it may go
+    /// with it. Every other protected path below a folder makes the action engine refuse it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owned_tree: bool,
+    /// F-02: for a removal of a group member (duplicates, similar images, versions...),
+    /// the member that must survive. The action engine refuses the removal unless that
+    /// copy still exists and still matches right before acting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<KeepCopy>,
+    /// F-04: for a folder, its subtree as the scan saw it. The action engine refuses
+    /// (`changed`) a folder item without one, or whose subtree differs now, for every
+    /// action except Copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_tree: Option<crate::entry::TreeStamp>,
+}
+
+/// The group member that must survive the removal of the others (F-02).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeepCopy {
+    #[serde(with = "crate::pathutil::serde_path")]
+    pub path: PathBuf,
+    /// Its stamp at scan time.
+    pub expected: FileStamp,
+    /// Its file id at scan time, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_id: Option<crate::entry::FileId>,
+    /// Byte-identical group: the kept copy must still hold exactly the removed item's
+    /// content (full byte comparison). Otherwise it must still match its scan stamp.
+    pub identical: bool,
+}
+
+impl ActionItem {
+    /// An item with no link source, no scan file id and no optional checks; callers set
+    /// the optional fields they know.
+    pub fn new(path: PathBuf, target: TargetKind, action: Action, root: PathBuf, expected: FileStamp) -> Self {
+        ActionItem {
+            path,
+            target,
+            action,
+            link_source: None,
+            root,
+            expected,
+            expected_id: None,
+            owned_tree: false,
+            keep: None,
+            expected_tree: None,
+        }
+    }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[cfg(test)]

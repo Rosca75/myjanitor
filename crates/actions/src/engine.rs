@@ -117,6 +117,8 @@ pub fn requires_confirmation(action: &Action) -> bool {
     matches!(
         action,
         Action::PermanentDelete
+            // F-07: a hard link shares content with its keeper from then on.
+            | Action::Hardlink
             | Action::Optimise { originals: OriginalsPolicy::Delete, output: OutputMode::Replace, .. }
             | Action::Archive { originals: OriginalsPolicy::Delete, keep_sources: false, .. }
     )
@@ -236,6 +238,8 @@ fn new_entry(ctx: &ExecContext<'_>, item: &ActionItem, id: EntryId, kind: Action
         error: None,
         original_mode: fsops::file_mode(&item.path),
         previous_compression: None,
+        output_sha256: None,
+        retention_days: None,
         undo_of: None,
     }
 }
@@ -271,6 +275,27 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
     if matches!(item.action, Action::None) {
         return Err(Error::InvalidInput("this step has no action".into()));
     }
+    // F-10: online-only state is re-read now, before any content is read (a read would
+    // download the file). Removing or moving a placeholder out of its sync root deletes
+    // the cloud copy and leaves nothing to restore; reading it downloads it.
+    let touches_content = !matches!(item.action, Action::Dehydrate | Action::Copy { .. });
+    if touches_content && md.kind == EntryKind::File && md.is_online_only() {
+        return Err(online_only(&item.path, 1));
+    }
+    // F-01: a folder is acted on as a whole, so everything below it must be acceptable
+    // too (protected paths, `.git`, `.ssh`, MyJanitor's own folders, mounted volumes).
+    // A copy changes nothing at the source and is exempt.
+    if md.kind == EntryKind::Dir && !matches!(item.action, Action::Copy { .. }) {
+        let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+        if touches_content && walk.online_only > 0 {
+            return Err(online_only(&item.path, walk.online_only));
+        }
+        // F-04: the folder must still hold exactly what the scan saw (the user reviewed
+        // that); a folder item without a scan stamp of its subtree is not acted on.
+        if item.expected_tree != Some(walk.stamp()) {
+            return Err(Error::Changed(item.path.clone()));
+        }
+    }
     if requires_confirmation(&item.action) && !opts.confirmed {
         return Err(Error::ConfirmationRequired(format!("{} needs confirmation", item.action.kind().label_text())));
     }
@@ -290,6 +315,87 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
     Ok(md)
 }
 
+/// The refusal for online-only content (F-10).
+fn online_only(path: &Path, n: u64) -> Error {
+    Error::Conflict(format!(
+        "skipped: {} holds {n} online-only file(s); removing or reading them would delete or download the \
+         cloud copy (make them available offline first, or choose \"free up space\")",
+        path.display()
+    ))
+}
+
+/// True for actions after which the item's content is gone from the scanned tree (the
+/// group invariant of F-02 applies to them).
+fn removes_copy(action: &Action) -> bool {
+    matches!(action, Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete)
+}
+
+/// F-02: the group member that must survive this removal still exists and still matches.
+/// `full` compares content byte for byte for an identical group (else the scan stamp);
+/// without `full` (dry runs) the scan stamp and file id are compared only. Returns the
+/// kept copy's fresh metadata.
+fn check_keep(ctx: &ExecContext<'_>, item: &ActionItem, full: bool) -> Result<Option<mj_core::FileEntry>> {
+    let Some(keep) = item.keep.as_ref().filter(|_| removes_copy(&item.action)) else {
+        return Ok(None);
+    };
+    let gone = |why: &str| {
+        Err(Error::Conflict(format!(
+            "skipped: {} is the copy kept of this group and {why}; nothing was removed",
+            keep.path.display()
+        )))
+    };
+    if mj_core::pathutil::path_key(&keep.path) == mj_core::pathutil::path_key(&item.path) {
+        return gone("cannot be removed itself");
+    }
+    let md = match ctx.platform.metadata(&keep.path) {
+        Ok(m) => m,
+        Err(_) => return gone("no longer exists"),
+    };
+    if md.kind != EntryKind::File {
+        return gone("is no longer a regular file");
+    }
+    if let (Some(a), Some(b)) = (keep.expected_id, md.file_id) {
+        if a != b {
+            return gone("was replaced since the scan");
+        }
+    }
+    let item_id = ctx.platform.metadata(&item.path).ok().and_then(|m| m.file_id).or(item.expected_id);
+    if let (Some(a), Some(b)) = (item_id, md.file_id) {
+        if a == b {
+            return gone("is the same file (a hard link)");
+        }
+    }
+    if keep.identical && full {
+        match fsops::compare_files(&keep.path, &item.path) {
+            Ok(Some(_)) => {}
+            Ok(None) => return gone("no longer has the same content"),
+            Err(_) => return gone("cannot be read"),
+        }
+    } else if !crate::guard::stamp_matches(keep.expected, &md) {
+        return gone("changed since the scan");
+    }
+    Ok(Some(md))
+}
+
+/// Re-stat of the kept copy right before acting: still the file verified by [`check_keep`].
+fn restat_keep(ctx: &ExecContext<'_>, item: &ActionItem, verified: &mj_core::FileEntry) -> Result<()> {
+    let Some(keep) = &item.keep else { return Ok(()) };
+    let fresh = ctx.platform.metadata(&keep.path).map_err(|_| {
+        Error::Conflict(format!("skipped: {} (the copy kept) disappeared; nothing was removed", keep.path.display()))
+    })?;
+    if fresh.kind != EntryKind::File
+        || fresh.size != verified.size
+        || fresh.modified != verified.modified
+        || fresh.file_id != verified.file_id
+    {
+        return Err(Error::Conflict(format!(
+            "skipped: {} (the copy kept) changed; nothing was removed",
+            keep.path.display()
+        )));
+    }
+    Ok(())
+}
+
 trait KindLabel {
     fn label_text(self) -> &'static str;
 }
@@ -300,6 +406,7 @@ impl KindLabel for ActionKind {
             ActionKind::PermanentDelete => "Permanent delete",
             ActionKind::Optimise => "Deleting the originals of an optimisation",
             ActionKind::Archive => "Deleting the archived sources",
+            ActionKind::Hardlink => "Replacing duplicates with hard links",
             _ => "This action",
         }
     }
@@ -317,6 +424,12 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
         e.bytes_before = fsops::tree_size(&item.path);
         e.bytes_after = e.bytes_before;
     }
+    // F-02: never remove the last copy of a group; the copy kept is verified now (full
+    // comparison) and re-stat'ed right before acting.
+    let kept = match check_keep(ctx, item, true) {
+        Ok(k) => k,
+        Err(err) => return skip(ctx, e, err),
+    };
     // Audit hash (before acting; link actions compute it while verifying).
     if md.kind == EntryKind::File
         && md.size <= opts.audit_hash_limit
@@ -330,18 +443,18 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
     let undo_until = Some(now.add_days(i64::from(ctx.settings.general.undo_days)));
     match &item.action {
         Action::Trash => match opts.trash_route {
-            TrashRoute::Platform => act_retain(ctx, item, e, RetainPlan::Trash, undo_until),
+            TrashRoute::Platform => act_retain(ctx, item, e, RetainPlan::Trash, undo_until, kept.as_ref()),
             TrashRoute::Quarantine => {
                 let days = ctx.settings.general.quarantine_days;
-                quarantine_item(ctx, item, e, days, now)
+                quarantine_item(ctx, item, e, days, now, kept.as_ref())
             }
         },
-        Action::Quarantine { purge_after_days } => quarantine_item(ctx, item, e, *purge_after_days, now),
-        Action::PermanentDelete => act_retain(ctx, item, e, RetainPlan::Delete, None),
+        Action::Quarantine { purge_after_days } => quarantine_item(ctx, item, e, *purge_after_days, now, kept.as_ref()),
+        Action::PermanentDelete => act_retain(ctx, item, e, RetainPlan::Delete, None, kept.as_ref()),
         Action::Move { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, true, undo_until),
         Action::Copy { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, false, undo_until),
         Action::Hardlink | Action::Reflink => link_replace(ctx, item, e, undo_until),
-        Action::Dehydrate => simple_platform(ctx, item, e, undo_until, |p, path| p.dehydrate(path), 0),
+        Action::Dehydrate => dehydrate(ctx, item, e, undo_until),
         Action::FsCompress { algorithm } => fs_compress(ctx, item, e, *algorithm, undo_until),
         Action::FsDecompress => fs_decompress(ctx, item, e, undo_until),
         Action::Optimise { optimiser, params, output, originals, .. } => {
@@ -362,15 +475,28 @@ fn run_acted(
     act: impl FnOnce(&mut JournalEntry) -> Result<()>,
 ) -> Result<ItemOutcome> {
     record(ctx, &mut e, JournalState::Intent, None)?;
-    if let Err(err) = ctx.guard.restat(item, ctx.platform) {
+    // F-12 (narrowed, see the fixes notes): the ancestor walk (no link, junction or mount
+    // point between the root and the item, canonical parent inside the root) is repeated
+    // right before acting, not only at pre-flight.
+    let allow_link = matches!(item.action, Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete);
+    if let Err(err) =
+        ctx.guard.check(&item.path, ctx.platform, allow_link).and_then(|_| ctx.guard.restat(item, ctx.platform))
+    {
         e.reversible = false;
         record(ctx, &mut e, JournalState::Skipped, Some(&err))?;
         return Ok(outcome(&e, ItemStatus::Skipped, Some(&err)));
     }
+    e.error = None;
     match act(&mut e) {
         Ok(()) => {
-            record(ctx, &mut e, JournalState::Done, None)?;
-            Ok(outcome(&e, ItemStatus::Done, None))
+            // A completed action may carry a note (F-09: a cross-volume move that left
+            // part of its source behind); it is journalled with the `done` record.
+            let note = e.error.take();
+            e.state = JournalState::Done;
+            e.at = Timestamp::now();
+            e.error = note;
+            ctx.journal.append(&e)?;
+            Ok(ItemOutcome { error: e.error.clone(), ..outcome(&e, ItemStatus::Done, None) })
         }
         Err(err) => {
             let err = if safety::needs_elevation(&err, ctx.guard.protected()) {
@@ -402,15 +528,78 @@ fn act_retain(
     mut e: JournalEntry,
     plan: RetainPlan,
     undo_until: Option<Timestamp>,
+    kept: Option<&mj_core::FileEntry>,
 ) -> Result<ItemOutcome> {
     retain::note_plan(&mut e, &plan);
     run_acted(ctx, item, e, |e| {
+        if let Some(k) = kept {
+            restat_keep(ctx, item, k)?;
+        }
+        recheck_tree(ctx, item)?;
         e.reversible = !matches!(plan, RetainPlan::Delete);
-        retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now())?;
+        if matches!(plan, RetainPlan::Delete) && is_empty_folder_item(item) {
+            // F-04: an "empty folder" is removed with `remove_dir`, which fails rather
+            // than delete anything that appeared in it since the check.
+            std::fs::remove_dir(&item.path).map_err(|er| Error::io(&item.path, er))?;
+            if let Some(parent) = item.path.parent() {
+                let _ = mj_platform::action::sync_dir(parent);
+            }
+        } else {
+            retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now())?;
+        }
         e.bytes_after = 0;
         e.undo_deadline = if e.reversible { undo_until } else { None };
         Ok(())
     })
+}
+
+/// F-05: a backup folder for originals is a destination like any other: guarded (not
+/// protected, not one of MyJanitor's folders, not inside the item, also through links),
+/// and never inside the quarantine or the scratch folder, whose contents are purged.
+fn check_retain_plan(ctx: &ExecContext<'_>, item: &ActionItem, plan: &RetainPlan) -> Result<()> {
+    let RetainPlan::Backup { dest, .. } = plan else { return Ok(()) };
+    let parent = dest.parent().ok_or_else(|| Error::InvalidInput(format!("no folder: {}", dest.display())))?;
+    ctx.guard.check_destination(parent, &item.path)?;
+    for own in [ctx.quarantine_dir, ctx.temp_dir] {
+        if mj_core::pathutil::is_within(own, dest) {
+            return Err(Error::Protected(dest.clone()));
+        }
+        if let (Ok(a), Some(b)) = (std::fs::canonicalize(own), existing_canonical(parent)) {
+            if mj_core::pathutil::is_within(&a, &b) {
+                return Err(Error::Protected(dest.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The canonical form of `p`, resolved through its nearest existing ancestor.
+fn existing_canonical(p: &Path) -> Option<PathBuf> {
+    let mut cur = Some(p);
+    while let Some(c) = cur {
+        if let Ok(canon) = std::fs::canonicalize(c) {
+            return Some(canon.join(p.strip_prefix(c).unwrap_or(Path::new(""))));
+        }
+        cur = c.parent();
+    }
+    None
+}
+
+/// True for a folder item the scan saw empty.
+fn is_empty_folder_item(item: &ActionItem) -> bool {
+    item.target == TargetKind::Folder && item.expected_tree.is_some_and(|t| t.entries == 0)
+}
+
+/// F-04: right before acting on a folder, its subtree must still be what the scan saw.
+fn recheck_tree(ctx: &ExecContext<'_>, item: &ActionItem) -> Result<()> {
+    if item.target != TargetKind::Folder || matches!(item.action, Action::Copy { .. }) {
+        return Ok(());
+    }
+    let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+    if item.expected_tree != Some(walk.stamp()) {
+        return Err(Error::Changed(item.path.clone()));
+    }
+    Ok(())
 }
 
 fn quarantine_item(
@@ -419,8 +608,11 @@ fn quarantine_item(
     mut e: JournalEntry,
     days: u32,
     now: Timestamp,
+    kept: Option<&mj_core::FileEntry>,
 ) -> Result<ItemOutcome> {
     e.action = ActionKind::Quarantine;
+    // F-15: the purge honours this item's own retention.
+    e.retention_days = Some(days);
     let plan = match retain::plan(
         &OriginalsPolicy::Quarantine,
         TrashRoute::Quarantine,
@@ -434,7 +626,7 @@ fn quarantine_item(
     };
     // Undoable while the item is held: the shorter of the retention and the undo window.
     let until = now.add_days(i64::from(days.min(ctx.settings.general.undo_days)));
-    act_retain(ctx, item, e, plan, Some(until))
+    act_retain(ctx, item, e, plan, Some(until), kept)
 }
 
 /// Destination of a move / copy, keeping the structure below the scan root when asked.
@@ -489,12 +681,19 @@ fn move_or_copy(
         e.created = std::iter::once(target.clone()).chain(new_dirs.iter().cloned()).collect();
     }
     run_acted(ctx, item, e, |e| {
+        if is_move {
+            recheck_tree(ctx, item)?;
+        }
         e.reversible = true;
         if let Some(parent) = target.parent() {
             fsops::create_dirs(parent)?;
         }
         let r = if is_move {
-            fsops::move_item(&item.path, &target).map(|_| ())
+            fsops::move_item(&item.path, &target).map(|how| {
+                if let fsops::MoveHow::CopiedSourceLeft { left } = how {
+                    e.error = Some(fsops::left_behind_note(&item.path, &target, left).info());
+                }
+            })
         } else {
             fsops::copy_item_verified(&item.path, &target)
         };
@@ -605,6 +804,24 @@ fn simple_platform(
     })
 }
 
+/// F-20: a dehydration frees space only once the content is really no longer local; the
+/// fresh attributes say so (the platform already refuses when nothing was freed).
+fn dehydrate(
+    ctx: &ExecContext<'_>,
+    item: &ActionItem,
+    e: JournalEntry,
+    undo_until: Option<Timestamp>,
+) -> Result<ItemOutcome> {
+    run_acted(ctx, item, e, |e| {
+        ctx.platform.dehydrate(&item.path)?;
+        let online = ctx.platform.metadata(&item.path).map(|m| m.is_online_only()).unwrap_or(false);
+        e.reversible = undo_until.is_some();
+        e.undo_deadline = undo_until;
+        e.bytes_after = if online { 0 } else { e.bytes_before };
+        Ok(())
+    })
+}
+
 fn fs_compress(
     ctx: &ExecContext<'_>,
     item: &ActionItem,
@@ -666,7 +883,9 @@ fn optimise(
     }
     let replace = matches!(output, OutputMode::Replace);
     let plan = if replace {
-        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root) {
+        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root)
+            .and_then(|p| check_retain_plan(ctx, item, &p).map(|_| p))
+        {
             Ok(p) => Some(p),
             Err(err) => return skip(ctx, e, err),
         }
@@ -680,21 +899,32 @@ fn optimise(
     let preserve_times = ctx.settings.optimise.preserve_timestamps;
     let preserve_perms = ctx.settings.optimise.preserve_permissions;
     run_acted(ctx, item, e, |e| {
+        // F-03: the optimiser's intermediate files go to a folder this item created for
+        // itself (never a name shared with another job, a dry run or another process).
+        let scratch = mj_core::scratch::ScratchDir::new(ctx.temp_dir, &format!("apply-{}", e.id.0))?;
         let job = mj_core::OptimiseJob {
             src: &item.path,
             dst: &temp,
             params,
             tools: ctx.services.tools,
-            temp_dir: ctx.temp_dir,
+            temp_dir: scratch.path(),
             cancel: ctx.cancel,
             progress: &NullProgress,
         };
+        // F-16: the temp name must still be free right before the optimiser runs.
+        if fsops::exists(&temp) {
+            return Err(Error::Conflict(format!("{} exists; nothing was overwritten", temp.display())));
+        }
         let res = opt.optimise(&job);
+        drop(scratch);
         let cleanup = || {
             let _ = std::fs::remove_file(&temp);
         };
         let out = match res {
             Ok(o) => o,
+            // A `create_new` / no-replace refusal means the temp name was taken by someone
+            // else between the check and the write: that file is not ours to delete.
+            Err(err @ (Error::Io { kind: "already_exists", .. } | Error::Conflict(_))) => return Err(err),
             Err(err) => {
                 cleanup();
                 return Err(err);
@@ -711,6 +941,12 @@ fn optimise(
                 return Err(Error::Internal("the optimiser reported success but wrote no file".into()));
             }
         };
+        // F-03: the output must be a new, independent file this job wrote: not another
+        // name of the original (or of anything else) through a hard link.
+        if let Err(err) = output_is_independent(ctx, &temp, &item.path) {
+            cleanup();
+            return Err(err);
+        }
         // OPT-ENG-04: keep the original unless the output is smaller (cannot be disabled).
         // A privacy rewrite (GPS / metadata strip) may be the same size, never larger.
         if !keeps_output(&out, e.bytes_before, new_size) {
@@ -737,6 +973,12 @@ fn optimise(
         }
         if preserve_times {
             let _ = fsops::set_mtime(&temp, item.expected.mtime);
+        }
+        // F-11: whatever wrote it (an in-house rewriter or ffmpeg, cwebp, avifenc...), the
+        // output is on disk before the original moves or is replaced.
+        if let Err(err) = fsops::sync_output(&temp) {
+            cleanup();
+            return Err(err);
         }
         e.bytes_after = new_size;
         match &plan {
@@ -804,6 +1046,12 @@ fn optimise(
                 e.reversible = true;
             }
         }
+        // F-11: the directory entries of the new name (and of the moved original) too.
+        if let Some(parent) = item.path.parent() {
+            let _ = mj_platform::action::sync_dir(parent);
+        }
+        // F-06: undo discards this output only while it still has this content.
+        e.output_sha256 = e.created.first().and_then(|p| fsops::hash_file(p).ok()).map(|h| h.sha256);
         e.undo_deadline = if e.reversible { undo_until } else { None };
         Ok(())
     })
@@ -840,7 +1088,9 @@ fn archive(
     let plan = if keep_sources {
         None
     } else {
-        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root) {
+        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root)
+            .and_then(|p| check_retain_plan(ctx, item, &p).map(|_| p))
+        {
             Ok(p) => Some(p),
             Err(err) => return skip(ctx, e, err),
         }
@@ -861,7 +1111,15 @@ fn archive(
             cancel: ctx.cancel,
             progress: &NullProgress,
         };
-        let size = archiver.create(&job).and_then(|s| archiver.verify(&dst, &sources, &base, ctx.cancel).map(|_| s));
+        // F-16: a failed `create` never wrote `dst` (the archiver builds elsewhere and moves
+        // in without replacing); if it failed because `dst` appeared meanwhile, that file is
+        // someone else's and is left alone. Only an archive this run created is removed.
+        let size = archiver.create(&job)?;
+        let size = archiver
+            .verify(&dst, &sources, &base, ctx.cancel)
+            .map(|_| size)
+            // F-04: the sources go only if they still are what was scanned and archived.
+            .and_then(|s| if plan.is_some() { recheck_tree(ctx, item).map(|_| s) } else { Ok(s) });
         let size = match size {
             Ok(s) => s,
             Err(err) => {
@@ -869,8 +1127,18 @@ fn archive(
                 return Err(err);
             }
         };
+        // F-11: the archive is on disk before its sources go.
+        if let Err(err) = fsops::sync_output(&dst) {
+            let _ = std::fs::remove_file(&dst);
+            return Err(err);
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = mj_platform::action::sync_dir(parent);
+        }
         e.bytes_after = size;
         e.reversible = true;
+        // F-06: undo removes the archive only while it still has this content.
+        e.output_sha256 = fsops::hash_file(&dst).ok().map(|h| h.sha256);
         if let Some(p) = &plan {
             if let Err(err) = retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now()) {
                 let _ = std::fs::remove_file(&dst);
@@ -926,6 +1194,21 @@ pub fn dry_run_with(ctx: &ExecContext<'_>, items: &[ActionItem], opts: &ExecOpti
     Ok(r)
 }
 
+/// F-03: an optimiser output is replaced into place only when it is a regular file with
+/// a single name that is not the original itself.
+fn output_is_independent(ctx: &ExecContext<'_>, output: &Path, original: &Path) -> Result<()> {
+    let md = ctx.platform.metadata(output)?;
+    let orig = ctx.platform.metadata(original)?;
+    let shared = md.links.is_some_and(|n| n > 1) || (md.file_id.is_some() && md.file_id == orig.file_id);
+    if md.kind != EntryKind::File || shared {
+        return Err(Error::Conflict(format!(
+            "{} is not a new file written by this job; nothing was replaced",
+            output.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Keep-if-not-smaller (OPT-ENG-04): an output is kept only when strictly smaller, or the
 /// same size for a privacy rewrite (GPS / metadata strip).
 fn keeps_output(out: &mj_core::OptimiseOutput, before: u64, after: u64) -> bool {
@@ -935,6 +1218,7 @@ fn keeps_output(out: &mj_core::OptimiseOutput, before: u64, after: u64) -> bool 
 /// (bytes before, bytes after, confidence) of one item, read-only.
 fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Result<(u64, u64, Confidence)> {
     let md = preflight(ctx, opts, item)?;
+    check_keep(ctx, item, false)?;
     let before = if md.kind == EntryKind::Dir { fsops::tree_size(&item.path) } else { md.reclaimable() };
     match &item.action {
         Action::Copy { dest, keep_structure } => {
@@ -962,21 +1246,25 @@ fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Resu
                 .iter()
                 .find(|o| o.info().id == *optimiser)
                 .ok_or_else(|| Error::not_implemented(format!("optimiser {optimiser:?}")))?;
-            std::fs::create_dir_all(ctx.temp_dir).map_err(|e| Error::io(ctx.temp_dir, e))?;
+            // F-03: the measured output and the optimiser's own intermediate files live in a
+            // folder this dry run created for itself; it is removed with everything in it.
+            let scratch = mj_core::scratch::ScratchDir::new(ctx.temp_dir, &format!("dry-run-{}", ctx.job_id.0))?;
             let ext = item.path.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default();
-            let dst = fsops::unique_path(&ctx.temp_dir.join(format!("dry-run-{}{ext}", ctx.job_id.0)));
+            let dst = scratch.join(format!("output{ext}"));
+            let work = mj_core::scratch::ScratchDir::new(scratch.path(), "work")?;
             let job = mj_core::OptimiseJob {
                 src: &item.path,
                 dst: &dst,
                 params,
                 tools: ctx.services.tools,
-                temp_dir: ctx.temp_dir,
+                temp_dir: work.path(),
                 cancel: ctx.cancel,
                 progress: &NullProgress,
             };
             let res = opt.optimise(&job);
-            let size = std::fs::metadata(&dst).map(|m| m.len()).ok();
-            let _ = std::fs::remove_file(&dst);
+            let size = std::fs::symlink_metadata(&dst).ok().filter(|m| m.is_file()).map(|m| m.len());
+            drop(work);
+            drop(scratch);
             let out = res?;
             if let Some(reason) = &out.skipped {
                 return Err(Error::Conflict(format!("skipped: {reason}")));

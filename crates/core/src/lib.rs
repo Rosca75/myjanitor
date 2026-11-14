@@ -47,6 +47,7 @@ pub mod report;
 pub mod rule;
 pub mod safety;
 pub mod scope;
+pub mod scratch;
 pub mod settings;
 pub mod size;
 #[cfg(any(test, feature = "testutil"))]
@@ -54,7 +55,9 @@ pub mod testutil;
 pub mod time;
 pub mod tools;
 
-pub use action::{Action, ActionItem, ActionKind, ArchiveFormat, FsCompressAlgo, OriginalsPolicy, OutputMode};
+pub use action::{
+    Action, ActionItem, ActionKind, ArchiveFormat, FsCompressAlgo, KeepCopy, OriginalsPolicy, OutputMode,
+};
 pub use badge::Badges;
 pub use cancel::CancelToken;
 pub use candidate::{
@@ -62,7 +65,7 @@ pub use candidate::{
     Source, TargetKind,
 };
 pub use detector::{DetectContext, Detector, DetectorId, DetectorInfo, PlatformSupport};
-pub use entry::{Attributes, EntryKind, FileEntry, FileId, FileStamp};
+pub use entry::{Attributes, EntryKind, FileEntry, FileId, FileStamp, TreeStamp};
 pub use error::{Error, ErrorInfo, Result};
 pub use estimate::{Confidence, Estimate};
 pub use fingerprint::{FingerprintStore, Fingerprints, MemoryFingerprintStore, NoFingerprintStore};

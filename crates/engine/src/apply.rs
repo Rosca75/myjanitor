@@ -18,9 +18,9 @@ use std::sync::Arc;
 
 use mj_actions::{ExecContext, ExecOptions, Guard, ProtectedPaths, Services};
 use mj_core::{
-    lock, Action, ActionItem, Badges, CancelToken, Confidence, Error, Estimate, FileStamp, ItemStatus, Job, JobId,
-    JobKind, JobOutcome, JournalState, OriginalsPolicy, PlanStep, ProgressSink, Result, RunId, RunKind, RunRecord,
-    SafetyClass, StepConfirmation, StepId, TargetKind, Timestamp,
+    lock, Action, ActionItem, Badges, CancelToken, Confidence, Error, Estimate, FileStamp, GroupKind, ItemStatus, Job,
+    JobId, JobKind, JobOutcome, JournalState, KeepCopy, OriginalsPolicy, PlanStep, ProgressSink, Result, RunId,
+    RunKind, RunRecord, SafetyClass, StepConfirmation, StepId, TargetKind, Timestamp,
 };
 
 use crate::api::{
@@ -121,7 +121,15 @@ impl Engine {
             work.warnings.push("Review-only step: nothing is changed".into());
             return Ok(work);
         }
-        let (mut online, mut no_keeper, mut outside) = (0u64, 0u64, 0u64);
+        let (mut online, mut no_keeper, mut outside, mut last_copy) = (0u64, 0u64, 0u64, 0u64);
+        // F-02: removing group members (duplicates, similar images, versions...) always
+        // leaves one member of each group; a group whose every member is selected is
+        // skipped whole and reported.
+        let survivors = if crate::results::removes_copy(&action) {
+            crate::results::group_survivors(rec, skip)
+        } else {
+            Default::default()
+        };
         let mut warned: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         let locked = rec.candidates.iter().filter(|c| !(c.badges & skip).is_empty()).count();
         for c in rec.candidates.iter().filter(|c| is_selected(rec, c, skip)) {
@@ -144,6 +152,22 @@ impl Engine {
             } else {
                 None
             };
+            let keep = match c.group.and_then(|g| survivors.get(&g).map(|s| (g, s))) {
+                Some((_, None)) => {
+                    last_copy += 1;
+                    continue;
+                }
+                Some((g, Some(k))) => {
+                    let exact = rec.groups.iter().find(|x| x.id == g).is_some_and(|x| x.kind == GroupKind::Exact);
+                    // A survivor the index does not know cannot be verified: skip.
+                    let Some(ke) = index.get(k) else {
+                        last_copy += 1;
+                        continue;
+                    };
+                    Some(KeepCopy { path: k.clone(), expected: ke.stamp(), expected_id: ke.file_id, identical: exact })
+                }
+                None => None,
+            };
             let mut item_action = action.clone();
             let synced = c.badges.contains(Badges::SYNCED)
                 || inspector_roots.iter().any(|r| mj_core::pathutil::is_within(&r.path, &c.path));
@@ -154,19 +178,26 @@ impl Engine {
                 *warned.entry(w.clone()).or_default() += 1;
             }
             let entry = index.get(&c.path);
-            work.items.push(ActionItem {
-                path: c.path.clone(),
-                target: c.target,
-                action: item_action,
-                link_source,
-                root: root.clone(),
-                expected: if c.target == TargetKind::Folder {
-                    FileStamp { size: 0, mtime: Timestamp(0) }
-                } else {
-                    c.stamp
-                },
-                expected_id: entry.and_then(|e| e.file_id),
-            });
+            let mut item = ActionItem::new(
+                c.path.clone(),
+                c.target,
+                item_action,
+                root.clone(),
+                if c.target == TargetKind::Folder { FileStamp { size: 0, mtime: Timestamp(0) } } else { c.stamp },
+            );
+            item.link_source = link_source;
+            item.keep = keep;
+            item.expected_id = entry.and_then(|e| e.file_id);
+            // F-04: a folder carries its subtree as scanned; the action engine refuses it
+            // when anything below it changed (or when the scan did not see it whole).
+            if c.target == TargetKind::Folder {
+                item.expected_tree = index.position(&c.path).map(|i| index.tree_stamp(i));
+            }
+            // F-01: only a regenerable artefact folder (dev artefacts, caches) owns the
+            // version-control metadata inside it.
+            item.owned_tree =
+                c.target == TargetKind::Folder && crate::results::candidate_safety(rec, c) == SafetyClass::Rebuildable;
+            work.items.push(item);
             work.sizes.push((
                 if c.badges.contains(Badges::ONLINE_ONLY) { 0 } else { c.size },
                 entry.and_then(|e| e.file_id.zip(e.links)),
@@ -180,6 +211,7 @@ impl Engine {
         warn(locked as u64, "signed, labelled or encrypted file(s) skipped");
         warn(online, "online-only item(s) skipped: removing them would delete the cloud copy");
         warn(no_keeper, "item(s) skipped: no copy to link to");
+        warn(last_copy, "item(s) skipped: every copy of their group was selected, so one is always kept");
         warn(outside, "item(s) skipped: outside the scanned locations");
         for (text, n) in warned {
             work.warnings.push(format!("{n} item(s): {text}"));
@@ -287,7 +319,7 @@ impl Engine {
         let files = e.files;
         let permanent = step.safety == SafetyClass::Permanent
             || matches!(step.action, Action::PermanentDelete)
-            || (!step.lossy && !step.action.safety(false).is_undoable());
+            || (!step.lossy && !matches!(step.action, Action::Hardlink) && !step.action.safety(false).is_undoable());
         let roots = self.platform().sync_roots().ok();
         let mut synced_count = 0u64;
         let mut provider = String::new();
@@ -330,7 +362,19 @@ impl Engine {
             Vec::new()
         };
         let noun = if files == 1 { "file" } else { "files" };
-        let (title, body, ack, label) = if permanent {
+        let hardlink = matches!(step.action, Action::Hardlink);
+        let (title, body, ack, label) = if hardlink {
+            // F-07: why a hard link needs a confirmation, in the user's words.
+            (
+                format!("Replace {files} duplicate {noun} with hard links?"),
+                "Each duplicate becomes a second name of the copy that is kept: they share one content from now on. \
+                 Editing either one changes both, and the duplicate's own content cannot be brought back after that \
+                 (Restore refuses once they differ). The duplicate's owner and permissions become the kept copy's."
+                    .to_string(),
+                "I understand linked files share every later change".to_string(),
+                format!("Link {files} {noun}"),
+            )
+        } else if permanent {
             (
                 format!("Delete {files} {noun} permanently?"),
                 "This cannot be undone: the files do not go to the Recycle Bin or the quarantine.".to_string(),
@@ -358,7 +402,12 @@ impl Engine {
             default_originals: settings.general.default_originals.clone(),
             synced: (synced_count > 0).then_some(SyncedWarning { count: synced_count, provider, can_online_only }),
             acknowledge_text: ack,
-            undo_text: if permanent {
+            undo_text: if hardlink {
+                format!(
+                    "History → Restore separates the files again for {} days, as long as neither was edited.",
+                    settings.general.undo_days
+                )
+            } else if permanent {
                 "Every change is logged in History, but permanently deleted files cannot be restored.".into()
             } else {
                 format!(
@@ -376,6 +425,7 @@ impl Engine {
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(Error::Conflict("MyJanitor is shutting down".into()));
         }
+        self.require_writable()?;
         let plan = lock(&self.plan).plan.clone();
         if plan.steps.is_empty() {
             return Err(Error::InvalidInput("the plan is empty".into()));

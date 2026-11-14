@@ -31,6 +31,8 @@ pub struct TestPlatform {
     pub compressed: Mutex<BTreeSet<PathBuf>>,
     /// Simulate a copy-on-write filesystem (reflink = verified copy).
     pub fake_reflink: bool,
+    /// Simulate a sync provider that accepts "free up space" but frees nothing.
+    pub ignore_dehydrate: bool,
 }
 
 impl TestPlatform {
@@ -43,6 +45,7 @@ impl TestPlatform {
             online: Mutex::new(BTreeSet::new()),
             compressed: Mutex::new(BTreeSet::new()),
             fake_reflink: true,
+            ignore_dehydrate: false,
         }
     }
 }
@@ -94,6 +97,9 @@ impl ActionPlatform for TestPlatform {
         }
     }
     fn dehydrate(&self, path: &Path) -> Result<()> {
+        if self.ignore_dehydrate {
+            return Ok(());
+        }
         self.online.lock().unwrap().insert(path.to_path_buf());
         Ok(())
     }
@@ -192,15 +198,18 @@ impl Fixture {
     pub fn item(&self, path: &Path, action: Action) -> ActionItem {
         let md = self.platform.metadata(path).unwrap();
         let target = if md.is_dir() { TargetKind::Folder } else { TargetKind::File };
-        ActionItem {
-            path: path.to_path_buf(),
+        let mut item = ActionItem::new(
+            path.to_path_buf(),
             target,
             action,
-            link_source: None,
-            root: self.root(),
-            expected: if md.is_dir() { mj_core::FileStamp { size: 0, mtime: Timestamp(0) } } else { md.stamp() },
-            expected_id: None,
+            self.root(),
+            if md.is_dir() { mj_core::FileStamp { size: 0, mtime: Timestamp(0) } } else { md.stamp() },
+        );
+        if md.is_dir() {
+            // What a scan would record for the folder's subtree (F-04).
+            item.expected_tree = Some(tree_stamp(path));
         }
+        item
     }
 
     /// Apply, then undo every undoable entry of the run as its own undo run.
@@ -215,6 +224,29 @@ impl Fixture {
         let u = mj_actions::undo::start_undo_run(&self.journal, Some(run), "Undo", Timestamp::now()).unwrap();
         mj_actions::undo::undo(&self.ctx(u.run_id, no_services()), &ids).unwrap()
     }
+}
+
+/// The scan-time subtree stamp of a folder, computed like the scanner's index does.
+pub fn tree_stamp(dir: &Path) -> mj_core::TreeStamp {
+    fn mtime(p: &Path) -> Timestamp {
+        Timestamp::from_system_time(std::fs::symlink_metadata(p).unwrap().modified().unwrap())
+    }
+    let mut t = mj_core::TreeStamp { newest_mtime: mtime(dir), ..Default::default() };
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let md = std::fs::symlink_metadata(&p).unwrap();
+            t.entries += 1;
+            t.newest_mtime = t.newest_mtime.max(mtime(&p));
+            if md.is_file() {
+                t.bytes += md.len();
+            } else if md.is_dir() {
+                stack.push(p);
+            }
+        }
+    }
+    t
 }
 
 pub fn no_services() -> Services<'static> {

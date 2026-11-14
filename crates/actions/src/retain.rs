@@ -135,9 +135,17 @@ pub fn retain(
                 quarantined_at: now,
             };
             quarantine::write_manifest(quarantine_dir, &m)?;
-            if let Err(e) = fsops::move_item(path, slot) {
-                quarantine::cleanup_slot(quarantine_dir, entry.run_id, entry.id);
-                return Err(e);
+            match fsops::move_item(path, slot) {
+                Err(e) => {
+                    quarantine::cleanup_slot(quarantine_dir, entry.run_id, entry.id);
+                    return Err(e);
+                }
+                // F-09: the slot holds the complete verified copy: the entry stays
+                // restorable (manifest kept) and names what is left at the source.
+                Ok(fsops::MoveHow::CopiedSourceLeft { left }) => {
+                    entry.error = Some(fsops::left_behind_note(path, slot, left).info());
+                }
+                Ok(_) => {}
             }
             entry.retained_at = Some(slot.clone());
         }
@@ -145,7 +153,9 @@ pub fn retain(
             if let Some(parent) = dest.parent() {
                 fsops::create_dirs(parent)?;
             }
-            fsops::move_item(path, dest)?;
+            if let fsops::MoveHow::CopiedSourceLeft { left } = fsops::move_item(path, dest)? {
+                entry.error = Some(fsops::left_behind_note(path, dest, left).info());
+            }
             entry.retained_at = Some(dest.clone());
         }
         RetainPlan::Delete => {
@@ -166,6 +176,7 @@ pub fn restore(platform: &dyn Platform, quarantine_dir: &Path, entry: &JournalEn
         if !fsops::exists(retained) {
             return Err(Error::NotFound(retained.clone()));
         }
+        verify_retained(entry, retained)?;
         if let Some(parent) = original.parent() {
             fsops::create_dirs(parent)?;
         }
@@ -179,9 +190,34 @@ pub fn restore(platform: &dyn Platform, quarantine_dir: &Path, entry: &JournalEn
         if let Some(parent) = original.parent() {
             fsops::create_dirs(parent)?;
         }
+        if let Some(loc) = ticket.location.as_deref().filter(|l| fsops::exists(l)) {
+            verify_retained(entry, loc)?;
+        }
         return platform.restore_trashed(ticket, original);
     }
     Err(Error::InvalidInput(format!("nothing retained for {}", original.display())))
+}
+
+/// F-18: what is about to be moved back must be what was moved away: the recorded
+/// SHA-256 when there is one, else the recorded size (files; folders carry no hash).
+/// A mismatch (the user replaced the file at a Move destination, a trash name reused)
+/// is a `conflict` and nothing is restored.
+fn verify_retained(entry: &JournalEntry, retained: &Path) -> Result<()> {
+    let Ok(md) = std::fs::symlink_metadata(retained) else { return Ok(()) };
+    if !md.is_file() || entry.target != mj_core::TargetKind::File {
+        return Ok(());
+    }
+    let same = match &entry.original_sha256 {
+        Some(want) => fsops::hash_file(retained)?.sha256 == *want,
+        None => md.len() == entry.original_stamp.size,
+    };
+    if !same {
+        return Err(Error::Conflict(format!(
+            "{} is not the item that was moved there (its content differs); nothing was restored",
+            retained.display()
+        )));
+    }
+    Ok(())
 }
 
 /// The journal kind a trash request is recorded as under `route`.

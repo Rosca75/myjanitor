@@ -498,8 +498,9 @@ pub(crate) fn run_video_job(
     }
     let container = container_for(&facts.ext, s.remux_only, facts.subtitle_tracks > 0 && !s.drop_subtitles);
     notes.push(format!("output_extension={}", container.ext));
-    let out = job.temp_dir.join(format!("mj-video-out.{}", container.ext));
-    let _ = std::fs::remove_file(&out);
+    // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
+    let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "video")?;
+    let out = scratch.join(format!("out.{}", container.ext));
     let dur = info.as_ref().and_then(|i| i.duration_ms);
     run_encode(job, exe, &build_args(s, chosen.as_ref(), &facts, job.src, &out), dur)?;
     let after = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
@@ -654,6 +655,7 @@ impl Optimiser for Video {
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
+        super::ffmpeg::require_container(job.src)?;
         let mut s = VideoSettings::from_params(job.params);
         run_video_job(job, &mut s, Vec::new())
     }
@@ -725,6 +727,9 @@ mod tests {
         assert_eq!(
             tail,
             [
+                // F-17: local files only (the demuxer is forced when the file exists).
+                "-protocol_whitelist",
+                "file",
                 "-i",
                 "/in/a.mov",
                 "-map",

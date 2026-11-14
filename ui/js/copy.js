@@ -209,6 +209,7 @@ export const copy = {
     colNotes: 'Notes',
     colRecording: 'Recording',
     selectAll: 'Select all',
+    selectAllButKept: 'Select all except the copy kept in each group',
     preview: 'Preview',
     selectRow: (n) => `Select ${n}`,
     removed: 'remove',

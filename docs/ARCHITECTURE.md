@@ -250,6 +250,21 @@ confirmation (D-116).
 10. **Elevation** (SAF-05): never requested by default; Linux never elevates.
 11. **Tests** use only `mj_core::testutil::TempDir` trees they create; the
     action engine refuses any path outside the roots the test passes.
+12. **Below folders too** (review 1, F-01/F-04/F-10): a folder item is walked without
+    following links before acting; a protected path, VCS or credential store (VCS
+    allowed only inside an owned artefact folder), app folder, mounted volume or
+    online-only file below it refuses it, and its subtree must still match the
+    scan-time `TreeStamp` (re-checked right before the act).
+13. **One copy of every group survives** (F-02): removed group members carry the
+    survivor (`ActionItem::keep`), verified right before acting; "Select all" never
+    selects a keeper; a group whose every member is selected is skipped.
+14. **Private scratch, no foreign deletes** (F-03/F-16): intermediate files live in
+    folders created exclusively per job (`mj_core::scratch`); nothing replaces or
+    removes a path the job did not create; outputs are fsynced before an original goes
+    (F-11).
+15. **One acting process per data folder** (F-13): `<data>/myjanitor.lock`, taken by the
+    engine (GUI, CLI, schedules); without it, or without a durable journal (F-08), the
+    engine reads but refuses to change files.
 
 ### 7.3 Journal format (frozen)
 

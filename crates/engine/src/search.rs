@@ -164,7 +164,7 @@ impl Engine {
             feature_ids: vec!["CLN-ENG-01".into(), "CLN-ENG-05".into()],
             availability: Availability::Available,
         };
-        let badges = self.badger(&index, &out, &cancel);
+        let badges = self.badger(&index, &out, false, &cancel);
         let mut rec = build_record(self, card, out, ParamValues::default(), &|c| {
             badges.get(&c.path).copied().unwrap_or_default()
         });

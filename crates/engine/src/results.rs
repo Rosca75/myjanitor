@@ -100,3 +100,33 @@ pub fn severity(s: SafetyClass) -> u8 {
         SafetyClass::Permanent => 5,
     }
 }
+
+/// True for actions after which a removed group member's content is gone from the
+/// scanned tree (F-02: every group must keep one member).
+pub(crate) fn removes_copy(a: &mj_core::Action) -> bool {
+    matches!(a, mj_core::Action::Trash | mj_core::Action::Quarantine { .. } | mj_core::Action::PermanentDelete)
+}
+
+/// F-02: for every group of `rec`, the member that survives the removal of the selected
+/// rows: the group's keeper when it is not selected, else the first member that is not
+/// selected. `None` when every member is selected (nothing would survive).
+pub(crate) fn group_survivors(
+    rec: &OpportunityRecord,
+    skip: Badges,
+) -> std::collections::HashMap<mj_core::GroupId, Option<std::path::PathBuf>> {
+    use std::collections::{HashMap, HashSet};
+    let selected: HashSet<&std::path::Path> =
+        rec.candidates.iter().filter(|c| is_selected(rec, c, skip)).map(|c| c.path.as_path()).collect();
+    let mut out = HashMap::new();
+    for g in &rec.groups {
+        let left = |p: &std::path::PathBuf| !selected.contains(p.as_path());
+        let survivor = g.keeper.as_ref().filter(|k| left(k)).or_else(|| g.members.iter().find(|m| left(m))).cloned();
+        out.insert(g.id, survivor);
+    }
+    out
+}
+
+/// Number of groups of `rec` whose every member is selected.
+pub(crate) fn groups_losing_every_copy(rec: &OpportunityRecord, skip: Badges) -> u64 {
+    group_survivors(rec, skip).values().filter(|s| s.is_none()).count() as u64
+}

@@ -24,6 +24,29 @@ use mj_platform::ScanPlatform;
 
 use crate::protected::ProtectedPaths;
 
+/// Depth limit of [`Guard::check_tree`] (hostile trees).
+const MAX_TREE_DEPTH: usize = 4096;
+
+/// What [`Guard::check_tree`] saw below a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TreeWalk {
+    /// Entries below the folder (files, folders, links, others), the folder excluded.
+    pub entries: u64,
+    /// Total logical size of the regular files.
+    pub bytes: u64,
+    /// Newest modification time of the folder and everything below it.
+    pub newest_mtime: mj_core::Timestamp,
+    /// Online-only (cloud placeholder) files below the folder.
+    pub online_only: u64,
+}
+
+impl TreeWalk {
+    /// The stamp part of the walk.
+    pub fn stamp(&self) -> mj_core::TreeStamp {
+        mj_core::TreeStamp { entries: self.entries, bytes: self.bytes, newest_mtime: self.newest_mtime }
+    }
+}
+
 /// Decides whether a path may be changed.
 #[derive(Debug, Clone)]
 pub struct Guard {
@@ -74,6 +97,20 @@ impl Guard {
         let root = self.root_of(path).ok_or_else(|| Error::OutsideAllowedRoots(path.to_path_buf()))?;
         if path_key(root) == path_key(path) {
             return Err(Error::Protected(path.to_path_buf()));
+        }
+        // F-19: on Windows a name ending in a dot or a space, or an 8.3 short name, has
+        // two spellings that different APIs resolve differently (`C:\Windows.` is
+        // `C:\Windows` to `std::fs`, `PROGRA~1` is `Program Files`); such a path below the
+        // root is refused rather than guessed at.
+        if cfg!(windows) {
+            let rel = path.strip_prefix(root).unwrap_or(path);
+            if let Some(c) = rel.components().find(|c| windows_ambiguous_name(&c.as_os_str().to_string_lossy())) {
+                return Err(Error::InvalidInput(format!(
+                    "{} has a Windows name with more than one spelling ({}): skipped; rename it to act on it",
+                    path.display(),
+                    c.as_os_str().to_string_lossy()
+                )));
+            }
         }
         if self.protected.is_protected(path) {
             return Err(Error::Protected(path.to_path_buf()));
@@ -187,6 +224,63 @@ impl Guard {
         Ok(())
     }
 
+    /// F-01: everything below a folder item, walked without following links. Refuses
+    /// (`protected`, naming the first hit) when a protected path lies below the item
+    /// (a protected folder or exact entry, a protected pattern such as `.git` or `.ssh`,
+    /// one of MyJanitor's own folders), and (`link_not_followed`) when another volume is
+    /// mounted inside it (removing the folder would empty that volume too). A walk that
+    /// cannot read part of the tree refuses as well: what was not seen cannot be vouched
+    /// for. `owned_tree` is set for regenerable artefact folders a detector owns as a whole
+    /// (`node_modules`, build output, caches): version-control metadata inside them may
+    /// go with them; every other rule still applies.
+    pub fn check_tree(&self, path: &Path, platform: &dyn ScanPlatform, owned_tree: bool) -> Result<TreeWalk> {
+        if self.protected.has_protected_below(path) {
+            return Err(Error::Protected(path.to_path_buf()));
+        }
+        let top = platform.metadata(path)?;
+        let volume = top.file_id.map(|f| f.volume);
+        let mut walk = TreeWalk { newest_mtime: top.modified.unwrap_or_default(), ..TreeWalk::default() };
+        let mut stack = vec![(path.to_path_buf(), 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > MAX_TREE_DEPTH {
+                return Err(Error::InvalidInput(format!("folder nesting too deep at {}", dir.display())));
+            }
+            for item in platform.read_dir(&dir)? {
+                let md = platform.metadata(&item.path)?;
+                let hit = if owned_tree {
+                    self.protected.is_protected_in_owned_tree(&item.path)
+                } else {
+                    self.protected.is_protected(&item.path)
+                };
+                if hit {
+                    return Err(Error::Protected(item.path.clone()));
+                }
+                walk.entries += 1;
+                if let Some(m) = md.modified {
+                    walk.newest_mtime = walk.newest_mtime.max(m);
+                }
+                match md.kind {
+                    EntryKind::File => {
+                        walk.bytes = walk.bytes.saturating_add(md.size);
+                        if md.is_online_only() {
+                            walk.online_only += 1;
+                        }
+                    }
+                    EntryKind::Dir => {
+                        if let (Some(v), Some(have)) = (volume, md.file_id.map(|f| f.volume)) {
+                            if v != have {
+                                return Err(Error::LinkNotFollowed(item.path.clone()));
+                            }
+                        }
+                        stack.push((item.path.clone(), depth + 1));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(walk)
+    }
+
     /// A destination folder for move / copy / backup: absolute, no `..`, not protected
     /// (lexically and in its canonical form, as far as it exists), and not inside the item.
     pub fn check_destination(&self, dest: &Path, item: &Path) -> Result<()> {
@@ -216,6 +310,28 @@ impl Guard {
         }
         Ok(())
     }
+}
+
+/// F-19: a Windows file-name component that the Win32 path normaliser and the verbatim
+/// (`\\?\`) APIs can resolve to different files: a trailing dot or space, or the shape
+/// of an 8.3 short name (`PROGRA~1`, `DOCUME~2.TXT`). Pure, so it is tested everywhere.
+pub fn windows_ambiguous_name(name: &str) -> bool {
+    if name == "." || name == ".." {
+        return false;
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return true;
+    }
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((s, e)) => (s, Some(e)),
+        None => (name, None),
+    };
+    let Some((base, num)) = stem.rsplit_once('~') else { return false };
+    (1..=6).contains(&base.chars().count())
+        && !base.contains(['.', ' '])
+        && !num.is_empty()
+        && num.chars().all(|c| c.is_ascii_digit())
+        && ext.is_none_or(|e| e.chars().count() <= 3)
 }
 
 /// True when the fresh metadata still has the scanned size and mtime.
@@ -265,15 +381,8 @@ mod tests {
         assert_eq!(g.check(&f, &p, false).unwrap_err().code(), "protected");
         let f2 = t.write("in/b.txt", b"abc").unwrap();
         let md = p.metadata(&f2).unwrap();
-        let mut item = ActionItem {
-            path: f2.clone(),
-            target: TargetKind::File,
-            action: Action::Trash,
-            link_source: None,
-            root: t.join("in"),
-            expected: md.stamp(),
-            expected_id: md.file_id,
-        };
+        let mut item = ActionItem::new(f2.clone(), TargetKind::File, Action::Trash, t.join("in"), md.stamp());
+        item.expected_id = md.file_id;
         assert!(g.check_item(&item, &p, false).is_ok());
         std::fs::write(&f2, b"abcd").unwrap();
         assert_eq!(g.check_item(&item, &p, false).unwrap_err().code(), "changed");
@@ -283,6 +392,25 @@ mod tests {
         item.target = TargetKind::File;
         item.root = t.join("other");
         assert_eq!(g.check_item(&item, &p, false).unwrap_err().code(), "invalid_input");
+    }
+
+    #[test]
+    fn f19_windows_names_with_two_spellings_are_recognised() {
+        for bad in ["PROGRA~1", "DOCUME~2.TXT", "Windows.", "Windows ", "report.pdf.", "x~12"] {
+            assert!(windows_ambiguous_name(bad), "{bad}");
+        }
+        for ok in ["Program Files", "file~old.txt", "a~b", "long-name~1.backup", "~1", ".", "..", "notes.txt"] {
+            assert!(!windows_ambiguous_name(ok), "{ok}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn f19_guard_refuses_ambiguous_windows_names() {
+        let g = Guard::new(vec![PathBuf::from(r"C:\scan")], ProtectedPaths::empty());
+        assert_eq!(g.check_lexical(Path::new(r"C:\scan\PROGRA~1")).unwrap_err().code(), "invalid_input");
+        assert_eq!(g.check_lexical(Path::new(r"C:\scan\Windows.")).unwrap_err().code(), "invalid_input");
+        assert!(g.check_lexical(Path::new(r"C:\scan\Program Files")).is_ok());
     }
 
     #[test]
