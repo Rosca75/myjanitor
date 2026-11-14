@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+pub mod fixtures;
+
 use mj_core::testutil::{set_mtime, TempDir};
 use mj_engine::api::*;
 use mj_engine::{Engine, EngineConfig};

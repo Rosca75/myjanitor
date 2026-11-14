@@ -286,21 +286,32 @@ impl Engine {
 
     /// Add an opportunity as a step.
     pub fn plan_add_step(&self, req: PlanAddStepRequest) -> Result<Plan> {
-        let (title, default_action, params, safety_default, available) = {
-            let results = self.results.read().unwrap_or_else(|e| e.into_inner());
-            let rec = results.get(&req.opportunity_id).ok_or_else(|| crate::results::unknown(&req.opportunity_id))?;
-            let o = &rec.opportunity;
-            if !o.availability.is_available() {
-                return Err(Error::unsupported(o.title.clone(), "this opportunity is disabled here"));
-            }
-            (o.title.clone(), o.default_action.clone(), o.params.clone(), o.safety, o.available_actions.clone())
-        };
-        let action = req.action.unwrap_or(default_action);
-        if !matches!(action, Action::None) && !available.contains(&action.kind()) {
+        let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+        let rec = results.get(&req.opportunity_id).ok_or_else(|| crate::results::unknown(&req.opportunity_id))?;
+        let o = &rec.opportunity;
+        if !o.availability.is_available() {
+            return Err(Error::unsupported(o.title.clone(), "this opportunity is disabled here"));
+        }
+        let title = o.title.clone();
+        let mut action = req.action.unwrap_or_else(|| o.default_action.clone());
+        if !matches!(action, Action::None) && !o.available_actions.contains(&action.kind()) {
             return Err(Error::InvalidInput(format!("{title} cannot use the action `{:?}`", action.kind())));
         }
-        let params = req.params.map(|p| params.merged(&p)).unwrap_or(params);
-        let lossy = safety_default == SafetyClass::LossyOptIn;
+        // One source of truth for an optimiser's parameters: the step's. Values given inside
+        // the action win over the card's, then the request's `params` win over both; the
+        // action carries the merged set so the optimiser really runs with what the user chose.
+        let mut params = o.params.clone();
+        if let Action::Optimise { params: p, .. } = &action {
+            params = params.merged(p);
+        }
+        if let Some(p) = &req.params {
+            params = params.merged(p);
+        }
+        if let Action::Optimise { params: p, .. } = &mut action {
+            *p = params.clone();
+        }
+        let lossy = o.safety == SafetyClass::LossyOptIn || crate::steps::params_lossy(rec, &params);
+        drop(results);
         {
             let mut st = lock(&self.plan);
             if st.plan.steps.iter().any(|s| s.opportunity == req.opportunity_id) {
@@ -334,25 +345,37 @@ impl Engine {
             st.plan.steps.iter().find(|s| s.id == req.step_id).map(|s| s.opportunity.clone())
         }
         .ok_or_else(|| unknown_step(req.step_id))?;
-        if let Some(a) = &req.action {
-            let results = self.results.read().unwrap_or_else(|e| e.into_inner());
-            if let Some(rec) = results.get(&opp) {
-                if !matches!(a, Action::None) && !rec.opportunity.available_actions.contains(&a.kind()) {
-                    return Err(Error::InvalidInput(format!("this step cannot use the action `{:?}`", a.kind())));
-                }
+        let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+        let rec = results.get(&opp);
+        if let (Some(a), Some(rec)) = (&req.action, rec) {
+            if !matches!(a, Action::None) && !rec.opportunity.available_actions.contains(&a.kind()) {
+                return Err(Error::InvalidInput(format!("this step cannot use the action `{:?}`", a.kind())));
             }
         }
         {
             let mut st = lock(&self.plan);
             let step =
                 st.plan.steps.iter_mut().find(|s| s.id == req.step_id).ok_or_else(|| unknown_step(req.step_id))?;
-            if let Some(a) = req.action {
+            if let Some(mut a) = req.action {
+                if let Action::Optimise { params: p, .. } = &mut a {
+                    step.params = step.params.merged(p);
+                }
                 step.action = a;
             }
             if let Some(p) = req.params {
                 step.params = step.params.merged(&p);
             }
+            // Keep the optimiser's parameters and the lossy flag in step with the step's params.
+            if let Action::Optimise { params: p, .. } = &mut step.action {
+                *p = step.params.clone();
+            }
+            if let Some(rec) = rec {
+                step.lossy =
+                    rec.opportunity.safety == SafetyClass::LossyOptIn || crate::steps::params_lossy(rec, &step.params);
+            }
+            st.measured.remove(&req.step_id);
         }
+        drop(results);
         let plan = self.refresh_plan();
         self.plan_changed(plan)
     }

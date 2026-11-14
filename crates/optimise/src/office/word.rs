@@ -186,7 +186,9 @@ fn ops(pkg: &mut Pkg, p: &ParamValues, rep: &mut OpReport) -> Result<()> {
 fn columns(e: &FileEntry) -> BTreeMap<String, String> {
     let mut m = BTreeMap::new();
     if let Ok(dir) = pk::directory(&e.path) {
-        m.insert("breakdown".into(), pk::breakdown(&dir).summary());
+        let b = pk::breakdown(&dir);
+        m.insert("breakdown".into(), b.summary());
+        m.extend(b.part_columns());
     }
     if let Ok(mut pkg) = mj_formats::ooxml::Package::open_file(&e.path, Default::default()) {
         if let Ok(doc) = pk::main_part(&mut pkg) {

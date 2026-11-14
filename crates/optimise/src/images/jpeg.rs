@@ -195,7 +195,11 @@ impl Optimiser for JpegLossless {
             return Ok(common::skipped(before, "Nothing to remove or optimise"));
         }
         common::write_new(job.dst, &best)?;
-        Ok(common::done(before, best.len() as u64, r.icc_removed, notes))
+        let mut out = common::done(before, best.len() as u64, r.icc_removed, notes);
+        // A GPS strip is a privacy rewrite: its equal-size output is still kept by the action
+        // engine's keep-if-not-smaller (never a larger one).
+        out.privacy = privacy_rewrite;
+        Ok(out)
     }
 
     fn analyse(&self, ctx: &DetectContext<'_>) -> Result<DetectorOutput> {

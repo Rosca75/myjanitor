@@ -172,6 +172,22 @@ fn write_new(dst: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The structured size parts of the `breakdown images=.. fonts=..` report line.
+fn breakdown_from_notes(notes: &[String]) -> Vec<mj_core::SizePart> {
+    let Some(line) = notes.iter().find_map(|n| n.strip_prefix("breakdown ")) else {
+        return Vec::new();
+    };
+    let mut parts: Vec<mj_core::SizePart> = line
+        .split_whitespace()
+        .filter_map(|kv| kv.split_once('='))
+        .filter_map(|(k, v)| {
+            v.parse::<u64>().ok().filter(|n| *n > 0).map(|bytes| mj_core::SizePart { part: k.into(), bytes })
+        })
+        .collect();
+    parts.sort_by(|a, b| b.bytes.cmp(&a.bytes).then_with(|| a.part.cmp(&b.part)));
+    parts
+}
+
 /// Report lines: a machine-readable breakdown (OPT-ENG-09) and a human summary.
 fn notes(r: &fpdf::Report) -> Vec<String> {
     let b = r.breakdown;
@@ -333,15 +349,16 @@ impl Optimiser for PdfLossless {
                 bytes_before: before,
                 bytes_after: after,
                 lossy: opts.is_lossy(),
-                skipped: None,
+                breakdown: breakdown_from_notes(&notes),
                 notes,
+                ..OptimiseOutput::default()
             }),
             FileResult::Skipped { before, reason, .. } => Ok(OptimiseOutput {
                 bytes_before: before,
                 bytes_after: before,
                 lossy: false,
                 skipped: Some(reason),
-                notes: Vec::new(),
+                ..OptimiseOutput::default()
             }),
         }
     }

@@ -712,10 +712,16 @@ fn optimise(
             }
         };
         // OPT-ENG-04: keep the original unless the output is smaller (cannot be disabled).
-        if new_size >= e.bytes_before {
+        // A privacy rewrite (GPS / metadata strip) may be the same size, never larger.
+        if !keeps_output(&out, e.bytes_before, new_size) {
             cleanup();
             return Err(Error::Conflict("skipped: the optimised file was not smaller; the original was kept".into()));
         }
+        // A conversion (WebP, Opus, MP4...) is named with its own extension, never with the
+        // source's: a `.wav` holding Opus data would no longer open.
+        let orig_ext = item.path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let new_ext = out.converted_extension().filter(|x| !x.eq_ignore_ascii_case(&orig_ext));
+        let converted_path = new_ext.as_ref().map(|x| fsops::unique_path(&item.path.with_extension(x)));
         e.lossy = out.lossy;
         if out.lossy && !opts.confirmed {
             cleanup();
@@ -741,7 +747,10 @@ fn optimise(
                     OutputMode::Replace => String::new(),
                 };
                 let stem = item.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-                let ext = item.path.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default();
+                let ext = match &new_ext {
+                    Some(x) => format!(".{x}"),
+                    None => item.path.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default(),
+                };
                 let fin = fsops::unique_path(&item.path.with_file_name(format!("{stem}{suffix}{ext}")));
                 if let Err(err) = mj_platform::action::rename_no_replace(&temp, &fin) {
                     cleanup();
@@ -751,12 +760,29 @@ fn optimise(
                 e.reversible = true;
             }
             Some(RetainPlan::Delete) => {
-                // Irreversible (confirmed): the output atomically replaces the original.
-                if let Err(er) = std::fs::rename(&temp, &item.path) {
-                    cleanup();
-                    return Err(Error::io(&item.path, er));
+                // Irreversible (confirmed): the output atomically replaces the original, or
+                // (conversion) takes its new name and then the original is deleted.
+                match &converted_path {
+                    None => {
+                        if let Err(er) = std::fs::rename(&temp, &item.path) {
+                            cleanup();
+                            return Err(Error::io(&item.path, er));
+                        }
+                        e.created = vec![item.path.clone()];
+                    }
+                    Some(target) => {
+                        if let Err(err) = mj_platform::action::rename_no_replace(&temp, target) {
+                            cleanup();
+                            return Err(err);
+                        }
+                        if let Err(er) = std::fs::remove_file(&item.path) {
+                            // Keep the user's original; take the new file back.
+                            let _ = std::fs::remove_file(target);
+                            return Err(Error::io(&item.path, er));
+                        }
+                        e.created = vec![target.clone()];
+                    }
                 }
-                e.created = vec![item.path.clone()];
                 e.reversible = false;
             }
             Some(p) => {
@@ -764,7 +790,8 @@ fn optimise(
                     cleanup();
                     return Err(err);
                 }
-                if let Err(err) = mj_platform::action::rename_no_replace(&temp, &item.path) {
+                let target = converted_path.clone().unwrap_or_else(|| item.path.clone());
+                if let Err(err) = mj_platform::action::rename_no_replace(&temp, &target) {
                     // Roll back: the original goes back to its place, the output is removed.
                     let back = retain::restore(ctx.platform, ctx.quarantine_dir, e, &item.path);
                     cleanup();
@@ -773,7 +800,7 @@ fn optimise(
                         Err(b) => Error::Internal(format!("{err}; the original could not be put back: {b}")),
                     });
                 }
-                e.created = vec![item.path.clone()];
+                e.created = vec![target];
                 e.reversible = true;
             }
         }
@@ -899,6 +926,12 @@ pub fn dry_run_with(ctx: &ExecContext<'_>, items: &[ActionItem], opts: &ExecOpti
     Ok(r)
 }
 
+/// Keep-if-not-smaller (OPT-ENG-04): an output is kept only when strictly smaller, or the
+/// same size for a privacy rewrite (GPS / metadata strip).
+fn keeps_output(out: &mj_core::OptimiseOutput, before: u64, after: u64) -> bool {
+    after < before || (out.privacy && after == before)
+}
+
 /// (bytes before, bytes after, confidence) of one item, read-only.
 fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Result<(u64, u64, Confidence)> {
     let md = preflight(ctx, opts, item)?;
@@ -945,11 +978,14 @@ fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Resu
             let size = std::fs::metadata(&dst).map(|m| m.len()).ok();
             let _ = std::fs::remove_file(&dst);
             let out = res?;
-            if let Some(reason) = out.skipped {
+            if let Some(reason) = &out.skipped {
                 return Err(Error::Conflict(format!("skipped: {reason}")));
             }
             let after = size.ok_or_else(|| Error::Internal("the optimiser wrote no file".into()))?;
-            if after >= before {
+            // Compare file lengths, as `execute` does (allocated sizes would let a dry run
+            // promise a saving that the real run then refuses).
+            let before = if md.kind == EntryKind::File { md.size } else { before };
+            if !keeps_output(&out, before, after) {
                 return Err(Error::Conflict("skipped: the optimised file would not be smaller".into()));
             }
             if out.lossy && !opts.confirmed {
@@ -961,5 +997,21 @@ fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Resu
             Ok((before, 0, Confidence::Estimated))
         }
         _ => Ok((before, 0, Confidence::Exact)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keeps_output;
+    use mj_core::OptimiseOutput;
+
+    #[test]
+    fn keep_if_not_smaller_exempts_only_equal_size_privacy_rewrites() {
+        let plain = OptimiseOutput::default();
+        let privacy = OptimiseOutput { privacy: true, ..OptimiseOutput::default() };
+        assert!(keeps_output(&plain, 100, 99));
+        assert!(!keeps_output(&plain, 100, 100));
+        assert!(keeps_output(&privacy, 100, 100), "a GPS strip of the same size is kept");
+        assert!(!keeps_output(&privacy, 100, 101), "never a larger file");
     }
 }
