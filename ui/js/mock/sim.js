@@ -235,6 +235,14 @@ export function createSim(m, emit, later) {
     return m.jobJson(job);
   };
 
+  /** `schedule_run_now`: a short `schedule` job that then queues the apply jobs of a run. @param {any} sched */
+  m.startScheduleJob = (sched) => {
+    const job = newJob({ kind: 'schedule', title: `Scheduled run · ${sched.name}`, totals: { total: 1, bytes: 0, saved: 0 }, currentPath: () => '', onEnd: () => { emit('history://changed', {}); } });
+    emitState(job);
+    pump();
+    return m.jobJson(job);
+  };
+
   m.startPurge = () => {
     const job = newJob({ kind: 'purge_quarantine', title: 'Purge quarantine', totals: { total: 38, bytes: 7408715776, saved: 0 }, currentPath: () => '', onEnd: () => { emit('history://changed', {}); } });
     emitState(job);

@@ -71,3 +71,25 @@ first (reversible over irreversible, skip over guess, report over act).
 - Not done: report paging (`RunRequest` is `deny_unknown_fields`, so paging needs a new
   request type and UI paging; reports are bounded by run size today); Btrfs zlib/lzo
   reporting (a new `FsCompressAlgo` variant the UI and journal key on; not trivial).
+
+## D-4I05 Engine modules, `schedule_run_now` as a job, OS integration from the CLI only
+- `settings` and `schedules` are `pub mod` in `lib.rs`; `paths::integration` stays as a
+  set of short paths (the CLI uses them), no longer a workaround.
+- `schedule_run_now` (IPC) now returns a `Job` of the new kind `schedule` at once (the
+  response type changed from `ApplyStarted`; the UI never read it). Checks that need no
+  scan (unknown/invalid schedule, a plan in progress, a scan running, another scheduled
+  run starting) are refused synchronously; the job scans, queues the apply jobs (one run,
+  default selections, no confirmations: schedules hold reversible steps only) and
+  finishes, setting its `run_id`; cancelling it stops its scan. The blocking form is
+  `Engine::schedule_run` (CLI `run-profile`).
+- `schedules_due` is unchanged and **not** polled by the GUI: an OS registration
+  (`schedule install`) is the one trigger, so a profile never runs twice (OS timer + open
+  app) against the same journal.
+- No IPC commands for installing an OS schedule or the context menu: the drawer keeps
+  the `myjanitor-cli schedule install <id>` hint and the `integration.context_menu`
+  settings side effect (E-03). Writing to the registry / systemd from a webview click
+  would add a second, less visible path to the same side effect; the CLI path is
+  explicit and already tested.
+- Mock: `schedule_save` (validation, unique names, ids), `schedule_delete`,
+  `schedule_run_now` (a `schedule` job), `settings_set` validation (engine's ranges and
+  messages for the drawer's fields) and persisted `protected_paths_set`.

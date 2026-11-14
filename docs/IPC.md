@@ -488,8 +488,11 @@ across scans).
 ```
 
 ### `schedule_run_now`
-`IdRequest` → `ApplyStarted`. *Spawns.* Scans the schedule's scope, then applies
-its steps with default selections.
+`IdRequest` → `Job`. *Spawns.* Returns at once with a `schedule` job (unknown
+schedule, a plan in progress or a running scan are refused immediately). The job
+scans the schedule's scope, then queues its steps (default selections) as `apply`
+jobs of one run and finishes; `job://done` carries any error (`nothing to do…`
+when no step found anything). The job's `run_id` is set once the run exists.
 
 ### `tools_list`
 No request → `ExternalTool[]`.

@@ -222,3 +222,34 @@ test('the mock is deterministic: two backends give identical fixtures', async ()
   const b = await mk().call('candidates_page', { opportunity_id: 'det:dev_artefacts', limit: 20 });
   assert.deepEqual(a, b);
 });
+
+test('mock schedules: save validates and assigns ids, delete removes, run now starts a schedule job', async () => {
+  const b = mk();
+  const sched = { id: '', name: ' Weekly tidy ', enabled: true, cadence: { every: 'weekly', weekday: 1, hour: 9, minute: 0 }, scope: { roots: ['C:\\Users\\Michel'] }, steps: [{ opportunity: 'det:temp_files', action: { kind: 'trash' }, params: {} }], last_run: null, next_run: null };
+  const list = await b.call('schedule_save', { schedule: sched });
+  assert.equal(list.length, 1);
+  assert.equal(list[0].name, 'Weekly tidy');
+  assert.match(list[0].id, /^sched_\d+$/);
+  await assert.rejects(b.call('schedule_save', { schedule: { ...sched, name: 'weekly TIDY' } }), (e) => e.code === 'invalid_input');
+  await assert.rejects(b.call('schedule_save', { schedule: { ...sched, name: 'x', steps: [{ opportunity: 'det:temp_files', action: { kind: 'permanent_delete' }, params: {} }] } }), (e) => e.code === 'invalid_input');
+  await b.call('plan_clear');
+  const job = await b.call('schedule_run_now', { id: list[0].id });
+  assert.equal(job.kind, 'schedule');
+  await assert.rejects(b.call('schedule_run_now', { id: 'sched_999' }), (e) => e.code === 'invalid_input');
+  assert.deepEqual(await b.call('schedule_delete', { id: list[0].id }), []);
+  await assert.rejects(b.call('schedule_delete', { id: list[0].id }), (e) => e.code === 'invalid_input');
+});
+
+test('mock settings_set validates like the engine; protected paths persist', async () => {
+  const b = mk();
+  const s = await b.call('settings_get');
+  await assert.rejects(b.call('settings_set', { settings: { ...s, general: { ...s.general, undo_days: 0 } } }), (e) => e.code === 'invalid_input' && /undo_days/.test(e.message));
+  await assert.rejects(b.call('settings_set', { settings: { ...s, general: { ...s.general, kept_languages: ['../x'] } } }), (e) => /kept_languages/.test(e.message));
+  assert.equal((await b.call('settings_get')).general.undo_days, s.general.undo_days, 'nothing stored on refusal');
+  const ok = await b.call('settings_set', { settings: { ...s, general: { ...s.general, undo_days: 14 } } });
+  assert.equal(ok.general.undo_days, 14);
+  const pp = await b.call('protected_paths_set', { user: ['D:\\Archive', 'D:\\Archive'] });
+  assert.deepEqual(pp.user, ['D:\\Archive']);
+  assert.deepEqual((await b.call('protected_paths_get')).user, ['D:\\Archive']);
+  await assert.rejects(b.call('protected_paths_set', { user: ['relative\\dir'] }), (e) => e.code === 'invalid_input');
+});

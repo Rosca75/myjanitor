@@ -9,6 +9,21 @@ import { buildCandidates } from './candidates.js';
 /** @param {string} code @param {string} message @param {string} [hint] */
 export const fail = (code, message, hint = 'Check the request and try again.') => ({ code, message, hint });
 
+const isAbsolute = (p) => /^([A-Za-z]:[\\/]|\\\\|\/)/.test(p);
+
+/** The engine's `settings_set` validation, for the fields the drawer edits. @param {any} s */
+export function settingsProblem(s) {
+  const g = s.general ?? {};
+  const days = (v) => Number.isInteger(v) && v >= 1 && v <= 3650;
+  if (!days(g.undo_days)) return 'general.undo_days must be between 1 and 3650';
+  if (!days(g.quarantine_days)) return 'general.quarantine_days must be between 1 and 3650';
+  if (typeof g.light_copy_suffix !== 'string' || !g.light_copy_suffix || /[\\/:*?"<>|]/.test(g.light_copy_suffix)) return 'general.light_copy_suffix must be a non-empty file-name fragment';
+  for (const l of g.kept_languages ?? []) if (!/^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(String(l).trim())) return `general.kept_languages: \`${l}\` is not a language code (en, fr, pt-BR)`;
+  const p = s.performance ?? {};
+  if (p.threads !== undefined && !(Number.isInteger(p.threads) && p.threads >= 0 && p.threads <= 256)) return 'performance.threads must be between 0 and 256';
+  return null;
+}
+
 const lc = (s) => String(s).toLowerCase();
 const sameOrInside = (child, parent) => lc(child) === lc(parent) || lc(child).startsWith(lc(parent).replace(/[\\/]+$/, '') + '\\');
 
@@ -360,14 +375,43 @@ export function createHandlers(m, sim, emit) {
     results_export: () => ({ path: 'C:\\Users\\Michel\\Documents\\myjanitor-results.csv', bytes: 8192, rows: 80 }),
 
     settings_get: () => m.settings,
-    settings_set: (req) => (m.settings = { ...m.settings, ...req.settings }),
-    protected_paths_get: () => ({ builtin: ['C:\\Windows', 'C:\\Program Files'], builtin_patterns: ['**/.git', '**/.ssh/**'], user: [] }),
-    protected_paths_set: (req) => ({ builtin: ['C:\\Windows', 'C:\\Program Files'], builtin_patterns: ['**/.git', '**/.ssh/**'], user: req.user ?? [] }),
+    settings_set: (req) => {
+      const next = { ...m.settings, ...req.settings, general: { ...m.settings.general, ...req.settings?.general } };
+      const problem = settingsProblem(next);
+      if (problem) throw fail('invalid_input', problem, 'Correct the value and try again.');
+      return (m.settings = next);
+    },
+    protected_paths_get: () => ({ builtin: ['C:\\Windows', 'C:\\Program Files'], builtin_patterns: ['**/.git', '**/.ssh/**'], user: structuredClone(m.protectedUser ?? []) }),
+    protected_paths_set: (req) => {
+      const user = req.user ?? [];
+      const bad = user.find((p) => typeof p !== 'string' || !isAbsolute(p));
+      if (bad !== undefined) throw fail('invalid_input', `Protected paths must be absolute: ${bad}`, 'Pick the folder with Browse.');
+      m.protectedUser = [...new Set(user)];
+      m.settings = { ...m.settings, safety: { ...m.settings.safety, protected_paths: [...m.protectedUser] } };
+      return { builtin: ['C:\\Windows', 'C:\\Program Files'], builtin_patterns: ['**/.git', '**/.ssh/**'], user: structuredClone(m.protectedUser) };
+    },
     cache_info: () => m.cache,
     cache_clear: () => { m.cache = { ...m.cache, entries: 0, bytes: 0 }; return m.cache; },
     schedules_list: () => m.schedules,
-    schedule_save: notYet('schedule_save'),
-    schedule_delete: notYet('schedule_delete'),
+    schedule_save: (req) => {
+      const s = structuredClone(req.schedule ?? {});
+      s.name = String(s.name ?? '').trim();
+      if (!s.name) throw fail('invalid_input', 'A schedule needs a name', 'Type a name.');
+      if (!s.steps?.length) throw fail('invalid_input', 'A schedule needs at least one step', 'Save it from a plan.');
+      if (s.steps.some((st) => st.action?.kind === 'permanent_delete' || st.action?.originals?.policy === 'delete')) throw fail('invalid_input', 'Lossy and permanent steps never run unattended', 'Remove those steps.');
+      if (m.schedules.some((x) => x.id !== s.id && x.name.toLowerCase() === s.name.toLowerCase())) throw fail('invalid_input', `A schedule named "${s.name}" already exists`, 'Choose another name.');
+      if (!s.id) s.id = `sched_${m.schedules.reduce((a, x) => Math.max(a, Number(String(x.id).replace('sched_', '')) || 0), 0) + 1}`;
+      s.next_run = s.enabled ? m.nowNs() + 7 * 86_400_000_000_000 : null;
+      const i = m.schedules.findIndex((x) => x.id === s.id);
+      if (i >= 0) m.schedules[i] = s; else m.schedules.push(s);
+      return structuredClone(m.schedules);
+    },
+    schedule_delete: (req) => {
+      const before = m.schedules.length;
+      m.schedules = m.schedules.filter((s) => s.id !== req.id);
+      if (m.schedules.length === before) throw fail('invalid_input', `No schedule with id ${req.id}`, 'Reload the list.');
+      return structuredClone(m.schedules);
+    },
     schedule_from_plan: (req) => {
       if (m.plan.steps.some((s) => s.safety === 'lossy_opt_in' || s.safety === 'permanent')) throw fail('invalid_input', 'Lossy and permanent steps never run unattended', 'Remove those steps from the plan to save a schedule.');
       if (!m.plan.steps.length) throw fail('invalid_input', 'The plan is empty', 'Add a step first.');
@@ -375,7 +419,12 @@ export function createHandlers(m, sim, emit) {
       m.schedules.push(s);
       return structuredClone(s);
     },
-    schedule_run_now: notYet('schedule_run_now'),
+    schedule_run_now: (req) => {
+      const s = m.schedules.find((x) => x.id === req.id) ?? (() => { throw fail('invalid_input', `Unknown schedule ${req.id}`, 'Reload the list.'); })();
+      if (m.plan.steps.length) throw fail('conflict', 'A plan is in progress: apply or clear it before running a schedule', 'Apply or clear the plan first.');
+      s.last_run = m.nowNs();
+      return sim.startScheduleJob(s);
+    },
     tools_list: () => m.tools,
     tools_refresh: () => m.tools,
     drives_list: () => m.drives(),

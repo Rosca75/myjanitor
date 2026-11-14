@@ -447,7 +447,7 @@ export const copy = {
     undo: 'Undo',
     report: 'View report',
     dismiss: 'Dismiss',
-    kinds: { apply: 'Apply', dry_run: 'Dry run', undo: 'Restore', purge_quarantine: 'Purge', export: 'Export' },
+    kinds: { apply: 'Apply', dry_run: 'Dry run', undo: 'Restore', purge_quarantine: 'Purge', export: 'Export', schedule: 'Scheduled run' },
   },
 
   search: {

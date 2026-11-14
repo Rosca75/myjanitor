@@ -98,3 +98,46 @@ fn app_info_lists_platform_capabilities() {
         assert!(caps.contains(&"btrfs_compression".to_string()) && !caps.contains(&"cloud_dehydrate".to_string()));
     }
 }
+
+#[test]
+fn schedule_run_now_returns_a_job_at_once_and_queues_the_apply() {
+    let t = TempDir::new("engine-sched").unwrap();
+    let tmp = t.write("work/old.tmp", &bytes(3, 4000)).unwrap();
+    mj_core::testutil::set_mtime(&tmp, std::time::SystemTime::now() - std::time::Duration::from_secs(86_400 * 5))
+        .unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    let schedule = mj_core::Schedule {
+        id: String::new(),
+        name: "Tidy".into(),
+        enabled: true,
+        cadence: mj_core::Cadence::Weekly { weekday: 1, hour: 9, minute: 13 },
+        scope: mj_core::ScanScope { roots: vec![f.tree.path().to_path_buf()], ..Default::default() },
+        steps: vec![mj_core::ScheduledStep {
+            opportunity: OpportunityId("det:temp_files".into()),
+            action: mj_core::Action::Trash,
+            params: Default::default(),
+        }],
+        last_run: None,
+        next_run: None,
+    };
+    let id = e.schedule_save(ScheduleSaveRequest { schedule }).unwrap()[0].id.clone();
+    // Unknown schedules are refused at once, before any job exists.
+    assert!(e.schedule_run_now(IdRequest { id: "sched_404".into() }).is_err());
+    let job = e.schedule_run_now(IdRequest { id: id.clone() }).unwrap();
+    assert_eq!(job.kind, mj_core::JobKind::Schedule);
+    assert!(!job.state.is_finished(), "returned before the scan finished");
+    let jobs = wait("schedule and apply", || {
+        let jobs = e.jobs_list().unwrap();
+        (jobs.iter().any(|j| j.kind == mj_core::JobKind::Apply) && jobs.iter().all(|j| j.state.is_finished()))
+            .then_some(jobs)
+    });
+    let s = jobs.iter().find(|j| j.id == job.id).unwrap();
+    assert_eq!(s.state, JobState::Completed, "{s:?}");
+    let apply = jobs.iter().find(|j| j.kind == mj_core::JobKind::Apply).unwrap();
+    assert_eq!(apply.state, JobState::Completed, "{apply:?}");
+    assert_eq!(s.run_id, apply.run_id, "the schedule job names its run");
+    assert!(!exists(&f.tree.join("work/old.tmp")));
+    assert_eq!(e.quarantine_info().unwrap().items, 1);
+    assert!(e.schedules_list().unwrap()[0].last_run.is_some());
+}

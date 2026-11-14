@@ -27,6 +27,9 @@ pub enum JobKind {
     Undo,
     PurgeQuarantine,
     Export,
+    /// `schedule_run_now` from the app: scans the schedule's scope, then queues the
+    /// schedule's apply jobs (which appear as their own `apply` jobs) and finishes.
+    Schedule,
 }
 
 /// Job lifecycle.

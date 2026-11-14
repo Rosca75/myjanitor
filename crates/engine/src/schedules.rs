@@ -13,12 +13,15 @@ pub mod os;
 
 use std::sync::Arc;
 
-use mj_core::{lock, Error, Result, Schedule, ScheduledStep, SettingKind, Timestamp};
+use mj_core::{
+    lock, CancelToken, Error, Job, JobKind, JobOutcome, Result, Schedule, ScheduledStep, SettingKind, Timestamp,
+};
 
 use crate::api::{
     ApplyStarted, IdRequest, PlanAddStepRequest, PlanApplyRequest, ScanRunState, ScanStartRequest,
     ScheduleFromPlanRequest, ScheduleSaveRequest, ScopeSetRequest,
 };
+use crate::jobs::{JobResult, Work};
 use crate::settings::persist::{read_or_backup, Loaded};
 use crate::Engine;
 
@@ -192,32 +195,82 @@ impl Engine {
             .ok_or_else(|| Error::Internal("schedule not stored".into()))
     }
 
-    /// Run a schedule now: scan its scope, add its steps with default selections and apply.
+    /// Run a schedule now from the app (`schedule_run_now`), without blocking the caller.
     ///
-    /// Blocks until the scan is done (the shell calls it off the UI thread), then
-    /// returns as soon as the apply jobs are queued. Refuses when a plan is in
-    /// progress (the session plan is the only one there is). Steps whose
-    /// opportunity was not found this time are skipped; with nothing left the
-    /// error message starts with `nothing to do`.
-    pub fn schedule_run_now(self: &Arc<Self>, req: IdRequest) -> Result<ApplyStarted> {
+    /// The checks that need no scan run here (unknown or invalid schedule, a plan in
+    /// progress, a scan running) so the caller gets them at once; the scan and the
+    /// queuing of the apply jobs run as a `schedule` job (`job://state`, `job://done`
+    /// carry progress and any error; the apply jobs then appear as `apply` jobs).
+    pub fn schedule_run_now(self: &Arc<Self>, req: IdRequest) -> Result<Job> {
+        let sched = self.runnable_schedule(&req.id)?;
+        if self.scan_running() {
+            return Err(Error::Conflict("a scan is running: wait for it or stop it first".into()));
+        }
+        if lock(&self.jobs).jobs.iter().any(|j| j.kind == JobKind::Schedule && !j.state.is_finished()) {
+            return Err(Error::Conflict("a scheduled run is already starting".into()));
+        }
+        let job = self.new_job(JobKind::Schedule, None, None, &format!("Scheduled run · {}", sched.name), 1, 0);
+        let id = sched.id.clone();
+        let work: Work = Box::new(move |engine, ctx| match engine.run_schedule(&id, Some(ctx.cancel)) {
+            Ok(started) => {
+                {
+                    let mut st = lock(&engine.jobs);
+                    if let Some(j) = st.jobs.iter_mut().find(|j| j.id == ctx.job_id) {
+                        j.run_id = Some(started.run_id);
+                    }
+                }
+                let outcome = JobOutcome { succeeded: 1, ..JobOutcome::default() };
+                JobResult { outcome: Some(outcome), error: None, report: false }
+            }
+            Err(e) => JobResult { outcome: None, error: Some(e), report: false },
+        });
+        self.spawn_detached(job, work)
+    }
+
+    /// Run a schedule and wait for its scan (the CLI's `run-profile`; the job body of
+    /// `schedule_run_now`): scan its scope, add its steps with default selections and
+    /// apply. Returns as soon as the apply jobs are queued. Refuses when a plan is in
+    /// progress (the session plan is the only one there is). Steps whose opportunity
+    /// was not found this time are skipped; with nothing left the error message starts
+    /// with `nothing to do`.
+    pub fn schedule_run(self: &Arc<Self>, req: IdRequest) -> Result<ApplyStarted> {
+        self.run_schedule(&req.id, None)
+    }
+
+    /// The schedule `id`, checked as runnable now.
+    fn runnable_schedule(&self, id: &str) -> Result<Schedule> {
         let sched = lock(&self.schedules)
             .iter()
-            .find(|s| s.id == req.id)
+            .find(|s| s.id == id)
             .cloned()
-            .ok_or_else(|| Error::InvalidInput(format!("unknown schedule {}", req.id)))?;
+            .ok_or_else(|| Error::InvalidInput(format!("unknown schedule {id}")))?;
         validate(self, &sched)?;
         if !lock(&self.plan).plan.steps.is_empty() {
             return Err(Error::Conflict("a plan is in progress: apply or clear it before running a schedule".into()));
         }
+        Ok(sched)
+    }
+
+    fn run_schedule(self: &Arc<Self>, id: &str, cancel: Option<&CancelToken>) -> Result<ApplyStarted> {
+        let sched = self.runnable_schedule(id)?;
         self.scope_set(ScopeSetRequest { scope: sched.scope.clone() })?;
-        self.scan_start(ScanStartRequest::default())?;
+        let generation = self.scan_start(ScanStartRequest::default())?.generation;
         loop {
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                let _ = self.scan_stop();
+                return Err(Error::Cancelled);
+            }
             let st = self.scan_status()?;
+            if st.generation != generation {
+                return Err(Error::Conflict("another scan replaced the scheduled run's scan".into()));
+            }
             match st.state {
                 ScanRunState::Scanning | ScanRunState::Paused | ScanRunState::Stopping => {
                     std::thread::sleep(std::time::Duration::from_millis(50))
                 }
-                ScanRunState::Done => break,
+                ScanRunState::Done if !self.scan_running() => break,
+                ScanRunState::Done => std::thread::sleep(std::time::Duration::from_millis(10)),
+                ScanRunState::Cancelled => return Err(Error::Cancelled),
                 other => {
                     let why = st.error.map(|e| e.message).unwrap_or_else(|| format!("scan ended as {other:?}"));
                     return Err(Error::Internal(format!("the scan for \"{}\" did not finish: {why}", sched.name)));

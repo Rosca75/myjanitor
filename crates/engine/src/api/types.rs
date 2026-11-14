@@ -615,7 +615,7 @@ pub struct PlanApplyRequest {
     pub confirmations: Vec<StepConfirmation>,
 }
 
-/// `plan_apply` / `schedule_run_now` response.
+/// `plan_apply` response (and `Engine::schedule_run`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ApplyStarted {
     pub run_id: RunId,
