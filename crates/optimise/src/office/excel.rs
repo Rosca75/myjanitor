@@ -767,7 +767,7 @@ impl Optimiser for Excel {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::office::package::fixtures::*;
     use crate::office::package::testkit::*;

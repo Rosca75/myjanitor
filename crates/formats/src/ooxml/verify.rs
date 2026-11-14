@@ -146,3 +146,47 @@ pub fn verify<R1: Read + Seek, R2: Read + Seek>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ooxml::package::tests::{rels_xml, CT_HEAD};
+    use crate::zip::ZipWriter;
+    use std::io::Cursor;
+
+    fn pkg(extra_rel: bool, broken_xml: bool, png: &[u8]) -> Vec<u8> {
+        let mut w = ZipWriter::new(Vec::new());
+        w.add("[Content_Types].xml", format!("{CT_HEAD}</Types>").as_bytes(), 6, 0, 0).unwrap();
+        let mut r = vec![("rId1", "officeDocument", "main.xml")];
+        if extra_rel {
+            r.push(("rId2", "image", "gone.png"));
+        }
+        w.add("_rels/.rels", rels_xml(&r).as_bytes(), 6, 0, 0).unwrap();
+        w.add("main.xml", if broken_xml { b"<m>".as_slice() } else { b"<m/>".as_slice() }, 6, 0, 0).unwrap();
+        w.add("p.png", png, 0, 0, 0).unwrap();
+        w.finish().unwrap()
+    }
+
+    #[test]
+    fn only_new_issues_fail() {
+        let keep: BTreeSet<String> = ["p.png".to_string()].into();
+        let first = Some(content_types::PART);
+        let good = pkg(false, false, b"x");
+        verify(Cursor::new(good.clone()), Cursor::new(good.clone()), &keep, first, Caps::default()).unwrap();
+        // Dangling target introduced -> fails; already present in the source -> tolerated.
+        let dangling = pkg(true, false, b"x");
+        assert!(
+            verify(Cursor::new(good.clone()), Cursor::new(dangling.clone()), &keep, first, Caps::default()).is_err()
+        );
+        verify(Cursor::new(dangling.clone()), Cursor::new(dangling), &keep, first, Caps::default()).unwrap();
+        // Malformed XML introduced.
+        assert!(verify(Cursor::new(good.clone()), Cursor::new(pkg(false, true, b"x")), &keep, first, Caps::default())
+            .is_err());
+        // An unchanged part that changed.
+        let e = verify(Cursor::new(good.clone()), Cursor::new(pkg(false, false, b"y")), &keep, first, Caps::default())
+            .unwrap_err();
+        assert!(e.to_string().contains("p.png"));
+        // Not a ZIP.
+        assert!(verify(Cursor::new(good), Cursor::new(b"nope".to_vec()), &keep, first, Caps::default()).is_err());
+    }
+}
