@@ -474,7 +474,13 @@ fn run_acted(
     act: impl FnOnce(&mut JournalEntry) -> Result<()>,
 ) -> Result<ItemOutcome> {
     record(ctx, &mut e, JournalState::Intent, None)?;
-    if let Err(err) = ctx.guard.restat(item, ctx.platform) {
+    // F-12 (narrowed, see the fixes notes): the ancestor walk (no link, junction or mount
+    // point between the root and the item, canonical parent inside the root) is repeated
+    // right before acting, not only at pre-flight.
+    let allow_link = matches!(item.action, Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete);
+    if let Err(err) =
+        ctx.guard.check(&item.path, ctx.platform, allow_link).and_then(|_| ctx.guard.restat(item, ctx.platform))
+    {
         e.reversible = false;
         record(ctx, &mut e, JournalState::Skipped, Some(&err))?;
         return Ok(outcome(&e, ItemStatus::Skipped, Some(&err)));
