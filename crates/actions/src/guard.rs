@@ -40,6 +40,13 @@ pub struct TreeWalk {
     pub online_only: u64,
 }
 
+impl TreeWalk {
+    /// The stamp part of the walk.
+    pub fn stamp(&self) -> mj_core::TreeStamp {
+        mj_core::TreeStamp { entries: self.entries, bytes: self.bytes, newest_mtime: self.newest_mtime }
+    }
+}
+
 /// Decides whether a path may be changed.
 #[derive(Debug, Clone)]
 pub struct Guard {

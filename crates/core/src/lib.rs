@@ -65,7 +65,7 @@ pub use candidate::{
     Source, TargetKind,
 };
 pub use detector::{DetectContext, Detector, DetectorId, DetectorInfo, PlatformSupport};
-pub use entry::{Attributes, EntryKind, FileEntry, FileId, FileStamp};
+pub use entry::{Attributes, EntryKind, FileEntry, FileId, FileStamp, TreeStamp};
 pub use error::{Error, ErrorInfo, Result};
 pub use estimate::{Confidence, Estimate};
 pub use fingerprint::{FingerprintStore, Fingerprints, MemoryFingerprintStore, NoFingerprintStore};

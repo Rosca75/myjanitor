@@ -65,6 +65,19 @@ pub struct FileStamp {
     pub mtime: Timestamp,
 }
 
+/// F-04: the fingerprint of a folder's whole subtree at scan time. A folder's own stamp
+/// and id do not change when files inside it change, so folder items carry this instead
+/// and the action engine refuses a folder whose subtree no longer matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub struct TreeStamp {
+    /// Entries below the folder (files, folders, links, others), the folder excluded.
+    pub entries: u64,
+    /// Total logical size of the regular files below it.
+    pub bytes: u64,
+    /// Newest modification time of the folder itself and of everything below it.
+    pub newest_mtime: Timestamp,
+}
+
 /// One filesystem entry as recorded by the scan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileEntry {

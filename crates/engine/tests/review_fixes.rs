@@ -88,3 +88,33 @@ fn f02_apply_keeps_one_copy_even_when_every_copy_is_selected() {
         assert_eq!(left, 2, "{action:?}: no copy of the group may be removed when all are selected");
     }
 }
+
+#[test]
+fn f04_folder_that_gained_a_file_after_the_scan_is_not_deleted() {
+    let t = TempDir::new("f04-tree").unwrap();
+    t.mkdir("old/was-empty").unwrap();
+    t.write("old/keep.txt", b"x").unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let id = "det:empty_folders";
+    assert!(rows(e, id).iter().any(|r| r.candidate.path.ends_with("was-empty")), "{:?}", rows(e, id));
+    // After the scan the user saves a document into the "empty" folder.
+    let doc = f.tree.write("old/was-empty/thesis.docx", b"two years of work").unwrap();
+    let plan = e
+        .plan_add_step(PlanAddStepRequest {
+            opportunity_id: oid(id),
+            action: Some(mj_core::Action::PermanentDelete),
+            params: None,
+        })
+        .unwrap();
+    let confirmations = vec![mj_core::StepConfirmation {
+        step_id: plan.steps[0].id,
+        acknowledged: true,
+        originals: mj_core::OriginalsPolicy::RecycleBin,
+        synced_online_only: false,
+    }];
+    e.plan_apply(PlanApplyRequest { confirmations }).unwrap();
+    wait_jobs(e);
+    assert_eq!(std::fs::read(&doc).unwrap(), b"two years of work");
+}

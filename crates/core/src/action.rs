@@ -232,6 +232,11 @@ pub struct ActionItem {
     /// copy still exists and still matches right before acting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep: Option<KeepCopy>,
+    /// F-04: for a folder, its subtree as the scan saw it. The action engine refuses
+    /// (`changed`) a folder item without one, or whose subtree differs now, for every
+    /// action except Copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_tree: Option<crate::entry::TreeStamp>,
 }
 
 /// The group member that must survive the removal of the others (F-02).
@@ -263,6 +268,7 @@ impl ActionItem {
             expected_id: None,
             owned_tree: false,
             keep: None,
+            expected_tree: None,
         }
     }
 }

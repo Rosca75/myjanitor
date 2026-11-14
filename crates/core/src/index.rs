@@ -146,6 +146,27 @@ impl FileIndex {
         self.entries[i].path.parent().and_then(|p| self.position(p))
     }
 
+    /// F-04: the scan-time fingerprint of the subtree under entry `i` (see
+    /// [`crate::entry::TreeStamp`]): every indexed entry below it, the sizes of its files
+    /// and the newest modification time of the entry and everything below it.
+    pub fn tree_stamp(&self, i: usize) -> crate::entry::TreeStamp {
+        let mut t = crate::entry::TreeStamp {
+            newest_mtime: self.entries[i].modified.unwrap_or_default(),
+            ..Default::default()
+        };
+        for j in self.subtree(i) {
+            let e = &self.entries[j];
+            t.entries += 1;
+            if e.kind == EntryKind::File {
+                t.bytes = t.bytes.saturating_add(e.size);
+            }
+            if let Some(m) = e.modified {
+                t.newest_mtime = t.newest_mtime.max(m);
+            }
+        }
+        t
+    }
+
     /// Totals of the subtree under entry `i` (the entry itself included when it is a file).
     pub fn totals(&self, i: usize) -> SubtreeTotals {
         let mut t = SubtreeTotals::default();

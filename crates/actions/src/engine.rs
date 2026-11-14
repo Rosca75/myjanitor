@@ -275,7 +275,12 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
     // too (protected paths, `.git`, `.ssh`, MyJanitor's own folders, mounted volumes).
     // A copy changes nothing at the source and is exempt.
     if md.kind == EntryKind::Dir && !matches!(item.action, Action::Copy { .. }) {
-        ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+        let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+        // F-04: the folder must still hold exactly what the scan saw (the user reviewed
+        // that); a folder item without a scan stamp of its subtree is not acted on.
+        if item.expected_tree != Some(walk.stamp()) {
+            return Err(Error::Changed(item.path.clone()));
+        }
     }
     if requires_confirmation(&item.action) && !opts.confirmed {
         return Err(Error::ConfirmationRequired(format!("{} needs confirmation", item.action.kind().label_text())));
@@ -493,12 +498,39 @@ fn act_retain(
         if let Some(k) = kept {
             restat_keep(ctx, item, k)?;
         }
+        recheck_tree(ctx, item)?;
         e.reversible = !matches!(plan, RetainPlan::Delete);
-        retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now())?;
+        if matches!(plan, RetainPlan::Delete) && is_empty_folder_item(item) {
+            // F-04: an "empty folder" is removed with `remove_dir`, which fails rather
+            // than delete anything that appeared in it since the check.
+            std::fs::remove_dir(&item.path).map_err(|er| Error::io(&item.path, er))?;
+            if let Some(parent) = item.path.parent() {
+                let _ = mj_platform::action::sync_dir(parent);
+            }
+        } else {
+            retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now())?;
+        }
         e.bytes_after = 0;
         e.undo_deadline = if e.reversible { undo_until } else { None };
         Ok(())
     })
+}
+
+/// True for a folder item the scan saw empty.
+fn is_empty_folder_item(item: &ActionItem) -> bool {
+    item.target == TargetKind::Folder && item.expected_tree.is_some_and(|t| t.entries == 0)
+}
+
+/// F-04: right before acting on a folder, its subtree must still be what the scan saw.
+fn recheck_tree(ctx: &ExecContext<'_>, item: &ActionItem) -> Result<()> {
+    if item.target != TargetKind::Folder || matches!(item.action, Action::Copy { .. }) {
+        return Ok(());
+    }
+    let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+    if item.expected_tree != Some(walk.stamp()) {
+        return Err(Error::Changed(item.path.clone()));
+    }
+    Ok(())
 }
 
 fn quarantine_item(
@@ -578,6 +610,9 @@ fn move_or_copy(
         e.created = std::iter::once(target.clone()).chain(new_dirs.iter().cloned()).collect();
     }
     run_acted(ctx, item, e, |e| {
+        if is_move {
+            recheck_tree(ctx, item)?;
+        }
         e.reversible = true;
         if let Some(parent) = target.parent() {
             fsops::create_dirs(parent)?;
@@ -960,7 +995,11 @@ fn archive(
             cancel: ctx.cancel,
             progress: &NullProgress,
         };
-        let size = archiver.create(&job).and_then(|s| archiver.verify(&dst, &sources, &base, ctx.cancel).map(|_| s));
+        let size = archiver
+            .create(&job)
+            .and_then(|s| archiver.verify(&dst, &sources, &base, ctx.cancel).map(|_| s))
+            // F-04: the sources go only if they still are what was scanned and archived.
+            .and_then(|s| if plan.is_some() { recheck_tree(ctx, item).map(|_| s) } else { Ok(s) });
         let size = match size {
             Ok(s) => s,
             Err(err) => {

@@ -188,6 +188,11 @@ impl Engine {
             item.link_source = link_source;
             item.keep = keep;
             item.expected_id = entry.and_then(|e| e.file_id);
+            // F-04: a folder carries its subtree as scanned; the action engine refuses it
+            // when anything below it changed (or when the scan did not see it whole).
+            if c.target == TargetKind::Folder {
+                item.expected_tree = index.position(&c.path).map(|i| index.tree_stamp(i));
+            }
             // F-01: only a regenerable artefact folder (dev artefacts, caches) owns the
             // version-control metadata inside it.
             item.owned_tree =

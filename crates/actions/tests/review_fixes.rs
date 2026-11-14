@@ -349,3 +349,84 @@ fn f03_an_output_that_is_not_a_new_file_never_replaces_the_original() {
     assert_eq!(out.succeeded, 0, "{out:?}");
     assert_eq!(snapshot(&f.root()), before);
 }
+
+#[test]
+fn f04_folder_that_changed_after_the_scan_is_refused_for_every_action() {
+    let f = Fixture::new("f04");
+    let dir = f.t.mkdir("root/was-empty").unwrap();
+    let scanned = folder_actions(&f).into_iter().map(|a| f.item(&dir, a)).collect::<Vec<_>>();
+    // After the scan the user saves a document into the folder.
+    let doc = f.write("was-empty/thesis.docx", b"two years of work");
+    let archiver = NoArchiver;
+    let services = Services { optimisers: &[], archiver: Some(&archiver), tools: &[] };
+    for item in scanned {
+        let run = f.new_run(RunKind::Apply);
+        let out = mj_actions::execute_with(&f.ctx(run, services), std::slice::from_ref(&item), &confirmed()).unwrap();
+        assert_eq!((out.succeeded, out.skipped), (0, 1), "{:?}: {out:?}", item.action);
+        assert_eq!(out.errors[0].error.as_ref().unwrap().code, "changed");
+        assert_eq!(std::fs::read(&doc).unwrap(), b"two years of work");
+    }
+}
+
+#[test]
+fn f04_same_size_edit_inside_a_folder_and_missing_stamp_are_refused() {
+    let f = Fixture::new("f04-edit");
+    f.write("cache/a.bin", &[1u8; 100]);
+    let dir = f.root().join("cache");
+    let item = f.item(&dir, Action::PermanentDelete);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(dir.join("a.bin"), [2u8; 100]).unwrap();
+    let (_, out) = f.apply(&[item], &confirmed());
+    assert_eq!(out.skipped, 1, "{out:?}");
+    // A folder item that carries no scan stamp of its subtree is never acted on.
+    let mut item = f.item(&dir, Action::PermanentDelete);
+    item.expected_tree = None;
+    let (_, out) = f.apply(&[item], &confirmed());
+    assert_eq!(out.skipped, 1, "{out:?}");
+    assert!(dir.join("a.bin").exists());
+    // Unchanged: removed.
+    let (_, out) = f.apply(&[f.item(&dir, Action::PermanentDelete)], &confirmed());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+}
+
+/// An archiver that adds a file to the source folder while archiving (the user saving
+/// a document during a long archive run).
+struct AddsDuringArchive;
+
+impl Archiver for AddsDuringArchive {
+    fn formats(&self, _: &[ExternalTool]) -> Vec<ArchiveFormat> {
+        vec![ArchiveFormat::Zip]
+    }
+    fn create(&self, job: &ArchiveJob<'_>) -> mj_core::Result<u64> {
+        std::fs::write(job.dst, b"archive").unwrap();
+        std::fs::write(job.sources[0].join("new.txt"), b"saved meanwhile").unwrap();
+        Ok(7)
+    }
+    fn verify(&self, _: &Path, _: &[PathBuf], _: &Path, _: &mj_core::CancelToken) -> mj_core::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn f04_archive_keeps_sources_that_changed_while_archiving() {
+    let f = Fixture::new("f04-arc");
+    f.write("proj/a.txt", b"a");
+    let dir = f.root().join("proj");
+    let archiver = AddsDuringArchive;
+    let services = Services { optimisers: &[], archiver: Some(&archiver), tools: &[] };
+    let item = f.item(
+        &dir,
+        Action::Archive {
+            format: ArchiveFormat::Zip,
+            level: 6,
+            dest: None,
+            originals: OriginalsPolicy::Delete,
+            keep_sources: false,
+        },
+    );
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &confirmed()).unwrap();
+    assert_eq!(out.succeeded, 0, "{out:?}");
+    assert!(dir.join("new.txt").exists() && dir.join("a.txt").exists(), "the sources were kept");
+    assert!(!f.root().join("proj.zip").exists(), "the stale archive was removed");
+}
