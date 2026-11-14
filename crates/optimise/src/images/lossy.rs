@@ -10,9 +10,9 @@ use std::io::Read;
 use std::path::Path;
 
 use mj_core::{
-    ActionKind, Availability, Category, Confidence, DetectContext, DetectorOutput, Error, Estimate, ExternalTool,
-    FileEntry, OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport,
-    Result, SafetyClass, SettingSpec, StepPreset,
+    ActionKind, Availability, Category, DetectContext, DetectorOutput, Error, Estimate, ExternalTool, FileEntry,
+    OptimiseJob, OptimiseOutput, Optimiser, OptimiserId, OptimiserInfo, ParamValues, PlatformSupport, Result,
+    SafetyClass, SettingSpec, StepPreset,
 };
 
 use super::adapters::{encoder_args, resize_target, EncodeSpec, Target};
@@ -285,7 +285,7 @@ mod tests {
         let small = ImageLossy.estimate(&e, &ParamValues::new().with("max_edge", spec::n(200.0))).unwrap();
         let low_q = ImageLossy.estimate(&e, &ParamValues::new().with("quality", spec::n(40.0))).unwrap();
         assert!(small.bytes_after < base.bytes_after / 3 && low_q.bytes_after < base.bytes_after);
-        assert_eq!(base.confidence, Confidence::Estimated);
+        assert_eq!(base.confidence, mj_core::Confidence::Estimated);
         assert_eq!(dimensions(&p), Some((400, 200)));
     }
 

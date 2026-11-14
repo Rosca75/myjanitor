@@ -223,7 +223,10 @@ fn verify(src: &[u8], out: &[u8], src_scan: usize, out_scan: usize, tail_len: us
 
 /// Frame header and every APP/COM segment before the first scan (used to check what an external
 /// tool did to the headers).
-pub fn header_signature(buf: &[u8]) -> Option<(jpeg::FrameInfo, Vec<(u8, Vec<u8>)>)> {
+/// Marker and body of each kept header segment.
+pub type HeaderSegments = Vec<(u8, Vec<u8>)>;
+
+pub fn header_signature(buf: &[u8]) -> Option<(jpeg::FrameInfo, HeaderSegments)> {
     let h = jpeg::walk(buf)?;
     let mut pos = 2usize;
     let mut v = Vec::new();
@@ -267,7 +270,7 @@ mod tests {
                 ]),
             ));
         }
-        let t1 = vec![(
+        let t1 = [(
             0,
             Value::Thumbnail([vec![0xFF, 0xD8, 0xFF, 0xDB, 0, 4, 1, 2], vec![9; 400], vec![0xFF, 0xD9]].concat()),
         )];
@@ -372,10 +375,7 @@ mod tests {
         assert_eq!(r.bytes.len(), sample(1, 0).len());
         let mut f = sample(1, 0);
         f.extend_from_slice(b"MOTIONPHOTO-VIDEO");
-        assert_eq!(
-            rewrite(&f, JpegMetadata::StripAll { icc: false }).unwrap().bytes.ends_with(b"MOTIONPHOTO-VIDEO"),
-            true
-        );
+        assert!(rewrite(&f, JpegMetadata::StripAll { icc: false }).unwrap().bytes.ends_with(b"MOTIONPHOTO-VIDEO"));
     }
 
     #[test]

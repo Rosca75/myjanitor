@@ -209,6 +209,7 @@ pub mod spec {
     }
 
     /// A number input.
+    #[allow(clippy::too_many_arguments)]
     pub fn number(
         key: &str,
         label: &str,
