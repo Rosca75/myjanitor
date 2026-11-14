@@ -103,3 +103,21 @@ first (reversible over irreversible, skip over guess, report over act).
   start-up (only if it exists) and `AppInfo::launch` reports it; the UI opens the
   Optimise view or the Clean view (duplicates live there). No scan and no apply start by
   themselves: the user still presses Scan and reviews.
+
+## D-4I07 UI ↔ real backend shapes
+- `crates/engine/tests/ipc_shapes.rs` runs a real session (scan of a generated tree, a
+  detector and an optimiser step, dry run, apply) and compares the field names of 28 real
+  responses (every read command the UI calls) recursively with the IPC.md example of the
+  same type, both directions; fields that are `skip_serializing_if` or data-dependent are
+  listed as optional in the test. Result: no field name drift on the main shapes; the
+  only differences were optional fields absent from examples (`StepDetail.step_id`,
+  `Preview.reason`, `JournalEntry.lossy/original_mode/original_sha256`,
+  `DiskNode.other`), recorded as optional.
+- `MJ_WRITE_UI_FIXTURES=1 cargo test -p mj-engine --test ipc_shapes` writes those
+  responses to `ui/js/testing/real/*.json` (temp roots replaced by `/fixture/...`);
+  `ui/js/real.test.js` mounts the real controller and views on them (overview cards and
+  plan, step review rows, history runs and entries, settings, disk usage) and fails on
+  `undefined`/`NaN`/`[object Object]` text or console errors.
+- Limits: only field names are compared (not value types or enum spellings, which the
+  `ipc_examples_parse` test covers by deserialising the examples); events are not
+  replayed from a real session.

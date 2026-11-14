@@ -1,0 +1,145 @@
+{
+  "groups": [
+    {
+      "confidence": 100.0,
+      "id": 6,
+      "keeper": "/fixture/tree/photos/a.bin",
+      "kind": "exact",
+      "label": "2 copies of a.bin",
+      "members": [
+        "/fixture/tree/downloads/a.bin",
+        "/fixture/tree/photos/a.bin"
+      ]
+    },
+    {
+      "confidence": 100.0,
+      "id": 7,
+      "keeper": "/fixture/tree/contracts/signed.pdf",
+      "kind": "exact",
+      "label": "2 copies of signed.pdf",
+      "members": [
+        "/fixture/tree/contracts/signed.pdf",
+        "/fixture/tree/downloads/signed.pdf"
+      ]
+    }
+  ],
+  "offset": 0,
+  "opportunity_id": "det:exact_duplicates",
+  "rows": [
+    {
+      "actionable": false,
+      "badges": [
+        "duplicate",
+        "signed"
+      ],
+      "blocked_reason": "Digitally signed: skipped (Settings › Safety)",
+      "columns": {
+        "sha256": "c0b9b35c36b8e78b"
+      },
+      "confidence": "exact",
+      "default_selected": false,
+      "group": 7,
+      "id": 11,
+      "modified": 1794491149439731067,
+      "path": "/fixture/tree/downloads/signed.pdf",
+      "reason": "Same content as 1 other file",
+      "selected": false,
+      "size": 4096,
+      "size_after": 0,
+      "source": {
+        "detector": "exact_duplicates"
+      },
+      "stamp": {
+        "mtime": 1794491149439731067,
+        "size": 2087
+      },
+      "target": "file"
+    },
+    {
+      "actionable": false,
+      "badges": [
+        "duplicate",
+        "keeper",
+        "signed"
+      ],
+      "blocked_reason": "Digitally signed: skipped (Settings › Safety)",
+      "columns": {
+        "sha256": "c0b9b35c36b8e78b"
+      },
+      "confidence": "exact",
+      "default_selected": false,
+      "group": 7,
+      "id": 10,
+      "modified": 1792935949439733541,
+      "path": "/fixture/tree/contracts/signed.pdf",
+      "reason": "Copy kept (keep rule)",
+      "selected": false,
+      "size": 4096,
+      "size_after": 0,
+      "source": {
+        "detector": "exact_duplicates"
+      },
+      "stamp": {
+        "mtime": 1792935949439733541,
+        "size": 2087
+      },
+      "target": "file"
+    },
+    {
+      "actionable": true,
+      "badges": [
+        "duplicate",
+        "keeper"
+      ],
+      "columns": {
+        "sha256": "e5bfbf1dc4500e82"
+      },
+      "confidence": "exact",
+      "default_selected": false,
+      "group": 6,
+      "id": 9,
+      "modified": 1793799949438603313,
+      "path": "/fixture/tree/photos/a.bin",
+      "reason": "Copy kept (keep rule)",
+      "selected": false,
+      "size": 303104,
+      "size_after": 0,
+      "source": {
+        "detector": "exact_duplicates"
+      },
+      "stamp": {
+        "mtime": 1793799949438603313,
+        "size": 300000
+      },
+      "target": "file"
+    },
+    {
+      "actionable": true,
+      "badges": [
+        "duplicate"
+      ],
+      "columns": {
+        "sha256": "e5bfbf1dc4500e82"
+      },
+      "confidence": "exact",
+      "default_selected": true,
+      "group": 6,
+      "id": 8,
+      "modified": 1794404749438593726,
+      "path": "/fixture/tree/downloads/a.bin",
+      "reason": "Same content as 1 other file",
+      "selected": true,
+      "size": 303104,
+      "size_after": 0,
+      "source": {
+        "detector": "exact_duplicates"
+      },
+      "stamp": {
+        "mtime": 1794404749438593726,
+        "size": 300000
+      },
+      "target": "file"
+    }
+  ],
+  "total": 4
+}

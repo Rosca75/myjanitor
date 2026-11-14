@@ -1,0 +1,73 @@
+{
+  "entries": [
+    {
+      "action": "quarantine",
+      "at": 1794663949607527233,
+      "bytes_after": 0,
+      "bytes_before": 5000,
+      "id": 1794663949600000000,
+      "job_id": 16,
+      "lossy": false,
+      "original": "/fixture/tree/work/report.tmp",
+      "original_mode": 420,
+      "original_sha256": "e8876a719511d4a69e2b7f939437b1de0f46aae1cf27c45e13f47deef59f6bef",
+      "original_stamp": {
+        "mtime": 1794404749438695770,
+        "size": 5000
+      },
+      "retained_at": "/fixture/app/quarantine/1794663949600/1794663949600000000/report.tmp",
+      "reversible": true,
+      "run_id": 1794663949600,
+      "state": "done",
+      "step_id": 13,
+      "target": "file",
+      "undo_deadline": 1797255949603005135
+    },
+    {
+      "action": "optimise",
+      "at": 1794663949644341942,
+      "bytes_after": 357,
+      "bytes_before": 55664,
+      "created": [
+        "/fixture/tree/img/a.png"
+      ],
+      "id": 1794663949600000001,
+      "job_id": 17,
+      "lossy": false,
+      "original": "/fixture/tree/img/a.png",
+      "original_mode": 420,
+      "original_sha256": "b46633f63722712de6688473c99124f9126b8ce5ab12f8d12ea9044f31d0ad45",
+      "original_stamp": {
+        "mtime": 1794663949442647136,
+        "size": 55664
+      },
+      "retained_at": "/fixture/app/quarantine/1794663949600/1794663949600000001/a.png",
+      "reversible": true,
+      "run_id": 1794663949600,
+      "state": "done",
+      "step_id": 14,
+      "target": "file",
+      "undo_deadline": 1797255949608469771
+    }
+  ],
+  "occupied": [],
+  "run": {
+    "bytes_saved": 60307,
+    "done": 2,
+    "failed": 0,
+    "finished": 1794663949644742726,
+    "items": 2,
+    "kind": "apply",
+    "run_id": 1794663949600,
+    "started": 1794663949600636716,
+    "steps": [
+      "Temporary files",
+      "PNG images"
+    ],
+    "title": "Plan · 2 steps",
+    "undo_until": 1797255949608469771,
+    "undoable": true,
+    "undone": 0
+  },
+  "total": 2
+}

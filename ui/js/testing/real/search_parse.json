@@ -1,0 +1,22 @@
+{
+  "errors": [],
+  "rule": {
+    "all": [
+      {
+        "cond": {
+          "field": "extension",
+          "values": [
+            "bin"
+          ]
+        }
+      },
+      {
+        "cond": {
+          "bytes": 1024,
+          "cmp": "gt",
+          "field": "size"
+        }
+      }
+    ]
+  }
+}

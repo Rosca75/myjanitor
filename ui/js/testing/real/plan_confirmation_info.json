@@ -1,0 +1,18 @@
+{
+  "acknowledge_text": "I understand the new files are lower quality than the originals",
+  "action_label": "Compress 1 file",
+  "body": "This is lossy: the new files are smaller but cannot be turned back into the originals.",
+  "bytes_after": 0,
+  "bytes_now": 8192,
+  "confidence": "exact",
+  "default_originals": {
+    "policy": "recycle_bin"
+  },
+  "files": 1,
+  "originals_options": [],
+  "permanent": false,
+  "saving": 8192,
+  "step_id": 13,
+  "title": "Compress 1 file?",
+  "undo_text": "Every change is logged; History → Restore brings the originals back for 30 days."
+}

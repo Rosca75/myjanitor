@@ -1,0 +1,80 @@
+[
+  {
+    "found": true,
+    "id": "ffmpeg",
+    "path": "/usr/bin/ffmpeg",
+    "used_for": [
+      "Video",
+      "Screen recordings",
+      "Meeting recordings"
+    ],
+    "version": "6.1.1-3ubuntu5"
+  },
+  {
+    "found": true,
+    "id": "ffprobe",
+    "path": "/usr/bin/ffprobe",
+    "used_for": [
+      "Video",
+      "Screen recordings",
+      "Meeting recordings"
+    ],
+    "version": "6.1.1-3ubuntu5"
+  },
+  {
+    "found": false,
+    "id": "avifenc",
+    "used_for": [
+      "Photos (lossy)"
+    ]
+  },
+  {
+    "found": false,
+    "id": "cjxl",
+    "used_for": [
+      "Photos (lossy)"
+    ]
+  },
+  {
+    "found": false,
+    "id": "cwebp",
+    "used_for": [
+      "Photos (lossy)"
+    ]
+  },
+  {
+    "found": false,
+    "id": "7z",
+    "used_for": [
+      "7z archives"
+    ]
+  },
+  {
+    "found": false,
+    "id": "zstd",
+    "used_for": [
+      "zstd archives"
+    ]
+  },
+  {
+    "found": false,
+    "id": "oxipng",
+    "used_for": [
+      "PNG images"
+    ]
+  },
+  {
+    "found": false,
+    "id": "jpegtran",
+    "used_for": [
+      "JPEG images"
+    ]
+  },
+  {
+    "found": false,
+    "id": "gifsicle",
+    "used_for": [
+      "GIF images (no optimiser yet)"
+    ]
+  }
+]

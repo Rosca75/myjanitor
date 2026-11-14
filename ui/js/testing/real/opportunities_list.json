@@ -1,0 +1,818 @@
+{
+  "cached": false,
+  "counts": {
+    "all": 10,
+    "archive": 2,
+    "clean": 5,
+    "optimise": 3,
+    "review_only": 0
+  },
+  "generation": 1,
+  "items": [
+    {
+      "availability": {
+        "state": "available"
+      },
+      "available_actions": [
+        "trash",
+        "quarantine",
+        "permanent_delete",
+        "move",
+        "hardlink",
+        "reflink"
+      ],
+      "badges": [
+        "duplicate",
+        "keeper",
+        "signed"
+      ],
+      "candidates": 4,
+      "category": "clean",
+      "confidence": "exact",
+      "count": 1,
+      "default_action": {
+        "kind": "trash"
+      },
+      "description": "Files with identical content",
+      "feature_ids": [
+        "CLN-DET-01",
+        "CLN-ACT-01",
+        "CLN-ACT-06"
+      ],
+      "id": "det:exact_duplicates",
+      "in_plan": true,
+      "params": {
+        "keep_rule": "oldest",
+        "preferred_folder": ""
+      },
+      "presets": [],
+      "rank": 303104.0,
+      "safety": "reversible",
+      "saving": 303104,
+      "selected": 1,
+      "settings": [
+        {
+          "advanced": false,
+          "help": "Exactly one file of every group is always kept",
+          "key": "keep_rule",
+          "kind": {
+            "default": "oldest",
+            "options": [
+              {
+                "label": "Keep newest",
+                "value": "newest"
+              },
+              {
+                "label": "Keep oldest",
+                "value": "oldest"
+              },
+              {
+                "label": "Keep shortest path",
+                "value": "shortest_path"
+              },
+              {
+                "label": "Keep highest resolution",
+                "value": "highest_resolution"
+              },
+              {
+                "label": "Keep the copy in a preferred folder",
+                "value": "preferred_folder"
+              }
+            ],
+            "type": "choice"
+          },
+          "label": "Copy to keep",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "help": "Used by \"preferred folder\"; falls back to the newest copy",
+          "key": "preferred_folder",
+          "kind": {
+            "default": "",
+            "type": "folder"
+          },
+          "label": "Preferred folder",
+          "lossy": false
+        }
+      ],
+      "size_before": 303104,
+      "source": {
+        "detector": "exact_duplicates"
+      },
+      "sub_groups": [],
+      "title": "Exact duplicates",
+      "unit": "files"
+    },
+    {
+      "availability": {
+        "state": "available"
+      },
+      "available_actions": [
+        "trash",
+        "quarantine",
+        "move",
+        "permanent_delete"
+      ],
+      "badges": [],
+      "candidates": 1,
+      "category": "clean",
+      "confidence": "exact",
+      "count": 1,
+      "default_action": {
+        "kind": "trash"
+      },
+      "description": "Installers and disk images in Downloads",
+      "feature_ids": [
+        "CLN-DET-14"
+      ],
+      "id": "det:old_installers",
+      "in_plan": false,
+      "params": {
+        "folders": "",
+        "min_age_days": 180.0
+      },
+      "presets": [],
+      "rank": 40960.0,
+      "safety": "reversible",
+      "saving": 40960,
+      "selected": 1,
+      "settings": [
+        {
+          "advanced": false,
+          "help": "Only installers last changed longer ago than this are listed.",
+          "key": "min_age_days",
+          "kind": {
+            "default": 180.0,
+            "max": 3650.0,
+            "min": 1.0,
+            "step": 1.0,
+            "type": "number",
+            "unit": "days"
+          },
+          "label": "Older than",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "help": "Comma-separated folder names to treat like Downloads.",
+          "key": "folders",
+          "kind": {
+            "default": "",
+            "type": "text"
+          },
+          "label": "Extra download folder names",
+          "lossy": false
+        }
+      ],
+      "size_before": 40960,
+      "source": {
+        "detector": "old_installers"
+      },
+      "sub_groups": [],
+      "title": "Old installers",
+      "unit": "files"
+    },
+    {
+      "availability": {
+        "state": "available"
+      },
+      "available_actions": [
+        "trash",
+        "quarantine",
+        "permanent_delete"
+      ],
+      "badges": [
+        "rebuildable"
+      ],
+      "candidates": 1,
+      "category": "clean",
+      "confidence": "exact",
+      "count": 1,
+      "default_action": {
+        "kind": "trash"
+      },
+      "description": "node_modules, .venv, target/ and other rebuildable folders",
+      "feature_ids": [
+        "CLN-DET-13"
+      ],
+      "id": "det:dev_artefacts",
+      "in_plan": false,
+      "params": {},
+      "presets": [],
+      "rank": 24576.0,
+      "safety": "rebuildable",
+      "saving": 24576,
+      "selected": 1,
+      "settings": [],
+      "size_before": 24576,
+      "source": {
+        "detector": "dev_artefacts"
+      },
+      "sub_groups": [
+        {
+          "count": 1,
+          "key": "node_modules",
+          "label": "node modules"
+        }
+      ],
+      "title": "Developer artefacts",
+      "unit": "folders"
+    },
+    {
+      "availability": {
+        "state": "available"
+      },
+      "available_actions": [
+        "trash",
+        "permanent_delete"
+      ],
+      "badges": [],
+      "candidates": 1,
+      "category": "clean",
+      "confidence": "exact",
+      "count": 1,
+      "default_action": {
+        "kind": "trash"
+      },
+      "description": "Folders with nothing inside, including nested empty trees",
+      "feature_ids": [
+        "CLN-DET-06"
+      ],
+      "id": "det:empty_folders",
+      "in_plan": false,
+      "params": {},
+      "presets": [],
+      "rank": 0.0,
+      "safety": "reversible",
+      "saving": 0,
+      "selected": 1,
+      "settings": [],
+      "size_before": 0,
+      "source": {
+        "detector": "empty_folders"
+      },
+      "sub_groups": [],
+      "title": "Empty folders",
+      "unit": "folders"
+    },
+    {
+      "availability": {
+        "reason": "Not implemented yet: Archive cold folders analysis (W3-B)",
+        "state": "disabled"
+      },
+      "available_actions": [
+        "archive"
+      ],
+      "badges": [],
+      "candidates": 0,
+      "category": "archive",
+      "confidence": "exact",
+      "count": 0,
+      "default_action": {
+        "format": "zip",
+        "keep_sources": false,
+        "kind": "archive",
+        "level": 9,
+        "originals": {
+          "policy": "recycle_bin"
+        }
+      },
+      "description": "Folders not used for months, packed into one archive",
+      "feature_ids": [
+        "OPT-ARC-01",
+        "OPT-ARC-02",
+        "OPT-ARC-04",
+        "OPT-ARC-05"
+      ],
+      "id": "opt:archive_folders",
+      "in_plan": false,
+      "params": {},
+      "presets": [],
+      "rank": 0.0,
+      "safety": "reversible",
+      "saving": 0,
+      "selected": 0,
+      "settings": [],
+      "size_before": 0,
+      "source": {
+        "optimiser": "archive_folders"
+      },
+      "sub_groups": [],
+      "title": "Archive cold folders",
+      "unit": "folders"
+    },
+    {
+      "availability": {
+        "reason": "Not available on this platform",
+        "state": "disabled"
+      },
+      "available_actions": [
+        "quarantine",
+        "trash"
+      ],
+      "badges": [],
+      "candidates": 0,
+      "category": "clean",
+      "confidence": "exact",
+      "count": 0,
+      "default_action": {
+        "kind": "quarantine",
+        "purge_after_days": 30
+      },
+      "description": "AutoRecover files and Office caches",
+      "feature_ids": [
+        "CLN-DET-12"
+      ],
+      "id": "det:office_leftovers",
+      "in_plan": false,
+      "params": {},
+      "presets": [],
+      "rank": 0.0,
+      "safety": "reversible",
+      "saving": 0,
+      "selected": 0,
+      "settings": [],
+      "size_before": 0,
+      "source": {
+        "detector": "office_leftovers"
+      },
+      "sub_groups": [],
+      "title": "Office leftovers",
+      "unit": "files"
+    },
+    {
+      "availability": {
+        "reason": "Image downsampling and font subsetting need an image codec and a font subsetter that are not bundled",
+        "state": "disabled"
+      },
+      "available_actions": [
+        "optimise"
+      ],
+      "badges": [],
+      "candidates": 0,
+      "category": "optimise",
+      "confidence": "exact",
+      "count": 0,
+      "default_action": {
+        "keep_if_not_smaller": true,
+        "kind": "optimise",
+        "optimiser": "pdf_lossy",
+        "originals": {
+          "policy": "recycle_bin"
+        },
+        "output": {
+          "mode": "replace"
+        },
+        "params": {}
+      },
+      "description": "Downsample images to a target DPI",
+      "feature_ids": [
+        "OPT-PDF-01",
+        "OPT-PDF-02",
+        "OPT-PDF-04"
+      ],
+      "id": "opt:pdf_lossy",
+      "in_plan": false,
+      "params": {
+        "dpi": "150",
+        "preset": "ebook",
+        "subset_fonts": false
+      },
+      "presets": [],
+      "rank": 0.0,
+      "safety": "lossy_opt_in",
+      "saving": 0,
+      "selected": 0,
+      "settings": [
+        {
+          "advanced": false,
+          "disabled_reason": "Image downsampling and font subsetting need an image codec and a font subsetter that are not bundled",
+          "help": "Screen 72 dpi, eBook 150 dpi, Prepress 300 dpi",
+          "key": "preset",
+          "kind": {
+            "default": "ebook",
+            "options": [
+              {
+                "label": "Screen",
+                "value": "screen"
+              },
+              {
+                "label": "eBook",
+                "value": "ebook"
+              },
+              {
+                "label": "Prepress",
+                "value": "prepress"
+              }
+            ],
+            "type": "choice"
+          },
+          "label": "Preset",
+          "lossy": true
+        },
+        {
+          "advanced": false,
+          "disabled_reason": "Image downsampling and font subsetting need an image codec and a font subsetter that are not bundled",
+          "key": "dpi",
+          "kind": {
+            "default": "150",
+            "options": [
+              {
+                "label": "72 dpi",
+                "value": "72"
+              },
+              {
+                "label": "150 dpi",
+                "value": "150"
+              },
+              {
+                "label": "300 dpi",
+                "value": "300"
+              }
+            ],
+            "type": "choice"
+          },
+          "label": "Image resolution",
+          "lossy": true
+        },
+        {
+          "advanced": false,
+          "disabled_reason": "Image downsampling and font subsetting need an image codec and a font subsetter that are not bundled",
+          "help": "Byte-identical duplicate fonts are already merged by the lossless pass",
+          "key": "subset_fonts",
+          "kind": {
+            "default": false,
+            "type": "toggle"
+          },
+          "label": "Subset embedded fonts",
+          "lossy": false
+        }
+      ],
+      "size_before": 0,
+      "source": {
+        "optimiser": "pdf_lossy"
+      },
+      "sub_groups": [],
+      "title": "PDF images",
+      "unit": "files"
+    },
+    {
+      "availability": {
+        "reason": "Requires cwebp, avifenc or cjxl on PATH",
+        "state": "disabled"
+      },
+      "available_actions": [
+        "optimise"
+      ],
+      "badges": [],
+      "candidates": 0,
+      "category": "optimise",
+      "confidence": "exact",
+      "count": 0,
+      "default_action": {
+        "keep_if_not_smaller": true,
+        "kind": "optimise",
+        "optimiser": "image_lossy",
+        "originals": {
+          "policy": "recycle_bin"
+        },
+        "output": {
+          "mode": "replace"
+        },
+        "params": {}
+      },
+      "description": "Re-encode to WebP, AVIF or JPEG XL",
+      "feature_ids": [
+        "OPT-IMG-02",
+        "OPT-IMG-03",
+        "OPT-IMG-04"
+      ],
+      "id": "opt:image_lossy",
+      "in_plan": false,
+      "params": {
+        "edge": "long",
+        "format": "webp",
+        "lossless": false,
+        "max_edge": 0.0,
+        "quality": 80.0,
+        "strip_metadata": false
+      },
+      "presets": [
+        {
+          "description": "WebP quality 80 · looks the same",
+          "id": "balanced",
+          "label": "Balanced",
+          "lossy": true,
+          "values": {
+            "format": "webp",
+            "lossless": false,
+            "quality": 80.0
+          }
+        },
+        {
+          "description": "AVIF quality 60",
+          "id": "smallest",
+          "label": "Smallest",
+          "lossy": true,
+          "values": {
+            "format": "avif",
+            "lossless": false,
+            "quality": 60.0
+          }
+        },
+        {
+          "description": "JPEG XL from JPEG · no quality loss",
+          "id": "reversible",
+          "label": "Reversible",
+          "lossy": false,
+          "values": {
+            "format": "jxl",
+            "lossless": true
+          }
+        }
+      ],
+      "rank": 0.0,
+      "safety": "lossy_opt_in",
+      "saving": 0,
+      "selected": 0,
+      "settings": [
+        {
+          "advanced": false,
+          "key": "format",
+          "kind": {
+            "default": "webp",
+            "options": [
+              {
+                "help": "Opens almost everywhere; needs cwebp",
+                "label": "WebP",
+                "value": "webp"
+              },
+              {
+                "help": "Smallest; newer apps only; needs avifenc",
+                "label": "AVIF",
+                "value": "avif"
+              },
+              {
+                "help": "A JPEG converts back bit for bit; few apps open it yet; needs cjxl",
+                "label": "JPEG XL",
+                "value": "jxl"
+              }
+            ],
+            "type": "choice"
+          },
+          "label": "Format",
+          "lossy": false
+        },
+        {
+          "advanced": false,
+          "key": "quality",
+          "kind": {
+            "default": 80.0,
+            "max": 100.0,
+            "min": 1.0,
+            "step": 1.0,
+            "type": "number"
+          },
+          "label": "Quality",
+          "lossy": false
+        },
+        {
+          "advanced": false,
+          "help": "JPEG to JPEG XL is reversible; other conversions are lossless but larger",
+          "key": "lossless",
+          "kind": {
+            "default": false,
+            "type": "toggle"
+          },
+          "label": "Keep every pixel (lossless)",
+          "lossy": false
+        },
+        {
+          "advanced": false,
+          "key": "max_edge",
+          "kind": {
+            "default": 0.0,
+            "max": 12000.0,
+            "min": 0.0,
+            "step": 100.0,
+            "type": "number",
+            "unit": "px (0 = off)"
+          },
+          "label": "Shrink pictures larger than",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "key": "edge",
+          "kind": {
+            "default": "long",
+            "options": [
+              {
+                "label": "Long edge",
+                "value": "long"
+              },
+              {
+                "label": "Short edge",
+                "value": "short"
+              }
+            ],
+            "type": "choice"
+          },
+          "label": "Measured on the",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "help": "A colour profile is always kept",
+          "key": "strip_metadata",
+          "kind": {
+            "default": false,
+            "type": "toggle"
+          },
+          "label": "Remove EXIF and XMP",
+          "lossy": false
+        }
+      ],
+      "size_before": 0,
+      "source": {
+        "optimiser": "image_lossy"
+      },
+      "sub_groups": [],
+      "title": "Photos (lossy)",
+      "unit": "images"
+    },
+    {
+      "availability": {
+        "reason": "Not implemented yet: Recompress archives analysis (W3-B)",
+        "state": "disabled"
+      },
+      "available_actions": [
+        "optimise"
+      ],
+      "badges": [],
+      "candidates": 0,
+      "category": "archive",
+      "confidence": "exact",
+      "count": 0,
+      "default_action": {
+        "keep_if_not_smaller": true,
+        "kind": "optimise",
+        "optimiser": "archive_recompress",
+        "originals": {
+          "policy": "recycle_bin"
+        },
+        "output": {
+          "mode": "replace"
+        },
+        "params": {}
+      },
+      "description": "Existing archives repacked with a stronger setting",
+      "feature_ids": [
+        "OPT-ARC-03"
+      ],
+      "id": "opt:archive_recompress",
+      "in_plan": false,
+      "params": {},
+      "presets": [],
+      "rank": 0.0,
+      "safety": "reversible",
+      "saving": 0,
+      "selected": 0,
+      "settings": [],
+      "size_before": 0,
+      "source": {
+        "optimiser": "archive_recompress"
+      },
+      "sub_groups": [],
+      "title": "Recompress archives",
+      "unit": "files"
+    },
+    {
+      "availability": {
+        "reason": "Needs a Btrfs volume",
+        "state": "disabled"
+      },
+      "available_actions": [
+        "fs_compress",
+        "fs_decompress"
+      ],
+      "badges": [],
+      "candidates": 0,
+      "category": "optimise",
+      "confidence": "exact",
+      "count": 0,
+      "default_action": {
+        "algorithm": "btrfs_zstd",
+        "kind": "fs_compress"
+      },
+      "description": "Compress cold folders, files stay usable",
+      "feature_ids": [
+        "OPT-FSC-01",
+        "OPT-FSC-02",
+        "OPT-FSC-04",
+        "OPT-FSC-05",
+        "OPT-FSC-06"
+      ],
+      "id": "opt:fs_compression",
+      "in_plan": false,
+      "params": {
+        "algorithm": "btrfs_zstd",
+        "min_age_days": 90.0,
+        "min_size_kib": 16.0,
+        "skip_incompressible": true,
+        "watcher": false
+      },
+      "presets": [],
+      "rank": 0.0,
+      "safety": "reversible",
+      "saving": 0,
+      "selected": 0,
+      "settings": [
+        {
+          "advanced": false,
+          "key": "algorithm",
+          "kind": {
+            "default": "btrfs_zstd",
+            "options": [
+              {
+                "help": "Btrfs compression property, existing data rewritten",
+                "label": "Btrfs zstd",
+                "value": "btrfs_zstd"
+              }
+            ],
+            "type": "choice"
+          },
+          "label": "Algorithm",
+          "lossy": false
+        },
+        {
+          "advanced": false,
+          "help": "Already compressed formats, and files whose samples shrink by less than 10%",
+          "key": "skip_incompressible",
+          "kind": {
+            "default": true,
+            "type": "toggle"
+          },
+          "label": "Skip poorly compressible files",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "key": "min_age_days",
+          "kind": {
+            "default": 90.0,
+            "max": 3650.0,
+            "min": 0.0,
+            "step": 1.0,
+            "type": "number",
+            "unit": "days"
+          },
+          "label": "Not modified for at least",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "key": "min_size_kib",
+          "kind": {
+            "default": 16.0,
+            "max": 1048576.0,
+            "min": 0.0,
+            "step": 1.0,
+            "type": "number",
+            "unit": "KiB"
+          },
+          "label": "Minimum file size",
+          "lossy": false
+        },
+        {
+          "advanced": true,
+          "disabled_reason": "Not built yet: re-run this step after large updates instead",
+          "key": "watcher",
+          "kind": {
+            "default": false,
+            "type": "toggle"
+          },
+          "label": "Recompress after updates in the background",
+          "lossy": false
+        }
+      ],
+      "size_before": 0,
+      "source": {
+        "optimiser": "fs_compression"
+      },
+      "sub_groups": [],
+      "title": "Transparent compression",
+      "unit": "files"
+    }
+  ],
+  "scanned_at": 1794663949506376681,
+  "summary": {
+    "opportunities": 4,
+    "opt_in": 0,
+    "reclaimed": 63499,
+    "reversible": 368640,
+    "review_only": 0,
+    "total": 368640
+  }
+}

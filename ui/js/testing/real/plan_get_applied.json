@@ -1,0 +1,88 @@
+{
+  "checklist": [
+    {
+      "code": "undo_window",
+      "level": "ok",
+      "text": "Every reversible step can be undone from History for 30 days"
+    }
+  ],
+  "estimate": {
+    "bytes_after": 357,
+    "bytes_before": 63856,
+    "confidence": "exact",
+    "files": 2,
+    "skipped": 0
+  },
+  "id": 12,
+  "name": "Your plan",
+  "steps": [
+    {
+      "action": {
+        "kind": "trash"
+      },
+      "estimate": {
+        "bytes_after": 0,
+        "bytes_before": 8192,
+        "confidence": "exact",
+        "files": 1,
+        "skipped": 0
+      },
+      "id": 13,
+      "lossy": false,
+      "opportunity": "det:temp_files",
+      "params": {
+        "min_age_hours": 24.0
+      },
+      "safety": "reversible",
+      "selection": {
+        "exclude": [],
+        "include": []
+      },
+      "summary": "To Trash",
+      "title": "Temporary files"
+    },
+    {
+      "action": {
+        "keep_if_not_smaller": true,
+        "kind": "optimise",
+        "optimiser": "png_lossless",
+        "originals": {
+          "policy": "recycle_bin"
+        },
+        "output": {
+          "mode": "replace"
+        },
+        "params": {
+          "metadata": "keep_all",
+          "refilter": true,
+          "strip_colour": false,
+          "use_oxipng": true
+        }
+      },
+      "estimate": {
+        "bytes_after": 357,
+        "bytes_before": 55664,
+        "confidence": "exact",
+        "files": 1,
+        "skipped": 0
+      },
+      "id": 14,
+      "lossy": false,
+      "opportunity": "opt:png_lossless",
+      "params": {
+        "metadata": "keep_all",
+        "refilter": true,
+        "strip_colour": false,
+        "use_oxipng": true
+      },
+      "safety": "reversible",
+      "selection": {
+        "exclude": [],
+        "include": []
+      },
+      "summary": "Optimise · originals to Recycle Bin",
+      "title": "PNG images"
+    }
+  ],
+  "updated": 1794663949589730700
+}

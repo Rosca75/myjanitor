@@ -1,0 +1,88 @@
+{
+  "entries": [
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "contracts",
+      "path": "/fixture/tree/contracts"
+    },
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "downloads",
+      "path": "/fixture/tree/downloads"
+    },
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "img",
+      "path": "/fixture/tree/img"
+    },
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "old",
+      "path": "/fixture/tree/old"
+    },
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "photos",
+      "path": "/fixture/tree/photos"
+    },
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "proj",
+      "path": "/fixture/tree/proj"
+    },
+    {
+      "hidden": false,
+      "is_dir": true,
+      "is_link": false,
+      "name": "work",
+      "path": "/fixture/tree/work"
+    }
+  ],
+  "omitted": 0,
+  "parent": "/tmp",
+  "path": "/fixture/tree",
+  "places": [
+    {
+      "kind": "home",
+      "label": "Home",
+      "path": "/root"
+    },
+    {
+      "kind": "drive",
+      "label": "Computer",
+      "path": "/"
+    },
+    {
+      "kind": "drive",
+      "label": "skills",
+      "path": "/mnt/skills"
+    },
+    {
+      "kind": "drive",
+      "label": "attach",
+      "path": "/mnt/attach"
+    },
+    {
+      "kind": "drive",
+      "label": "sandboxing",
+      "path": "/mnt/sandboxing"
+    },
+    {
+      "kind": "drive",
+      "label": "user-data",
+      "path": "/mnt/user-data"
+    }
+  ]
+}
