@@ -446,7 +446,7 @@ FileKey2=%MISSING%\\x|*.*\r\n";
         let hits = resolve(&ix, &parse(SAMPLE), &env, &mut diag);
         let mut names: Vec<String> = hits
             .iter()
-            .map(|h| ix.entry(h.pos).path.strip_prefix(t.path()).unwrap().to_string_lossy().into_owned())
+            .map(|h| ix.entry(h.pos).path.strip_prefix(t.path()).unwrap().to_string_lossy().replace('\\', "/"))
             .collect();
         names.sort();
         // Recursive cache files, non-recursive logs minus the excluded one, the whole folder.

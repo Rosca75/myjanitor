@@ -15,7 +15,9 @@ use mj_core::{
     Action, ActionItem, Attributes, CancelToken, Error, FileEntry, FsCompressAlgo, JobId, NullProgress, Result, RunId,
     RunKind, RunRecord, Settings, TargetKind, Timestamp, TrashTicket,
 };
-use mj_platform::action::trash::{restore_freedesktop, trash_with, TrashConfig};
+use mj_platform::action::trash::TrashConfig;
+#[cfg(unix)]
+use mj_platform::action::trash::{restore_freedesktop, trash_with};
 use mj_platform::{ActionPlatform, CloudInfo, DirItem, NativePlatform, ScanPlatform, SyncRoot, VolumeInfo};
 
 /// Real filesystem calls, with the trash redirected and failures injectable.
@@ -81,10 +83,16 @@ impl ActionPlatform for TestPlatform {
         if self.fail_trash_at == Some(n) {
             return Err(Error::Io { path: Some(path.into()), kind: "other", message: "injected failure".into() });
         }
-        trash_with(path, &self.trash_cfg, Timestamp::now())
+        #[cfg(unix)]
+        return trash_with(path, &self.trash_cfg, Timestamp::now());
+        #[cfg(not(unix))]
+        return fixture_trash::trash(path, &self.trash_cfg.home_trash);
     }
     fn restore_trashed(&self, ticket: &TrashTicket, original: &Path) -> Result<()> {
-        restore_freedesktop(ticket, original)
+        #[cfg(unix)]
+        return restore_freedesktop(ticket, original);
+        #[cfg(not(unix))]
+        return fixture_trash::restore(ticket, original);
     }
     fn hardlink(&self, existing: &Path, new_link: &Path) -> Result<()> {
         self.native.hardlink(existing, new_link)
@@ -123,6 +131,55 @@ impl ActionPlatform for TestPlatform {
     }
     fn fs_compression(&self, path: &Path) -> Result<Option<FsCompressAlgo>> {
         Ok(self.compressed.lock().unwrap().contains(path).then_some(FsCompressAlgo::BtrfsZstd))
+    }
+}
+
+/// Windows has no freedesktop Trash, and the tests never use the real Recycle Bin: a
+/// trash of the same shape inside the fixture (`files/` holds the item, `info/` a record
+/// of its original path), so the engine's trash and undo paths run unchanged.
+#[cfg(not(unix))]
+mod fixture_trash {
+    use std::path::Path;
+
+    use mj_core::pathutil::path_key;
+    use mj_core::{Error, Result, Timestamp, TrashTicket};
+
+    pub fn trash(path: &Path, home_trash: &Path) -> Result<TrashTicket> {
+        let (files, info) = (home_trash.join("files"), home_trash.join("info"));
+        for d in [&files, &info] {
+            std::fs::create_dir_all(d).map_err(|e| Error::io(d, e))?;
+        }
+        let name = path.file_name().ok_or_else(|| Error::InvalidInput("no file name".into()))?;
+        let loc = mj_core::pathutil::unique_name(&files.join(name), |p| std::fs::symlink_metadata(p).is_ok());
+        let mut info_name = loc.file_name().unwrap().to_os_string();
+        info_name.push(".trashinfo");
+        let inf = info.join(info_name);
+        std::fs::write(&inf, mj_core::pathutil::encode_path(path)).map_err(|e| Error::io(&inf, e))?;
+        if let Err(e) = mj_platform::action::rename_no_replace(path, &loc) {
+            let _ = std::fs::remove_file(&inf);
+            return Err(e);
+        }
+        Ok(TrashTicket { location: Some(loc), info: Some(inf), trashed_at: Timestamp::now() })
+    }
+
+    pub fn restore(ticket: &TrashTicket, original: &Path) -> Result<()> {
+        let (Some(loc), Some(inf)) = (&ticket.location, &ticket.info) else {
+            return Err(Error::InvalidInput("incomplete trash ticket".into()));
+        };
+        let text = std::fs::read_to_string(inf).map_err(|e| Error::io(inf, e))?;
+        let recorded = mj_core::pathutil::decode_path(&text).map_err(Error::InvalidInput)?;
+        if path_key(&recorded) != path_key(original) {
+            return Err(Error::Conflict(format!("the trash entry belongs to {}", recorded.display())));
+        }
+        if std::fs::symlink_metadata(original).is_ok() {
+            return Err(Error::Conflict(format!("{} exists again; nothing was overwritten", original.display())));
+        }
+        if let Some(parent) = original.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::io(parent, e))?;
+        }
+        mj_platform::action::rename_no_replace(loc, original)?;
+        let _ = std::fs::remove_file(inf);
+        Ok(())
     }
 }
 

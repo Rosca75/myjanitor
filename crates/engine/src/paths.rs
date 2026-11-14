@@ -133,9 +133,12 @@ pub fn resolve(os: Os, env: &EnvMap, exe_dir: Option<&Path>, portable_marker: bo
         }
         Os::Linux => {
             let home = var("HOME").unwrap_or_else(std::env::temp_dir);
-            // The XDG spec says a relative value must be ignored.
-            let xdg =
-                |k: &str, fallback: &str| var(k).filter(|p| p.is_absolute()).unwrap_or_else(|| home.join(fallback));
+            // The XDG spec says a relative value must be ignored. "Absolute" is the Unix
+            // rule (a leading `/`) whatever the host, so the resolution stays a pure
+            // function of `os` (a Linux layout resolved on Windows still reads `/x/c`).
+            let xdg = |k: &str, fallback: &str| {
+                var(k).filter(|p| p.to_string_lossy().starts_with('/')).unwrap_or_else(|| home.join(fallback))
+            };
             let config = xdg("XDG_CONFIG_HOME", ".config");
             let data = xdg("XDG_DATA_HOME", ".local/share");
             let cache = xdg("XDG_CACHE_HOME", ".cache");
@@ -272,7 +275,12 @@ mod tests {
     #[test]
     fn temp_setting_wins_when_absolute() {
         let d = AppDirs::under(Path::new("/tmp/t"));
-        assert_eq!(effective_temp_dir(Some(Path::new("/mnt/ram")), &d), PathBuf::from("/mnt/ram"));
+        // The setting is judged by the host's rule: `/mnt/ram` is not absolute on Windows.
+        let ram = mj_core::testutil::abs("/mnt/ram");
+        assert_eq!(effective_temp_dir(Some(&ram), &d), ram);
+        if cfg!(windows) {
+            assert_eq!(effective_temp_dir(Some(Path::new("/mnt/ram")), &d), d.temp, "drive-relative");
+        }
         assert_eq!(effective_temp_dir(Some(Path::new("relative")), &d), d.temp);
         assert_eq!(effective_temp_dir(None, &d), d.temp);
     }

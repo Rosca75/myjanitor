@@ -71,6 +71,61 @@ impl Drop for TempDir {
     }
 }
 
+/// An absolute path on this host from a Unix-style spelling, for pure path tests:
+/// `/home/m` as is on Unix, `C:\home\m` on Windows (where `/home/m` is drive-relative,
+/// not absolute). Nothing is created.
+pub fn abs(unix: &str) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(format!("C:{}", unix.replace('/', "\\")))
+    } else {
+        PathBuf::from(unix)
+    }
+}
+
+/// A link to a folder, of the kinds this host can make. Unix: a symlink. Windows: a
+/// directory symlink when the process holds the privilege (elevated or Developer Mode;
+/// skipped cleanly otherwise) and always a junction, made in a sibling path with the
+/// suffix `-junction` (`mklink /J` needs no privilege). Returns every link made, so a
+/// test checks each kind of reparse point the platform has.
+pub fn dir_links(target: &Path, link: &Path) -> io::Result<Vec<PathBuf>> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)?;
+        Ok(vec![link.to_path_buf()])
+    }
+    #[cfg(windows)]
+    {
+        let mut made = Vec::new();
+        match std::os::windows::fs::symlink_dir(target, link) {
+            Ok(()) => made.push(link.to_path_buf()),
+            // ERROR_PRIVILEGE_NOT_HELD: no symlink here; the junction below still runs.
+            Err(e) if e.raw_os_error() == Some(1314) => {}
+            Err(e) => return Err(e),
+        }
+        let mut j = link.as_os_str().to_os_string();
+        j.push("-junction");
+        let j = PathBuf::from(j);
+        let st = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&j)
+            .arg(target)
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        if !st.success() || fs::symlink_metadata(&j).is_err() {
+            return Err(io::Error::other(format!("mklink /J {} failed", j.display())));
+        }
+        made.push(j);
+        Ok(made)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Ok(Vec::new())
+    }
+}
+
 /// Set a file's modification time (no external crate): uses `File::set_modified`.
 pub fn set_mtime(path: &Path, t: std::time::SystemTime) -> io::Result<()> {
     let f = fs::OpenOptions::new().write(true).open(path)?;

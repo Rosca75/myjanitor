@@ -362,14 +362,20 @@ mod tests {
             Guard::new(vec![], ProtectedPaths::empty()).check_lexical(&f).unwrap_err().code(),
             "outside_allowed_roots"
         );
-        #[cfg(unix)]
-        {
-            t.write("elsewhere/b.txt", b"y").unwrap();
-            std::os::unix::fs::symlink(t.join("elsewhere"), t.join("in/link")).unwrap();
-            assert_eq!(g.check(&t.join("in/link/b.txt"), &p, false).unwrap_err().code(), "link_not_followed");
-            assert_eq!(g.check(&t.join("in/link"), &p, false).unwrap_err().code(), "link_not_followed");
-            assert!(g.check(&t.join("in/link"), &p, true).is_ok());
+        // Every kind of folder link the host can make (Unix: a symlink; Windows: a
+        // directory symlink when privileged, and always a junction) is refused the same way.
+        t.write("elsewhere/b.txt", b"y").unwrap();
+        let links = mj_core::testutil::dir_links(&t.join("elsewhere"), &t.join("in/link")).unwrap();
+        assert!(!links.is_empty() || !cfg!(any(unix, windows)));
+        for link in links {
+            assert_eq!(g.check(&link.join("b.txt"), &p, false).unwrap_err().code(), "link_not_followed", "{link:?}");
+            assert_eq!(g.check(&link, &p, false).unwrap_err().code(), "link_not_followed", "{link:?}");
+            assert!(g.check(&link, &p, true).is_ok(), "{link:?}");
         }
+        // The short-name rule (F-19) looks only below the allowed root: the temp folder's
+        // own spelling above it (`C:\Users\RUNNER~1\...` on CI) is the user's choice.
+        let short_above = Guard::new(vec![t.join("in")], ProtectedPaths::empty());
+        assert!(short_above.check_lexical(&t.join("in/a.txt")).is_ok());
     }
 
     #[test]
@@ -411,6 +417,10 @@ mod tests {
         assert_eq!(g.check_lexical(Path::new(r"C:\scan\PROGRA~1")).unwrap_err().code(), "invalid_input");
         assert_eq!(g.check_lexical(Path::new(r"C:\scan\Windows.")).unwrap_err().code(), "invalid_input");
         assert!(g.check_lexical(Path::new(r"C:\scan\Program Files")).is_ok());
+        // A short name at or above the root is not refused: only names below it are.
+        let short_root = Guard::new(vec![PathBuf::from(r"C:\Users\RUNNER~1\Temp\in")], ProtectedPaths::empty());
+        assert!(short_root.check_lexical(Path::new(r"C:\Users\RUNNER~1\Temp\in\b.txt")).is_ok());
+        assert!(short_root.check_lexical(Path::new(r"C:\Users\RUNNER~1\Temp\in\DOCUME~1\b.txt")).is_err());
     }
 
     #[test]

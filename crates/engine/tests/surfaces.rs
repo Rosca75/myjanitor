@@ -333,7 +333,9 @@ fn search_params_preview_and_disk() {
         .fs_list_dir(FsListDirRequest { path: Some(f.tree.join("photos")), show_hidden: false, include_files: false })
         .unwrap();
     assert!(l.entries.is_empty());
-    assert_eq!(l.omitted, 2, "a.bin and the link are counted");
+    // The fixture link exists only where the standard tree could create it (Unix).
+    let links = u64::from(std::fs::symlink_metadata(f.tree.join("photos/link-to-a")).is_ok());
+    assert_eq!(l.omitted, 1 + links, "a.bin and the link are counted");
     let l = e
         .fs_list_dir(FsListDirRequest { path: Some(f.tree.join("photos")), show_hidden: false, include_files: true })
         .unwrap();

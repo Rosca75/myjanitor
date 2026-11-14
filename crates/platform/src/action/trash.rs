@@ -659,7 +659,9 @@ mod windows_impl {
                 format!("{root} has no Recycle Bin (network or removable drive); nothing was deleted"),
             ));
         }
-        let raw: Vec<u16> = path.as_os_str().encode_wide().collect();
+        // The normalised long form (`/` -> `\`, `.`/`..` resolved); the shell buffer then
+        // drops the prefix again, since the shell does not accept it.
+        let raw: Vec<u16> = crate::ffi::winpath::verbatim(&path.as_os_str().encode_wide().collect::<Vec<u16>>());
         let from = shell_from_buffer(&raw).ok_or_else(|| {
             Error::unsupported("Recycle Bin", format!("{} is too long for the Recycle Bin", path.display()))
         })?;

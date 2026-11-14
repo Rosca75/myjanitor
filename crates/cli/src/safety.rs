@@ -40,22 +40,25 @@ fn is_bare_drive(p: &Path) -> bool {
 mod tests {
     use std::path::PathBuf;
 
+    use mj_core::testutil::abs;
+
     use super::*;
 
     fn data() -> PathBuf {
-        PathBuf::from("/home/m/.local/share/myjanitor")
+        abs("/home/m/.local/share/myjanitor")
     }
 
     #[test]
     fn refuses_filesystem_and_drive_roots() {
-        let home = PathBuf::from("/home/m");
+        let home = abs("/home/m");
         let d = data();
         for bad in ["/", "C:\\", "C:", "c:/", "\\\\?\\D:\\"] {
             let r = check_root(Path::new(bad), Some(&home), &[&d]);
-            // On Linux "C:\\" is not absolute, which is refused too.
+            // On Linux "C:\\" is not absolute, and on Windows "/" is not: refused too.
             assert!(r.is_err(), "{bad} must be refused");
         }
-        assert!(check_root(Path::new("/"), None, &[]).unwrap_err().contains("root of a file system"));
+        // `/` on Unix, `C:\\` on Windows.
+        assert!(check_root(&abs("/"), None, &[]).unwrap_err().contains("root of a file system"));
         assert!(
             is_bare_drive(Path::new("C:\\")) && is_bare_drive(Path::new("D:")) && !is_bare_drive(Path::new("C:\\x"))
         );
@@ -63,23 +66,26 @@ mod tests {
 
     #[test]
     fn refuses_the_home_folder_itself_but_not_below_it() {
-        let home = PathBuf::from("/home/m");
+        let home = abs("/home/m");
         let d = data();
-        assert!(check_root(Path::new("/home/m"), Some(&home), &[&d]).unwrap_err().contains("home folder"));
-        assert!(check_root(Path::new("/home/m/"), Some(&home), &[&d]).is_err());
-        assert!(check_root(Path::new("/home/m/./"), Some(&home), &[&d]).is_err());
-        assert!(check_root(Path::new("/home/m/Downloads"), Some(&home), &[&d]).is_ok());
-        assert!(check_root(Path::new("/home/mm"), Some(&home), &[&d]).is_ok());
+        assert!(check_root(&abs("/home/m"), Some(&home), &[&d]).unwrap_err().contains("home folder"));
+        assert!(check_root(&abs("/home/m/"), Some(&home), &[&d]).is_err());
+        assert!(check_root(&abs("/home/m/./"), Some(&home), &[&d]).is_err());
+        assert!(check_root(&abs("/home/m/Downloads"), Some(&home), &[&d]).is_ok());
+        assert!(check_root(&abs("/home/mm"), Some(&home), &[&d]).is_ok());
+        if cfg!(windows) {
+            assert!(check_root(&abs("/HOME/M"), Some(&home), &[&d]).is_err(), "case-insensitive on Windows");
+        }
     }
 
     #[test]
     fn refuses_roots_containing_the_data_or_cache_folder() {
-        let home = PathBuf::from("/home/m");
+        let home = abs("/home/m");
         let d = data();
-        let c = PathBuf::from("/home/m/.cache/myjanitor");
-        assert!(check_root(Path::new("/home/m/.local"), Some(&home), &[&d, &c]).unwrap_err().contains("data folder"));
+        let c = abs("/home/m/.cache/myjanitor");
+        assert!(check_root(&abs("/home/m/.local"), Some(&home), &[&d, &c]).unwrap_err().contains("data folder"));
         assert!(check_root(&d, Some(&home), &[&d]).is_err());
-        assert!(check_root(Path::new("/home/m/.cache"), Some(&home), &[&d, &c]).is_err());
+        assert!(check_root(&abs("/home/m/.cache"), Some(&home), &[&d, &c]).is_err());
         assert!(
             check_root(&d.join("quarantine"), Some(&home), &[&d]).is_ok(),
             "inside the data folder is a separate concern"

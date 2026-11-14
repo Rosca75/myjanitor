@@ -91,6 +91,8 @@ pub fn zstd_decompress_args(src: &Path, dst: &Path) -> Vec<OsString> {
 /// One file entry of a `7z l -slt` listing: (path with `/`, size, CRC-32, is folder).
 pub fn parse_slt(text: &str) -> Vec<(String, u64, Option<u32>, bool)> {
     let mut out = Vec::new();
+    // 7-Zip for Windows ends its lines with CRLF; the blocks are split on blank lines.
+    let text = text.replace("\r\n", "\n");
     // Entries follow the "----------" separator; each is "Key = Value" lines separated by blank lines.
     let body = text.split_once("\n----------").map(|(_, b)| b).unwrap_or("");
     for block in body.split("\n\n") {
@@ -262,5 +264,7 @@ mod tests {
         assert_eq!(e[0], ("INDEX.csv".into(), 10, Some(0x0A0B0C0D), false));
         assert_eq!(e[1], ("dir/a.txt".into(), 3, Some(0xFFFF_FFFF), false));
         assert!(e[2].3);
+        // The Windows build writes CRLF line endings: the same entries.
+        assert_eq!(parse_slt(&text.replace('\n', "\r\n")), e);
     }
 }

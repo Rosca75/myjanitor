@@ -228,7 +228,16 @@ fn tar_round_trip_and_system_tar_accepts_it() {
     // GNU/BSD tar lists and extracts it identically.
     if let Some(tool) = crate::tools::which("tar") {
         let out = t.mkdir("tar-x").unwrap();
-        let o = std::process::Command::new(tool).arg("-xf").arg(&dst).arg("-C").arg(&out).output().unwrap();
+        // Relative names from inside the fixture: the GNU tar of Git for Windows reads
+        // `C:\...` as a remote `host:path`, and BSD tar rejects GNU's `--force-local`.
+        let o = std::process::Command::new(tool)
+            .current_dir(t.path())
+            .arg("-xf")
+            .arg(dst.file_name().unwrap())
+            .arg("-C")
+            .arg(out.file_name().unwrap())
+            .output()
+            .unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         let mut got = snapshot(&out);
         got.remove(INDEX_NAME);

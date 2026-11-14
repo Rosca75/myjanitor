@@ -16,7 +16,8 @@
 //! ```
 //!
 //! `$STANDARD_INFORMATION` (0x10): 0 created, 8 modified, 16 MFT changed,
-//! 24 accessed (FILETIME), 32 u32 file attributes. Unnamed `$DATA` (0x80) holds
+//! 24 accessed (FILETIME), 32 u32 file attributes. `$FILE_NAME` (0x30): 64 u8 name
+//! length, 65 u8 namespace (0 POSIX, 1 Win32, 2 DOS, 3 Win32 and DOS). Unnamed `$DATA` (0x80) holds
 //! the file size. `$REPARSE_POINT` (0xC0) starts with the u32 tag.
 //! `$ATTRIBUTE_LIST` (0x20) means some attributes live in other records; when
 //! the unnamed `$DATA` is not in the base record the caller falls back to a
@@ -26,6 +27,9 @@ use mj_core::{Error, Result};
 
 const ATTR_STANDARD_INFORMATION: u32 = 0x10;
 const ATTR_ATTRIBUTE_LIST: u32 = 0x20;
+const ATTR_FILE_NAME: u32 = 0x30;
+/// `$FILE_NAME` namespace of a DOS-only (8.3 short) name.
+const NAMESPACE_DOS: u8 = 2;
 const ATTR_DATA: u32 = 0x80;
 const ATTR_REPARSE_POINT: u32 = 0xC0;
 const ATTR_END: u32 = 0xFFFF_FFFF;
@@ -36,6 +40,11 @@ const SECTOR: usize = 512;
 pub struct NtfsFileInfo {
     pub in_use: bool,
     pub is_dir: bool,
+    /// Hard links: the names of the file that are not 8.3 short-name aliases. The record
+    /// header's count also counts a separate DOS name (a file called `setup-1.0.msi` has
+    /// two names, `setup-1.0.msi` and `SETUP-~1.MSI`, and one link), so it is used only
+    /// when the names are not all in this record (an attribute list), where too high a
+    /// count is the safe error: it only makes a removal promise less space.
     pub link_count: u16,
     /// Non-zero for extension records.
     pub base_record: u64,
@@ -115,6 +124,7 @@ pub fn parse_file_record(rec: &[u8]) -> Result<NtfsFileInfo> {
         ..Default::default()
     };
     let mut pos = usize::from(rd_u16(rec, 20).ok_or_else(|| bad("truncated header"))?);
+    let mut names = 0u16;
     let mut guard = 0;
     loop {
         guard += 1;
@@ -149,6 +159,13 @@ pub fn parse_file_record(rec: &[u8]) -> Result<NtfsFileInfo> {
                 }
             }
             ATTR_ATTRIBUTE_LIST => info.has_attribute_list = true,
+            ATTR_FILE_NAME if !non_resident => {
+                if let Some(ns) = value(a).filter(|&(_, l)| l >= 66).map(|(o, _)| a[o + 65]) {
+                    if ns != NAMESPACE_DOS {
+                        names = names.saturating_add(1);
+                    }
+                }
+            }
             ATTR_DATA if name_len == 0 => {
                 if non_resident {
                     // Only the first extent (lowest VCN 0) carries the sizes.
@@ -172,6 +189,9 @@ pub fn parse_file_record(rec: &[u8]) -> Result<NtfsFileInfo> {
             _ => {}
         }
         pos += len;
+    }
+    if names > 0 && !info.has_attribute_list {
+        info.link_count = names;
     }
     Ok(info)
 }
@@ -245,6 +265,14 @@ pub(crate) mod tests {
         pub fn reparse(self, tag: u32) -> Rec {
             self.resident(0xC0, 0, &tag.to_le_bytes())
         }
+        /// A `$FILE_NAME` in `namespace` (the name itself is not parsed).
+        pub fn file_name(self, namespace: u8) -> Rec {
+            let mut v = vec![0u8; 66 + 2];
+            v[64] = 1;
+            v[65] = namespace;
+            v[66] = b'x';
+            self.resident(0x30, 0, &v)
+        }
         pub fn attr_list(self) -> Rec {
             self.resident(0x20, 0, &[0u8; 8])
         }
@@ -303,6 +331,21 @@ pub(crate) mod tests {
         );
         assert_eq!((info.data_size, info.allocated, info.resident), (Some(300), Some(0), true));
         assert_eq!(info.link_count, 2);
+    }
+
+    #[test]
+    fn link_count_ignores_dos_short_names() {
+        // One Win32 name plus its DOS alias: the header says 2, the file has one link.
+        let one = parse(Rec::new(0x1).file_name(1).file_name(2).links(2).build());
+        assert_eq!(one.link_count, 1);
+        // A combined Win32-and-DOS name and a second hard link (POSIX namespace).
+        let two = parse(Rec::new(0x1).file_name(3).file_name(0).links(2).build());
+        assert_eq!(two.link_count, 2);
+        // Names in other records (attribute list): the header count stands.
+        let listed = parse(Rec::new(0x1).attr_list().file_name(1).links(3).build());
+        assert_eq!(listed.link_count, 3);
+        // No name in the record: the header count stands.
+        assert_eq!(parse(Rec::new(0x1).links(4).build()).link_count, 4);
     }
 
     #[test]

@@ -36,7 +36,11 @@ fn walks_a_tree_with_totals_and_depths() {
     let ix = run(&scope(&[t.path()]), &NativePlatform::new()).unwrap();
     assert_eq!((ix.stats.files, ix.stats.dirs, ix.stats.bytes), (6, 5, 163));
     assert_eq!(ix.stats.unreadable, 0);
-    assert!(!ix.stats.used_fast_index);
+    // Linux has no fast index; on Windows the MFT path is taken when the process may
+    // read the volume (elevated), and must give the same totals as the walk.
+    if !cfg!(windows) {
+        assert!(!ix.stats.used_fast_index);
+    }
     assert_eq!(ix.get(&t.join("docs/deep/c.log")).unwrap().depth, 3);
     let tree = FolderTree::build(&ix);
     let root = ix.position(t.path()).unwrap();
@@ -308,6 +312,13 @@ fn freshly_written_files_are_never_cache_hits() {
     let st = ix.get(&t.join("new.txt")).unwrap().stamp();
     cache.put(&t.join("new.txt"), st, Fingerprints { partial: Some(1), ..Default::default() });
     assert!(cache.get(&t.join("new.txt"), st).is_none());
+    // Written again just before the next scan (a scan can take longer than the trust
+    // window, e.g. a whole-volume MFT read on Windows, which would make the first write
+    // old by then): the record of the same size is still not trusted.
+    t.write("new.txt", b"just WRITTEN").unwrap();
+    let st = p.metadata(&t.join("new.txt")).unwrap().stamp();
+    cache.put(&t.join("new.txt"), st, Fingerprints { partial: Some(1), ..Default::default() });
     let ix = scan_with_cache(&req, &cache).unwrap();
+    assert_eq!(ix.get(&t.join("new.txt")).unwrap().stamp(), st);
     assert_eq!(ix.stats.cache_hits, 0);
 }

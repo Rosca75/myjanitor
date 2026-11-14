@@ -206,15 +206,15 @@ mod tests {
     use crate::fingerprint::NoFingerprintStore;
     use crate::params::ParamValue;
     use crate::progress::NullProgress;
-    use std::path::{Path, PathBuf};
-
     #[test]
     fn env_keys_round_trip_and_protect() {
         let index = FileIndex::new(Vec::new(), Vec::new(), Default::default(), Timestamp(0));
         let mut params = ParamValues::new();
-        let roots = vec![PathBuf::from("/home/me/OneDrive - Acme"), PathBuf::from("/home/me/line\nbreak")];
+        let abs = crate::testutil::abs;
+        let roots = vec![abs("/home/me/OneDrive - Acme"), abs("/home/me/line\nbreak")];
         params.set(env::SYNC_ROOTS, ParamValue::Text(env::encode_paths(&roots)));
-        params.set(env::PROTECTED, ParamValue::Text(env::encode(&["/etc", "**/.ssh/**"])));
+        let etc = crate::pathutil::encode_path(&abs("/etc"));
+        params.set(env::PROTECTED, ParamValue::Text(env::encode(&[etc.as_str(), "**/.ssh/**"])));
         let cancel = CancelToken::new();
         let ctx = DetectContext {
             index: &index,
@@ -227,9 +227,9 @@ mod tests {
         };
         assert_eq!(ctx.env_paths(env::SYNC_ROOTS), Some(roots));
         assert_eq!(ctx.env_paths(env::DOWNLOADS), None, "missing = unknown");
-        assert!(ctx.is_protected(Path::new("/etc/passwd")));
-        assert!(ctx.is_protected(Path::new("/home/me/.ssh/id_rsa")));
-        assert!(!ctx.is_protected(Path::new("/etcetera/x")));
-        assert!(!ctx.is_protected(Path::new("/home/me/doc.txt")));
+        assert!(ctx.is_protected(&abs("/etc/passwd")));
+        assert!(ctx.is_protected(&abs("/home/me/.ssh/id_rsa")));
+        assert!(!ctx.is_protected(&abs("/etcetera/x")));
+        assert!(!ctx.is_protected(&abs("/home/me/doc.txt")));
     }
 }

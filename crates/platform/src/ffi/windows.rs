@@ -69,24 +69,12 @@ pub fn wide(s: &OsStr) -> Vec<u16> {
 }
 
 /// NUL-terminated UTF-16 for a path, with the `\\?\` long-path prefix added to
-/// absolute drive paths (`C:\...` -> `\\?\C:\...`, `\\server\share` -> `\\?\UNC\server\share`).
+/// absolute drive paths (`C:\...` -> `\\?\C:\...`, `\\server\share` -> `\\?\UNC\server\share`)
+/// after normalising them the way Win32 would (`/` to `\`, `.` and `..` resolved): see
+/// [`crate::ffi::winpath::verbatim`].
 pub fn wide_path(path: &Path) -> Vec<u16> {
-    let s = path.as_os_str();
-    let raw: Vec<u16> = s.encode_wide().collect();
-    let bs = b'\\' as u16;
-    let mut out: Vec<u16> = Vec::with_capacity(raw.len() + 9);
-    let has_prefix = raw.len() >= 4 && raw[0] == bs && raw[1] == bs && (raw[2] == b'?' as u16 || raw[2] == b'.' as u16);
-    if !has_prefix {
-        if raw.len() >= 3 && raw[1] == b':' as u16 && raw[2] == bs {
-            out.extend("\\\\?\\".encode_utf16());
-        } else if raw.len() >= 2 && raw[0] == bs && raw[1] == bs {
-            out.extend("\\\\?\\UNC".encode_utf16());
-            out.extend_from_slice(&raw[1..]);
-            out.push(0);
-            return out;
-        }
-    }
-    out.extend_from_slice(&raw);
+    let raw: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut out = crate::ffi::winpath::verbatim(&raw);
     out.push(0);
     out
 }

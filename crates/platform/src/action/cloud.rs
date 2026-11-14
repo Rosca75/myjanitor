@@ -675,7 +675,12 @@ mod tests {
         t.mkdir("elsewhere/Dropbox Work").unwrap();
         t.write(
             "home/.dropbox/info.json",
-            format!(r#"{{"business":{{"path":"{}"}}}}"#, t.join("elsewhere/Dropbox Work").display()).as_bytes(),
+            // JSON escapes a backslash (Windows paths), as Dropbox writes it.
+            format!(
+                r#"{{"business":{{"path":"{}"}}}}"#,
+                t.join("elsewhere/Dropbox Work").display().to_string().replace('\\', "\\\\")
+            )
+            .as_bytes(),
         )
         .unwrap();
         t.mkdir("od").unwrap();

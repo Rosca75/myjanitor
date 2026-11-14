@@ -22,13 +22,16 @@ use std::path::{Path, PathBuf};
 /// Held for the life of the engine.
 #[derive(Debug)]
 pub struct InstanceLock {
-    #[allow(dead_code)]
-    file: File,
+    /// The open lock file; `None` only while dropping.
+    file: Option<File>,
     path: PathBuf,
 }
 
 impl Drop for InstanceLock {
     fn drop(&mut self) {
+        // Close before removing: on Windows the file is open without delete sharing, so
+        // removing it while the handle is open fails and would leave the file behind.
+        drop(self.file.take());
         let _ = std::fs::remove_file(&self.path);
     }
 }
@@ -75,7 +78,7 @@ pub fn acquire(data_dir: &Path) -> Result<InstanceLock, String> {
     })?;
     let _ = write!(file, "{}", std::process::id());
     let _ = file.sync_all();
-    Ok(InstanceLock { file, path })
+    Ok(InstanceLock { file: Some(file), path })
 }
 
 #[cfg(test)]
