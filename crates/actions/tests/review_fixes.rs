@@ -525,3 +525,32 @@ fn f05_purge_never_deletes_something_that_is_not_a_quarantine_slot() {
     assert_eq!(freed, 0);
     assert!(foreign.exists(), "the backup below the quarantine folder survived the purge");
 }
+
+#[test]
+fn f06_undo_never_discards_a_same_size_edit_of_the_output() {
+    for originals in [OriginalsPolicy::Quarantine, OriginalsPolicy::BackupFolder { folder: PathBuf::new() }] {
+        let f = Fixture::new("f06");
+        let originals = match originals {
+            OriginalsPolicy::BackupFolder { .. } => OriginalsPolicy::BackupFolder { folder: f.t.join("bk") },
+            o => o,
+        };
+        let file = f.write("doc.bin", &[b'a'; 4000]);
+        let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(Halve)];
+        let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+        let run = f.new_run(RunKind::Apply);
+        let out =
+            mj_actions::execute_with(&f.ctx(run, services), &[f.item(&file, optimise_to(originals))], &opts()).unwrap();
+        assert_eq!(out.succeeded, 1, "{out:?}");
+        // The user keeps working on the optimised file: same size, new content.
+        std::fs::write(&file, [b'Z'; 2000]).unwrap();
+        let undo = f.undo_run(run);
+        assert_eq!(undo.failed, 1, "{undo:?}");
+        assert_eq!(undo.errors[0].error.as_ref().unwrap().code, "conflict");
+        assert_eq!(std::fs::read(&file).unwrap(), vec![b'Z'; 2000], "the user's edit is still there");
+        // Unchanged output: the undo works.
+        std::fs::write(&file, [b'a'; 2000]).unwrap();
+        let undo = f.undo_run(run);
+        assert_eq!(undo.succeeded, 1, "{undo:?}");
+        assert_eq!(std::fs::read(&file).unwrap(), vec![b'a'; 4000]);
+    }
+}

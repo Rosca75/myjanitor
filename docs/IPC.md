@@ -797,7 +797,9 @@ keep_if_not_smaller}`, `archive{format, level, dest?, originals, keep_sources}`,
 backup); `trash` locates a Recycle Bin / Trash item; `created` lists files the
 action wrote (undo removes them). Optional since Wave 3: `original_mode` (permissions before
 acting), `previous_compression` (transparent compression before `fs_decompress`, which makes
-it undoable) and, in undo runs, `undo_of` (the entry id this record reverses).
+it undoable) and, in undo runs, `undo_of` (the entry id this record reverses). Optional
+`output_sha256`: SHA-256 of the output an optimisation or archive wrote; undo discards that
+output only while it still has this content (otherwise `conflict`, nothing changed).
 
 ```json JournalEntry
 {"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}

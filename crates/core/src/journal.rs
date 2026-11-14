@@ -103,6 +103,10 @@ pub struct JournalEntry {
     /// (`None`: none, or not read). Makes `fs_decompress` undoable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_compression: Option<crate::action::FsCompressAlgo>,
+    /// SHA-256 (hex) of the output an optimisation or archive wrote (F-06): undo discards
+    /// that output only while it still has exactly this content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_sha256: Option<String>,
     /// In an undo run: the entry this record reverses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_of: Option<EntryId>,

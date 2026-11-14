@@ -236,6 +236,7 @@ fn new_entry(ctx: &ExecContext<'_>, item: &ActionItem, id: EntryId, kind: Action
         error: None,
         original_mode: fsops::file_mode(&item.path),
         previous_compression: None,
+        output_sha256: None,
         undo_of: None,
     }
 }
@@ -972,6 +973,8 @@ fn optimise(
                 e.reversible = true;
             }
         }
+        // F-06: undo discards this output only while it still has this content.
+        e.output_sha256 = e.created.first().and_then(|p| fsops::hash_file(p).ok()).map(|h| h.sha256);
         e.undo_deadline = if e.reversible { undo_until } else { None };
         Ok(())
     })
@@ -1045,6 +1048,8 @@ fn archive(
         };
         e.bytes_after = size;
         e.reversible = true;
+        // F-06: undo removes the archive only while it still has this content.
+        e.output_sha256 = fsops::hash_file(&dst).ok().map(|h| h.sha256);
         if let Some(p) = &plan {
             if let Err(err) = retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now()) {
                 let _ = std::fs::remove_file(&dst);

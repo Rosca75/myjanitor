@@ -88,6 +88,7 @@ const OPTIONAL: &[&str] = &[
     "HistoryRunDetail.entries[].lossy",
     "HistoryRunDetail.entries[].original_mode",
     "HistoryRunDetail.entries[].original_sha256",
+    "HistoryRunDetail.entries[].output_sha256",
     "DiskNode.other",
     "DiskNode.children[].other",
 ];
