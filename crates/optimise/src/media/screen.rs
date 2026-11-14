@@ -353,6 +353,7 @@ impl Optimiser for ScreenRecordings {
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
+        super::ffmpeg::require_container(job.src)?;
         job.cancel.checkpoint()?;
         if job.params.text("output", "video") == "audio_only" {
             return audio_only(job);

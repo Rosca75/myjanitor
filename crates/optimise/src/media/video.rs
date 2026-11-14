@@ -655,6 +655,7 @@ impl Optimiser for Video {
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
+        super::ffmpeg::require_container(job.src)?;
         let mut s = VideoSettings::from_params(job.params);
         run_video_job(job, &mut s, Vec::new())
     }
@@ -726,6 +727,9 @@ mod tests {
         assert_eq!(
             tail,
             [
+                // F-17: local files only (the demuxer is forced when the file exists).
+                "-protocol_whitelist",
+                "file",
                 "-i",
                 "/in/a.mov",
                 "-map",

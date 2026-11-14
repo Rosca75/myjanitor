@@ -204,6 +204,7 @@ pub fn peaks_from_u8(samples: &[u8], n: usize) -> Vec<u8> {
 
 /// Decode a low-rate mono copy for the bars and run `silencedetect` for the removable parts.
 pub fn preview(ffmpeg: &Path, src: &Path, params: &ParamValues, cancel: &CancelToken) -> Result<WaveformPreview> {
+    super::ffmpeg::require_container(src)?;
     let s = AudioSettings::from_params(params);
     let mut a = args(["-nostdin", "-hide_banner", "-loglevel", "error"]);
     a.extend(input_args(src));
@@ -330,6 +331,7 @@ impl Optimiser for Audio {
     }
 
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
+        super::ffmpeg::require_container(job.src)?;
         job.cancel.checkpoint()?;
         let exe = crate::tools::require(job.tools, "ffmpeg")?;
         let before = std::fs::metadata(job.src).map_err(|e| Error::io(job.src, e))?.len();
@@ -412,6 +414,9 @@ mod tests {
         assert_eq!(
             tail,
             [
+                // F-17: local files only (the demuxer is forced when the file exists).
+                "-protocol_whitelist",
+                "file",
                 "-i",
                 "/in/a.wav",
                 "-map",

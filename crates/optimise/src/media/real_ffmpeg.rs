@@ -301,3 +301,33 @@ fn f03_concurrent_encodes_sharing_a_temp_dir_never_exchange_outputs() {
     }
     assert_eq!(std::fs::read_dir(shared.path()).unwrap().count(), 0, "every private scratch folder was removed");
 }
+
+/// F-17: a "video" that is really an HLS or concat playlist naming another local file is
+/// refused before ffmpeg reads it, and every input is opened with a local-files-only
+/// protocol whitelist and a forced demuxer.
+#[test]
+fn f17_playlists_posing_as_media_are_never_followed() {
+    let d = TempDir::new("ff-f17").unwrap();
+    let secret = d.write("secret.wav", b"RIFF....WAVEfmt private recording").unwrap();
+    let hls = d
+        .write("holiday.mp4", format!("#EXTM3U\n#EXTINF:1,\n{}\n#EXT-X-ENDLIST\n", secret.display()).as_bytes())
+        .unwrap();
+    let concat =
+        d.write("talk.m4a", format!("ffconcat version 1.0\nfile '{}'\n", secret.display()).as_bytes()).unwrap();
+    for f in [&hls, &concat] {
+        assert!(super::ffmpeg::require_container(f).is_err());
+        assert!(super::ffmpeg::demuxer_of(f).is_none());
+        let a = super::ffmpeg::input_args(f);
+        assert_eq!(a[..2], [std::ffi::OsString::from("-protocol_whitelist"), "file".into()]);
+    }
+    let p = ParamValues::default();
+    let tools = ffmpeg().map(|(_, t)| t).unwrap_or_default();
+    for (o, f) in [(&Audio as &dyn Optimiser, &concat), (&Video as &dyn Optimiser, &hls)] {
+        let dst = d.join("out.bin");
+        let r = job_run(o, f, &dst, &d, &p, &tools);
+        assert!(matches!(r, Err(mj_core::Error::Unsupported { .. })), "{r:?}");
+        assert!(!dst.exists());
+    }
+    let wav = tone_silence_tone(&d);
+    assert_eq!(super::ffmpeg::demuxer_of(&wav), Some("wav"));
+}

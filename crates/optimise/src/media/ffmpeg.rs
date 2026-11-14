@@ -15,9 +15,66 @@ pub fn base_args() -> Vec<OsString> {
     args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-progress", "pipe:1", "-nostats"])
 }
 
-/// `-i <src>`.
+/// F-17: `-protocol_whitelist file [-f <demuxer>] -i <src>`. ffmpeg may open nothing but
+/// local files (no network protocol, no `concat:`/`subfile:` tricks), and the demuxer is
+/// forced from MyJanitor's own content sniffing whenever it is known, so a "video" that is
+/// really an HLS or concat playlist is never interpreted as one.
 pub fn input_args(src: &Path) -> Vec<OsString> {
-    vec!["-i".into(), path_arg(src)]
+    let mut a: Vec<OsString> = args(["-protocol_whitelist", "file"]);
+    if let Some(d) = demuxer_of(src) {
+        a.extend(args(["-f", d]));
+    }
+    a.push("-i".into());
+    a.push(path_arg(src));
+    a
+}
+
+/// The ffmpeg demuxer for `src`, from its first bytes; `None` when MyJanitor does not
+/// recognise the container (text playlists, scripts, unknown formats).
+pub fn demuxer_of(src: &Path) -> Option<&'static str> {
+    use std::io::Read;
+    let mut head = [0u8; 16];
+    let mut f = std::fs::File::open(src).ok()?;
+    let mut n = 0;
+    while n < head.len() {
+        match f.read(&mut head[n..]) {
+            Ok(0) | Err(_) => break,
+            Ok(k) => n += k,
+        }
+    }
+    demuxer_for_head(&head[..n])
+}
+
+/// [`demuxer_of`] over bytes (pure).
+pub fn demuxer_for_head(h: &[u8]) -> Option<&'static str> {
+    if h.len() < 12 {
+        return None;
+    }
+    Some(match &h[..4] {
+        b"RIFF" | b"RF64" if &h[8..12] == b"WAVE" => "wav",
+        b"RIFF" if &h[8..12] == b"AVI " => "avi",
+        b"FORM" if matches!(&h[8..12], b"AIFF" | b"AIFC") => "aiff",
+        b"fLaC" => "flac",
+        b"OggS" => "ogg",
+        [0x1A, 0x45, 0xDF, 0xA3] => "matroska",
+        b"ID3\x02" | b"ID3\x03" | b"ID3\x04" => "mp3",
+        _ if &h[4..8] == b"ftyp" => "mov",
+        _ if h[0] == 0xFF && h[1] & 0xF6 == 0xF0 => "aac",
+        _ if h[0] == 0xFF && h[1] & 0xE0 == 0xE0 => "mp3",
+        _ => return None,
+    })
+}
+
+/// F-17: refuse (skip) an input whose container MyJanitor does not recognise, before
+/// ffmpeg ever reads it.
+pub fn require_container(src: &Path) -> Result<()> {
+    if demuxer_of(src).is_none() {
+        return Err(Error::unsupported(
+            "media",
+            "not a recognised audio or video file (its content does not match a known container)",
+        ));
+    }
+    Ok(())
 }
 
 /// Run an encode: progress is reported from `out_time_us=` lines against `duration_ms`.
