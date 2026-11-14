@@ -640,3 +640,89 @@ pub(crate) mod testkit {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::office::powerpoint::tests::deck;
+    use mj_core::testutil::TempDir;
+    use mj_core::{CancelToken, NullProgress};
+
+    fn job_run(
+        t: &TempDir,
+        ops: &dyn Fn(&mut Pkg, &ParamValues, &mut OpReport) -> Result<()>,
+    ) -> (OptimiseOutput, std::path::PathBuf) {
+        let src = t.write("d.pptx", &deck(false, false)).unwrap();
+        let dst = t.join("o.pptx");
+        let cancel = CancelToken::new();
+        let params = ParamValues::new();
+        let tmp = t.path().to_path_buf();
+        let job = OptimiseJob {
+            src: &src,
+            dst: &dst,
+            params: &params,
+            tools: &[],
+            temp_dir: &tmp,
+            cancel: &cancel,
+            progress: &NullProgress,
+        };
+        (run(&job, FileKind::Pptx, ops).unwrap(), dst)
+    }
+
+    #[test]
+    fn verification_failure_means_not_optimised() {
+        let t = TempDir::new("verify").unwrap();
+        // An operation that introduces a dangling relationship.
+        let bad = |pkg: &mut Pkg, _: &ParamValues, _: &mut OpReport| -> Result<()> {
+            let r = "ppt/slides/_rels/slide1.xml.rels";
+            let s = String::from_utf8(pkg.read(r)?).unwrap();
+            let s = s.replace(
+                "</Relationships>",
+                r#"<Relationship Id="rId99" Type="x/image" Target="../media/missing.png"/></Relationships>"#,
+            );
+            pkg.replace(r, s.into_bytes())
+        };
+        let (o, dst) = job_run(&t, &bad);
+        assert!(o.skipped.as_deref().unwrap_or("").contains("verification failed"), "{o:?}");
+        assert!(!dst.exists());
+        // Malformed XML in a replaced part.
+        let broken = |pkg: &mut Pkg, _: &ParamValues, _: &mut OpReport| -> Result<()> {
+            pkg.replace("ppt/slides/slide1.xml", b"<p:sld>".to_vec())
+        };
+        let (o, dst) = job_run(&t, &broken);
+        assert!(o.skipped.as_deref().unwrap_or("").contains("verification failed"), "{o:?}");
+        assert!(!dst.exists());
+        // A part without a content type.
+        let uncovered = |pkg: &mut Pkg, _: &ParamValues, _: &mut OpReport| -> Result<()> {
+            let ct = String::from_utf8(pkg.read("[Content_Types].xml")?)
+                .unwrap()
+                .replace(r#"<Default Extension="png" ContentType="image/png"/>"#, "");
+            pkg.replace("[Content_Types].xml", ct.into_bytes())
+        };
+        let (o, _) = job_run(&t, &uncovered);
+        assert!(o.skipped.as_deref().unwrap_or("").contains("no content type"), "{o:?}");
+    }
+
+    #[test]
+    fn failing_operation_falls_back_to_the_safe_subset() {
+        let t = TempDir::new("fallback").unwrap();
+        let fails =
+            |_: &mut Pkg, _: &ParamValues, _: &mut OpReport| -> Result<()> { Err(Error::parse("x", "odd structure")) };
+        let (o, dst) = job_run(&t, &fails);
+        assert!(o.skipped.is_none(), "{o:?}");
+        assert!(o.notes.iter().any(|n| n.contains("optional operations skipped")));
+        assert!(dst.exists());
+    }
+
+    #[test]
+    fn categories() {
+        assert_eq!(category("ppt/media/image1.png"), BreakdownCategory::Images);
+        assert_eq!(category("ppt/media/clip.mp4"), BreakdownCategory::Media);
+        assert_eq!(category("ppt/fonts/font1.fntdata"), BreakdownCategory::Fonts);
+        assert_eq!(category("xl/embeddings/oleObject1.bin"), BreakdownCategory::Objects);
+        assert_eq!(category("xl/pivotCache/pivotCacheRecords1.xml"), BreakdownCategory::Caches);
+        assert_eq!(category("xl/worksheets/sheet1.xml"), BreakdownCategory::Content);
+        assert_eq!(category("xl/styles.xml"), BreakdownCategory::Styles);
+        assert_eq!(category("docProps/app.xml"), BreakdownCategory::Other);
+    }
+}
