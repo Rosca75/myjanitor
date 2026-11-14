@@ -196,17 +196,25 @@ pub fn path_key(path: &Path) -> String {
     let norm = normalize_lexical(path);
     let mut s = encode_path(&norm);
     if cfg!(windows) {
-        s = s.replace('\\', "/");
-        s = s.to_lowercase();
-        // `\\?\C:\x` and `C:\x` are the same path.
-        if let Some(rest) = s.strip_prefix("//?/") {
-            if !rest.starts_with("unc/") {
-                s = rest.to_string();
-            }
-        }
+        s = windows_key(&s);
     }
     while s.len() > 1 && s.ends_with('/') && !s.ends_with(":/") {
         s.pop();
+    }
+    s
+}
+
+/// The Windows part of [`path_key`] on an encoded path (pure, so it is tested on every
+/// platform): `/` separators, lower case, and one spelling per path: `\\?\C:\x` is
+/// `C:\x`, and (F-14) `\\?\UNC\server\share\x` is `\\server\share\x`, so a protected
+/// UNC entry or allowed root cannot be bypassed through the other spelling.
+pub fn windows_key(s: &str) -> String {
+    let s = s.replace('\\', "/").to_lowercase();
+    if let Some(rest) = s.strip_prefix("//?/unc/") {
+        return format!("//{rest}");
+    }
+    if let Some(rest) = s.strip_prefix("//?/") {
+        return rest.to_string();
     }
     s
 }
@@ -355,5 +363,18 @@ mod tests {
     fn extension_is_lowercased() {
         assert_eq!(extension_lower(Path::new("/x/IMG.JPG")), "jpg");
         assert_eq!(extension_lower(Path::new("/x/noext")), "");
+    }
+}
+
+#[cfg(test)]
+mod review_fix_tests {
+    use super::windows_key;
+
+    #[test]
+    fn f14_unc_spellings_share_one_key() {
+        assert_eq!(windows_key(r"\\?\UNC\Srv\Share\Keep"), windows_key(r"\\srv\share\keep"));
+        assert_eq!(windows_key(r"\\?\UNC\srv\share\keep\x"), "//srv/share/keep/x");
+        assert_eq!(windows_key(r"\\?\C:\Windows"), windows_key(r"C:\windows"));
+        assert_ne!(windows_key(r"\\srv\share2"), windows_key(r"\\srv\share"));
     }
 }
