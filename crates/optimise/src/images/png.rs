@@ -152,11 +152,13 @@ impl Optimiser for PngLossless {
         }
         job.cancel.checkpoint()?;
         if let (true, Ok(exe)) = (job.params.bool("use_oxipng", true), crate::tools::require(job.tools, "oxipng")) {
-            let out = job.temp_dir.join("oxipng-out.png");
+            // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
+            let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "oxipng")?;
+            let out = scratch.join("out.png");
             let o = run(
                 exe,
                 &oxipng_args(job.src, &out, pol, 4),
-                &RunOptions { cancel: Some(job.cancel), cwd: Some(job.temp_dir), ..Default::default() },
+                &RunOptions { cancel: Some(job.cancel), cwd: Some(scratch.path()), ..Default::default() },
             )?;
             // oxipng writes nothing when it cannot improve the file: that is not a failure.
             if o.success() && out.is_file() {

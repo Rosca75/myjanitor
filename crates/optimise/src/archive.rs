@@ -358,43 +358,30 @@ fn remove_sidecar_if(archive: &Path, bytes: Option<&[u8]>) {
 }
 
 impl Zip7Archiver {
-    fn create_inner(&self, job: &ArchiveJob<'_>, p: &Prepared) -> Result<u64> {
+    /// Build the archive at `out` (a fresh path in this job's private folder).
+    fn create_inner(&self, job: &ArchiveJob<'_>, p: &Prepared, out: &Path, work: &Path) -> Result<u64> {
         match job.format {
             ArchiveFormat::Zip => zipfmt::create(
                 &p.items,
                 &p.hashes,
                 &p.index_bytes,
                 &p.index_name,
-                job.dst,
+                out,
                 job.level,
                 job.cancel,
                 job.progress,
             ),
             ArchiveFormat::SevenZip => {
                 let tool = crate::tools::require(job.tools, "7z")?;
-                ext::create_7z(
-                    tool,
-                    &p.items,
-                    &p.index_bytes,
-                    &p.index_name,
-                    job.base,
-                    job.dst,
-                    job.level,
-                    job.cancel,
-                )?;
-                Ok(std::fs::metadata(job.dst).map_err(|e| Error::io(job.dst, e))?.len())
+                ext::create_7z(tool, &p.items, &p.index_bytes, &p.index_name, job.base, out, job.level, job.cancel)?;
+                Ok(std::fs::metadata(out).map_err(|e| Error::io(out, e))?.len())
             }
             ArchiveFormat::TarZstd => {
                 let tool = crate::tools::require(job.tools, "zstd")?;
-                let partial = ext::partial_tar(job.dst);
-                let r =
-                    tar::create(&p.items, &p.hashes, &p.index_bytes, &p.index_name, &partial, job.cancel, job.progress);
-                if let Err(e) = r {
-                    let _ = std::fs::remove_file(&partial);
-                    return Err(e);
-                }
-                ext::zstd_compress(tool, &partial, job.dst, job.level, job.cancel)?;
-                Ok(std::fs::metadata(job.dst).map_err(|e| Error::io(job.dst, e))?.len())
+                let partial = work.join("partial.tar");
+                tar::create(&p.items, &p.hashes, &p.index_bytes, &p.index_name, &partial, job.cancel, job.progress)?;
+                ext::zstd_compress(tool, &partial, out, job.level, job.cancel)?;
+                Ok(std::fs::metadata(out).map_err(|e| Error::io(out, e))?.len())
             }
         }
     }
@@ -406,10 +393,8 @@ impl Zip7Archiver {
                 ext::verify_7z(&locate_tool("7z")?, archive, &p.items, &p.index_bytes, &p.index_name, cancel)
             }
             ArchiveFormat::TarZstd => {
-                let tarp = ext::zstd_decompress(&locate_tool("zstd")?, archive, cancel)?;
-                let r = tar::read(&tarp, &p.index_name, cancel).and_then(|e| check_tar(&e, p));
-                let _ = std::fs::remove_file(&tarp);
-                r
+                let dir = ext::zstd_decompress(&locate_tool("zstd")?, archive, cancel)?;
+                tar::read(&dir.join("archive.tar"), &p.index_name, cancel).and_then(|e| check_tar(&e, p))
             }
         }
     }
@@ -427,22 +412,25 @@ impl mj_core::Archiver for Zip7Archiver {
         f
     }
 
+    /// F-03 / F-16: the archive (and any intermediate tar) is built inside a folder this
+    /// job created exclusively beside `dst` (same volume), then moved to `dst` without ever
+    /// replacing anything. A failure therefore never deletes, appends to (`7z a`) or
+    /// overwrites a file that appeared at `dst` meanwhile; the private folder goes with
+    /// everything in it.
     fn create(&self, job: &ArchiveJob<'_>) -> Result<u64> {
         if job.dst.exists() {
             return Err(Error::Conflict(format!("{} already exists", job.dst.display())));
         }
-        let res = prepare(job.sources, job.base, job.cancel).and_then(|p| self.create_inner(job, &p).map(|n| (n, p)));
-        match res {
-            Ok((n, p)) => {
-                write_sidecar(job.dst, &p.index_bytes);
-                Ok(n)
-            }
-            Err(e) => {
-                let _ = std::fs::remove_file(job.dst);
-                let _ = std::fs::remove_file(ext::partial_tar(job.dst));
-                Err(e)
-            }
-        }
+        let parent =
+            job.dst.parent().ok_or_else(|| Error::InvalidInput(format!("no folder: {}", job.dst.display())))?;
+        let scratch = mj_core::scratch::ScratchDir::new(parent, "archive")?;
+        let name = job.dst.file_name().ok_or_else(|| Error::InvalidInput(format!("no name: {}", job.dst.display())))?;
+        let out = scratch.join(name);
+        let p = prepare(job.sources, job.base, job.cancel)?;
+        let n = self.create_inner(job, &p, &out, scratch.path())?;
+        crate::images::common::move_into_place(&out, job.dst)?;
+        write_sidecar(job.dst, &p.index_bytes);
+        Ok(n)
     }
 
     fn verify(&self, archive: &Path, sources: &[PathBuf], base: &Path, cancel: &CancelToken) -> Result<()> {

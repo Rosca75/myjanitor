@@ -199,7 +199,10 @@ fn external_formats_need_their_tools() {
         let dst = t.join("x.out");
         let r = Zip7Archiver.create(&job(&src, &base, &dst, fmt, 9, &[], &cancel, &NullProgress));
         assert!(matches!(r, Err(Error::ToolMissing(_))));
-        assert!(!dst.exists() && !ext::partial_tar(&dst).exists());
+        assert!(!dst.exists());
+        // Nothing is left beside the destination either (no partial tar, no scratch folder).
+        let left: Vec<_> = fs::read_dir(t.path()).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert!(left.iter().all(|n| !n.to_string_lossy().starts_with("mj-")), "{left:?}");
     }
 }
 

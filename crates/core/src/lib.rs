@@ -47,6 +47,7 @@ pub mod report;
 pub mod rule;
 pub mod safety;
 pub mod scope;
+pub mod scratch;
 pub mod settings;
 pub mod size;
 #[cfg(any(test, feature = "testutil"))]

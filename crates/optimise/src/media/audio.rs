@@ -341,8 +341,9 @@ impl Optimiser for Audio {
             lossy = true; // FLAC stores integers: floating-point samples are rounded
             notes.push("floating-point samples were rounded to 24 bits".into());
         }
-        let out = job.temp_dir.join(format!("mj-audio-out.{}", s.codec.extension()));
-        let _ = std::fs::remove_file(&out);
+        // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
+        let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "audio")?;
+        let out = scratch.join(format!("out.{}", s.codec.extension()));
         let dur = info.as_ref().and_then(|i| i.duration_ms);
         run_encode(job, exe, &build_args(&s, job.src, &out), dur)?;
         let after = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);

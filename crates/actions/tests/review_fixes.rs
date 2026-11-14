@@ -227,3 +227,125 @@ fn f02_non_identical_group_keeps_a_copy_that_still_matches_its_scan() {
     assert_eq!(out.skipped, 1, "{out:?}");
     assert!(b.exists());
 }
+
+/// An optimiser that writes its intermediate result to a FIXED name in `job.temp_dir`
+/// (as several real optimisers did), waits for a second job to do the same, then copies
+/// that intermediate file to its output. Run concurrently with one shared temp dir, the
+/// two jobs exchanged files before F-03.
+struct FixedScratch {
+    barrier: std::sync::Barrier,
+}
+
+impl mj_core::Optimiser for FixedScratch {
+    fn info(&self) -> mj_core::OptimiserInfo {
+        mj_core::OptimiserInfo {
+            id: mj_core::OptimiserId::PngLossless,
+            title: "fixed".into(),
+            description: String::new(),
+            category: mj_core::Category::Optimise,
+            safety: mj_core::SafetyClass::Reversible,
+            default_action: mj_core::ActionKind::Optimise,
+            available_actions: vec![],
+            presets: vec![],
+            settings: vec![],
+            platform: mj_core::PlatformSupport::Both,
+            tools: vec![],
+            feature_ids: vec![],
+            unit: String::new(),
+        }
+    }
+    fn availability(&self, _: &[ExternalTool]) -> mj_core::Availability {
+        mj_core::Availability::Available
+    }
+    fn applies_to(&self, _: &mj_core::FileEntry) -> bool {
+        true
+    }
+    fn estimate(&self, e: &mj_core::FileEntry, _: &mj_core::ParamValues) -> mj_core::Result<mj_core::Estimate> {
+        Ok(mj_core::Estimate { files: 1, bytes_before: e.size, bytes_after: e.size / 2, ..Default::default() })
+    }
+    fn optimise(&self, job: &mj_core::OptimiseJob<'_>) -> mj_core::Result<mj_core::OptimiseOutput> {
+        let data = std::fs::read(job.src).unwrap();
+        let scratch = job.temp_dir.join("stage1.bin");
+        std::fs::write(&scratch, &data[..data.len() / 2]).unwrap();
+        self.barrier.wait();
+        std::fs::copy(&scratch, job.dst).unwrap();
+        let _ = std::fs::remove_file(&scratch);
+        Ok(mj_core::OptimiseOutput {
+            bytes_before: data.len() as u64,
+            bytes_after: (data.len() / 2) as u64,
+            ..mj_core::OptimiseOutput::default()
+        })
+    }
+    fn analyse(&self, _: &mj_core::DetectContext<'_>) -> mj_core::Result<mj_core::DetectorOutput> {
+        Ok(mj_core::DetectorOutput::default())
+    }
+}
+
+fn optimise_action() -> Action {
+    Action::Optimise {
+        optimiser: mj_core::OptimiserId::PngLossless,
+        params: mj_core::ParamValues::default(),
+        output: mj_core::OutputMode::Replace,
+        originals: OriginalsPolicy::Quarantine,
+        keep_if_not_smaller: true,
+    }
+}
+
+#[test]
+fn f03_concurrent_apply_and_dry_run_never_share_a_scratch_file() {
+    let f = Fixture::new("f03");
+    let a = f.write("a.bin", &[b'A'; 4000]);
+    let b = f.write("b.bin", &[b'B'; 4000]);
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(FixedScratch { barrier: std::sync::Barrier::new(2) })];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    let (ia, ib) = (f.item(&a, optimise_action()), f.item(&b, optimise_action()));
+    let run = f.new_run(RunKind::Apply);
+    let (applied, dry) = std::thread::scope(|s| {
+        let h1 = s.spawn(|| mj_actions::execute_with(&f.ctx(run, services), std::slice::from_ref(&ia), &opts()));
+        let h2 = s.spawn(|| mj_actions::dry_run(&f.ctx(mj_core::RunId(0), services), std::slice::from_ref(&ib)));
+        (h1.join().unwrap().unwrap(), h2.join().unwrap().unwrap())
+    });
+    assert_eq!(applied.succeeded, 1, "{applied:?}");
+    assert_eq!(dry.estimate.files, 1, "{dry:?}");
+    assert_eq!(std::fs::read(&a).unwrap(), vec![b'A'; 2000], "a's output is a's own content");
+    assert_eq!(std::fs::read(&b).unwrap(), vec![b'B'; 4000], "the dry run changed nothing");
+    assert_eq!(std::fs::read_dir(&f.tmp).map(|d| d.count()).unwrap_or(0), 0, "scratch folders were removed");
+}
+
+/// An optimiser that "writes" its output as a hard link to the original.
+struct LinkBack;
+
+impl mj_core::Optimiser for LinkBack {
+    fn info(&self) -> mj_core::OptimiserInfo {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.info()
+    }
+    fn availability(&self, _: &[ExternalTool]) -> mj_core::Availability {
+        mj_core::Availability::Available
+    }
+    fn applies_to(&self, _: &mj_core::FileEntry) -> bool {
+        true
+    }
+    fn estimate(&self, e: &mj_core::FileEntry, p: &mj_core::ParamValues) -> mj_core::Result<mj_core::Estimate> {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.estimate(e, p)
+    }
+    fn optimise(&self, job: &mj_core::OptimiseJob<'_>) -> mj_core::Result<mj_core::OptimiseOutput> {
+        std::fs::hard_link(job.src, job.dst).unwrap();
+        Ok(mj_core::OptimiseOutput { privacy: true, ..mj_core::OptimiseOutput::default() })
+    }
+    fn analyse(&self, _: &mj_core::DetectContext<'_>) -> mj_core::Result<mj_core::DetectorOutput> {
+        Ok(mj_core::DetectorOutput::default())
+    }
+}
+
+#[test]
+fn f03_an_output_that_is_not_a_new_file_never_replaces_the_original() {
+    let f = Fixture::new("f03-link");
+    let a = f.write("a.bin", &[b'A'; 4000]);
+    let before = snapshot(&f.root());
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(LinkBack)];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(&f.ctx(run, services), &[f.item(&a, optimise_action())], &opts()).unwrap();
+    assert_eq!(out.succeeded, 0, "{out:?}");
+    assert_eq!(snapshot(&f.root()), before);
+}

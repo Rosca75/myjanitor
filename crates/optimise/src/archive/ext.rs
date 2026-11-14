@@ -208,13 +208,6 @@ pub fn verify_7z(
     Ok(())
 }
 
-/// Path of the intermediate tar beside `dst`.
-pub fn partial_tar(dst: &Path) -> PathBuf {
-    let mut s = dst.as_os_str().to_os_string();
-    s.push(".partial.tar");
-    s.into()
-}
-
 /// Compress a finished tar with zstd into `dst`, removing the tar.
 pub fn zstd_compress(tool: &Path, tar: &Path, dst: &Path, level: u8, cancel: &CancelToken) -> Result<()> {
     let r = run(tool, &zstd_compress_args(tar, dst, level), &opts(cancel, None)).and_then(|o| o.ensure_success("zstd"));
@@ -223,19 +216,14 @@ pub fn zstd_compress(tool: &Path, tar: &Path, dst: &Path, level: u8, cancel: &Ca
 }
 
 /// Decompress `archive` to a scratch tar and return its path (caller removes it).
-pub fn zstd_decompress(tool: &Path, archive: &Path, cancel: &CancelToken) -> Result<PathBuf> {
-    let mut s = archive.as_os_str().to_os_string();
-    s.push(".verify.tar");
-    let out = PathBuf::from(s);
-    if out.exists() {
-        return Err(Error::Conflict(format!("{} already exists", out.display())));
-    }
-    let r = run(tool, &zstd_decompress_args(archive, &out), &opts(cancel, None)).and_then(|o| o.ensure_success("zstd"));
-    if let Err(e) = r {
-        let _ = std::fs::remove_file(&out);
-        return Err(e);
-    }
-    Ok(out)
+/// The tar lives in a folder created exclusively for this verification (F-03): never a
+/// fixed name beside the archive, which another run (or a file of the user's) could hold.
+pub fn zstd_decompress(tool: &Path, archive: &Path, cancel: &CancelToken) -> Result<mj_core::scratch::ScratchDir> {
+    let parent = archive.parent().unwrap_or(Path::new("."));
+    let dir = mj_core::scratch::ScratchDir::new(parent, "verify")?;
+    let out = dir.join("archive.tar");
+    run(tool, &zstd_decompress_args(archive, &out), &opts(cancel, None)).and_then(|o| o.ensure_success("zstd"))?;
+    Ok(dir)
 }
 
 #[cfg(test)]

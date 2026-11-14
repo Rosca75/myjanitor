@@ -769,16 +769,20 @@ fn optimise(
     let preserve_times = ctx.settings.optimise.preserve_timestamps;
     let preserve_perms = ctx.settings.optimise.preserve_permissions;
     run_acted(ctx, item, e, |e| {
+        // F-03: the optimiser's intermediate files go to a folder this item created for
+        // itself (never a name shared with another job, a dry run or another process).
+        let scratch = mj_core::scratch::ScratchDir::new(ctx.temp_dir, &format!("apply-{}", e.id.0))?;
         let job = mj_core::OptimiseJob {
             src: &item.path,
             dst: &temp,
             params,
             tools: ctx.services.tools,
-            temp_dir: ctx.temp_dir,
+            temp_dir: scratch.path(),
             cancel: ctx.cancel,
             progress: &NullProgress,
         };
         let res = opt.optimise(&job);
+        drop(scratch);
         let cleanup = || {
             let _ = std::fs::remove_file(&temp);
         };
@@ -800,6 +804,12 @@ fn optimise(
                 return Err(Error::Internal("the optimiser reported success but wrote no file".into()));
             }
         };
+        // F-03: the output must be a new, independent file this job wrote: not another
+        // name of the original (or of anything else) through a hard link.
+        if let Err(err) = output_is_independent(ctx, &temp, &item.path) {
+            cleanup();
+            return Err(err);
+        }
         // OPT-ENG-04: keep the original unless the output is smaller (cannot be disabled).
         // A privacy rewrite (GPS / metadata strip) may be the same size, never larger.
         if !keeps_output(&out, e.bytes_before, new_size) {
@@ -1015,6 +1025,21 @@ pub fn dry_run_with(ctx: &ExecContext<'_>, items: &[ActionItem], opts: &ExecOpti
     Ok(r)
 }
 
+/// F-03: an optimiser output is replaced into place only when it is a regular file with
+/// a single name that is not the original itself.
+fn output_is_independent(ctx: &ExecContext<'_>, output: &Path, original: &Path) -> Result<()> {
+    let md = ctx.platform.metadata(output)?;
+    let orig = ctx.platform.metadata(original)?;
+    let shared = md.links.is_some_and(|n| n > 1) || (md.file_id.is_some() && md.file_id == orig.file_id);
+    if md.kind != EntryKind::File || shared {
+        return Err(Error::Conflict(format!(
+            "{} is not a new file written by this job; nothing was replaced",
+            output.display()
+        )));
+    }
+    Ok(())
+}
+
 /// Keep-if-not-smaller (OPT-ENG-04): an output is kept only when strictly smaller, or the
 /// same size for a privacy rewrite (GPS / metadata strip).
 fn keeps_output(out: &mj_core::OptimiseOutput, before: u64, after: u64) -> bool {
@@ -1052,21 +1077,25 @@ fn measure(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Resu
                 .iter()
                 .find(|o| o.info().id == *optimiser)
                 .ok_or_else(|| Error::not_implemented(format!("optimiser {optimiser:?}")))?;
-            std::fs::create_dir_all(ctx.temp_dir).map_err(|e| Error::io(ctx.temp_dir, e))?;
+            // F-03: the measured output and the optimiser's own intermediate files live in a
+            // folder this dry run created for itself; it is removed with everything in it.
+            let scratch = mj_core::scratch::ScratchDir::new(ctx.temp_dir, &format!("dry-run-{}", ctx.job_id.0))?;
             let ext = item.path.extension().map(|s| format!(".{}", s.to_string_lossy())).unwrap_or_default();
-            let dst = fsops::unique_path(&ctx.temp_dir.join(format!("dry-run-{}{ext}", ctx.job_id.0)));
+            let dst = scratch.join(format!("output{ext}"));
+            let work = mj_core::scratch::ScratchDir::new(scratch.path(), "work")?;
             let job = mj_core::OptimiseJob {
                 src: &item.path,
                 dst: &dst,
                 params,
                 tools: ctx.services.tools,
-                temp_dir: ctx.temp_dir,
+                temp_dir: work.path(),
                 cancel: ctx.cancel,
                 progress: &NullProgress,
             };
             let res = opt.optimise(&job);
-            let size = std::fs::metadata(&dst).map(|m| m.len()).ok();
-            let _ = std::fs::remove_file(&dst);
+            let size = std::fs::symlink_metadata(&dst).ok().filter(|m| m.is_file()).map(|m| m.len());
+            drop(work);
+            drop(scratch);
             let out = res?;
             if let Some(reason) = &out.skipped {
                 return Err(Error::Conflict(format!("skipped: {reason}")));

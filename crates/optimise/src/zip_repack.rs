@@ -76,16 +76,25 @@ fn mime_first(e: &[ZipEntry]) -> bool {
 /// Write `src` repacked (and changed by `plan`) to `dst`, then verify it. On any
 /// error `dst` is removed. Cancel is checked between entries.
 pub fn repack_file(src: &Path, dst: &Path, plan: &RepackPlan, caps: Caps, cancel: &CancelToken) -> Result<Repacked> {
-    let res = repack_inner(src, dst, plan, caps, cancel);
+    // F-16: `dst` is removed on failure only once this call has created it; a file that
+    // was already there (another job, a sync client) is never touched.
+    let f = std::fs::OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| Error::io(dst, e))?;
+    let res = repack_inner(src, dst, f, plan, caps, cancel);
     if res.is_err() {
         let _ = std::fs::remove_file(dst);
     }
     res
 }
 
-fn repack_inner(src: &Path, dst: &Path, plan: &RepackPlan, caps: Caps, cancel: &CancelToken) -> Result<Repacked> {
+fn repack_inner(
+    src: &Path,
+    dst: &Path,
+    f: std::fs::File,
+    plan: &RepackPlan,
+    caps: Caps,
+    cancel: &CancelToken,
+) -> Result<Repacked> {
     let mut s = SourceArchive::open_file(src, caps)?;
-    let f = std::fs::OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| Error::io(dst, e))?;
     let mut w = ZipWriter::new(BufWriter::new(f));
     w.set_comment(&s.info.comment)?;
     let entries = s.entries().to_vec();

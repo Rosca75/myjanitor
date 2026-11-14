@@ -252,3 +252,52 @@ fn cancel_stops_a_running_encode() {
     assert_eq!(r.unwrap_err(), mj_core::Error::Cancelled);
     assert!(!dst.exists());
 }
+
+/// F-03 (adversarial review): two encodes sharing one temp dir used to write the same
+/// fixed scratch name, so one failed and the other returned an interleaved file that
+/// passed every check. Each encode now has a private scratch folder: both succeed and
+/// each output is exactly what the encode produces alone.
+#[test]
+fn f03_concurrent_encodes_sharing_a_temp_dir_never_exchange_outputs() {
+    let Some((exe, tools)) = ffmpeg() else { return };
+    let d = TempDir::new("ff-f03").unwrap();
+    let gen = |name: &str, src: &str| {
+        let out = d.join(name);
+        let mut a = args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src, "-t", "8", "-ac", "2"]);
+        a.extend(args(["-ar", "44100"]));
+        a.push(out.clone().into_os_string());
+        run(&exe, &a, &RunOptions::default()).unwrap().ensure_success("ffmpeg").unwrap();
+        out
+    };
+    let a = gen("a_tone.wav", "sine=frequency=440:sample_rate=44100");
+    let b = gen("b_noise.wav", "anoisesrc=color=pink:sample_rate=44100:seed=7");
+    let p = ParamValues::default();
+    let (ta, tb) = (TempDir::new("ff-f03-ta").unwrap(), TempDir::new("ff-f03-tb").unwrap());
+    let (ra, rb) = (d.join("ref_a.out"), d.join("ref_b.out"));
+    job_run(&Audio, &a, &ra, &ta, &p, &tools).unwrap();
+    job_run(&Audio, &b, &rb, &tb, &p, &tools).unwrap();
+    // Ogg streams carry a random serial number, so compare the decoded audio.
+    let pcm = |f: &Path| {
+        let mut a = args(["-nostdin", "-loglevel", "error", "-i"]);
+        a.push(f.as_os_str().to_owned());
+        a.extend(args(["-f", "md5", "-"]));
+        let o = run(&exe, &a, &RunOptions::default()).unwrap();
+        o.ensure_success("ffmpeg").unwrap();
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    let (ref_a, ref_b) = (pcm(&ra), pcm(&rb));
+    assert_ne!(ref_a, ref_b);
+    let shared = TempDir::new("ff-f03-shared").unwrap();
+    for i in 0..4 {
+        let (da, db) = (d.join(format!("a{i}.out")), d.join(format!("b{i}.out")));
+        let (ea, eb) = std::thread::scope(|s| {
+            let h1 = s.spawn(|| job_run(&Audio, &a, &da, &shared, &p, &tools));
+            let h2 = s.spawn(|| job_run(&Audio, &b, &db, &shared, &p, &tools));
+            (h1.join().unwrap(), h2.join().unwrap())
+        });
+        assert!(ea.is_ok() && eb.is_ok(), "round {i}: {ea:?} {eb:?}");
+        assert_eq!(pcm(&da), ref_a, "round {i}: output of a is a's own encoding");
+        assert_eq!(pcm(&db), ref_b, "round {i}: output of b is b's own encoding");
+    }
+    assert_eq!(std::fs::read_dir(shared.path()).unwrap().count(), 0, "every private scratch folder was removed");
+}

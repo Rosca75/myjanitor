@@ -34,23 +34,41 @@ pub fn write_new(dst: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Move a finished temp file to `dst` (rename, or copy across volumes). `dst` must not exist.
+/// Move a finished temp file to `dst` (rename, or copy across volumes). `dst` must not
+/// exist and is never replaced (F-03: `rename_no_replace`, `create_new`); the result is
+/// synced to disk before this returns (F-11), so the action engine never moves an
+/// original away in favour of an output that a power cut could still truncate.
 pub fn move_into_place(tmp: &Path, dst: &Path) -> Result<()> {
-    if dst.exists() {
-        return Err(Error::Conflict(format!("{} already exists", dst.display())));
-    }
-    if std::fs::rename(tmp, dst).is_ok() {
-        return Ok(());
-    }
-    match std::fs::copy(tmp, dst) {
-        Ok(_) => {
+    match mj_platform::action::rename_no_replace_io(tmp, dst) {
+        Ok(()) => {
+            let f = std::fs::File::open(dst).map_err(|e| Error::io(dst, e))?;
+            f.sync_all().map_err(|e| Error::io(dst, e))?;
+            if let Some(parent) = dst.parent() {
+                let _ = mj_platform::action::sync_dir(parent);
+            }
+            Ok(())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            Err(Error::Conflict(format!("{} already exists; nothing was overwritten", dst.display())))
+        }
+        Err(e) if mj_platform::action::is_cross_device(&e) => {
+            let mut input = std::fs::File::open(tmp).map_err(|e| Error::io(tmp, e))?;
+            let mut out =
+                std::fs::OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| Error::io(dst, e))?;
+            // From here on `dst` is ours: a failure removes it.
+            let r = std::io::copy(&mut input, &mut out).and_then(|_| out.sync_all());
+            drop(out);
+            if let Err(e) = r {
+                let _ = std::fs::remove_file(dst);
+                return Err(Error::io(dst, e));
+            }
+            if let Some(parent) = dst.parent() {
+                let _ = mj_platform::action::sync_dir(parent);
+            }
             let _ = std::fs::remove_file(tmp);
             Ok(())
         }
-        Err(e) => {
-            let _ = std::fs::remove_file(dst);
-            Err(Error::io(dst, e))
-        }
+        Err(e) => Err(Error::io(dst, e)),
     }
 }
 

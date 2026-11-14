@@ -206,14 +206,15 @@ impl Optimiser for ImageLossy {
             ));
         }
         let exe = crate::tools::require(job.tools, s.target.tool())?;
-        let out = job.temp_dir.join(format!("mj-image-out.{}", s.target.extension()));
-        let _ = std::fs::remove_file(&out);
+        // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
+        let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "image")?;
+        let out = scratch.join(format!("out.{}", s.target.extension()));
         let o = run(
             exe,
             &encoder_args(&s, job.src, &out),
             &RunOptions {
                 cancel: Some(job.cancel),
-                cwd: Some(job.temp_dir),
+                cwd: Some(scratch.path()),
                 timeout: Some(std::time::Duration::from_secs(900)),
                 ..Default::default()
             },

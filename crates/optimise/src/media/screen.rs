@@ -418,8 +418,9 @@ fn audio_only(job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
     if info.as_ref().is_some_and(|i| i.audio_tracks == 0) {
         return Ok(common::skipped(before, "The recording has no sound to keep"));
     }
-    let out = job.temp_dir.join("mj-screen-audio.opus");
-    let _ = std::fs::remove_file(&out);
+    // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
+    let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "screen-audio")?;
+    let out = scratch.join("out.opus");
     run_encode(job, exe, &audio_only_args(job.src, &out), info.as_ref().and_then(|i| i.duration_ms))?;
     let after = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
     if after == 0 {
