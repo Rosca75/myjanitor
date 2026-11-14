@@ -150,8 +150,12 @@ No request → `ScanStatus`. Used at start-up and after a webview reload.
 `OpportunitiesRequest` → `OpportunitiesList`. Cards with at least one candidate,
 filtered by tab and sorted. `summary` and `counts` always cover every tab.
 Tabs: `clean`/`optimise`/`archive` exclude review-only cards, `review_only`
-holds them. Disabled cards (`availability.state = "disabled"`) are included
-so the UI can show them greyed with the reason.
+holds them. Disabled cards (`availability.state = "disabled"`: optimiser tool
+missing, platform-specific, or analysis not available in this build) are
+included even without candidates, sorted after the available ones, and never
+counted in `summary`, so the UI can show them greyed with the reason. `summary`
+buckets each selected row by its own safety class; `summary.reclaimed` is what
+runs applied this session freed.
 
 ```json OpportunitiesRequest
 {"tab":"all","sort":"saving"}
@@ -299,7 +303,10 @@ No request → `Plan`.
 ### `plan_dry_run`
 No request → `Job` (`kind: "dry_run"`). *Spawns.* "Estimate exactly (dry run)":
 every check of a real run without changing anything; optimisations are run
-into the temp folder to measure. The result arrives as `plan://dry_run`; the
+into the temp folder to measure. Removal figures are the scan's allocated sizes
+(folders: subtree totals) of the items that pass every check, hard-link aware
+(removing one of several links frees nothing). `plan://dry_run` is sent after
+the plan (`plan://changed`) carries the measured estimates. The result arrives as `plan://dry_run`; the
 plan's step estimates become `confidence: "exact"` where measured.
 
 ### `plan_confirmation_info`
@@ -316,7 +323,11 @@ with `acknowledged: true` for every step whose safety class requires
 confirmation (`lossy_opt_in`, `permanent`); otherwise fails with
 `confirmation_required` and nothing runs. Creates a run (`RunId`), queues one
 job per step in plan order; progress via `job://*`, then `history://changed`
-and `plan://changed` (applied steps leave the plan).
+and `plan://changed` (applied steps leave the plan) and `opportunities://changed`
+(applied items leave their cards). Fails with `conflict` while another plan is
+being applied. Items are the selected, actionable rows; online-only rows are
+never removed; with `synced_online_only` removals of synced items become
+`dehydrate`. Jobs run one at a time in queue order.
 
 ```json PlanApplyRequest
 {"confirmations":[{"step_id":15,"acknowledged":true,"originals":{"policy":"recycle_bin"},"synced_online_only":true}]}
@@ -362,7 +373,8 @@ through `cancelling`. Items already applied stay applied (and undoable).
 
 ### `undo_last`
 No request → `Job` (`kind: "undo"`). *Spawns.* "Undo last action": undoes every
-undoable entry of the newest run that has one. `invalid_input` when nothing
+undoable entry of the newest run that has one. Undo jobs run in the same queue
+as apply jobs, in their own undo run (`job.run_id` is set when it starts). `invalid_input` when nothing
 can be undone.
 
 ### `undo_run`

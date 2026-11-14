@@ -265,8 +265,8 @@ impl Engine {
         Ok(lock(&self.jobs).jobs.clone())
     }
 
-    /// Pause a job (between items). A queued job can be paused too: it is skipped by the
-    /// worker until resumed.
+    /// Pause a running job (takes effect between items). Queued jobs are not paused:
+    /// cancel or reorder them instead.
     pub fn job_pause(&self, req: JobRequest) -> Result<Job> {
         self.job_update(req.job_id, |j, t| {
             if j.state == JobState::Running {
