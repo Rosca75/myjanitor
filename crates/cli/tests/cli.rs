@@ -27,7 +27,11 @@ fn cli(data: &Path, home: &Path, args: &[&str]) -> Run {
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    Run { code: o.status.code().unwrap_or(-1), out: String::from_utf8_lossy(&o.stdout).into(), err: String::from_utf8_lossy(&o.stderr).into() }
+    Run {
+        code: o.status.code().unwrap_or(-1),
+        out: String::from_utf8_lossy(&o.stdout).into(),
+        err: String::from_utf8_lossy(&o.stderr).into(),
+    }
 }
 
 fn sandbox(label: &str) -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
@@ -45,12 +49,29 @@ fn version_and_help() {
     assert!(v.out.starts_with("myjanitor-cli 0."));
     let h = cli(&data, &home, &["--help"]);
     assert_eq!(h.code, 0);
-    for cmd in ["scan", "list", "show", "search", "plan", "dry-run", "apply", "history", "undo", "report", "run-profile", "tools", "settings", "cache"] {
+    for cmd in [
+        "scan",
+        "list",
+        "show",
+        "search",
+        "plan",
+        "dry-run",
+        "apply",
+        "history",
+        "undo",
+        "report",
+        "run-profile",
+        "tools",
+        "settings",
+        "cache",
+    ] {
         assert!(h.out.contains(cmd), "help lists {cmd}");
     }
     let a = cli(&data, &home, &["apply", "--help"]);
     assert_eq!(a.code, 0);
-    assert!(a.out.contains("--confirm-lossy") && a.out.contains("--confirm-permanent") && a.out.contains("--originals"));
+    assert!(
+        a.out.contains("--confirm-lossy") && a.out.contains("--confirm-permanent") && a.out.contains("--originals")
+    );
     assert_eq!(cli(&data, &home, &["help", "plan"]).code, 0);
 }
 

@@ -34,9 +34,11 @@ pub fn parse_action(ctx: &Ctx, a: &Parsed) -> Res<Option<Action>> {
         "dehydrate" => Action::Dehydrate,
         "move" => Action::Move { dest: dest()?, keep_structure: false },
         "copy" => Action::Copy { dest: dest()?, keep_structure: false },
-        other => return Err(Fail::Usage(format!(
+        other => {
+            return Err(Fail::Usage(format!(
             "unknown action `{other}`; use trash, quarantine, permanent, hardlink, reflink, dehydrate, move or copy"
-        ))),
+        )))
+        }
     }))
 }
 
