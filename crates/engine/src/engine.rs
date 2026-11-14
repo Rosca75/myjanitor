@@ -116,6 +116,11 @@ pub struct Engine {
     /// when `persist` is off and the in-memory journal is intended). While set, every
     /// command that changes files refuses ([`Engine::require_writable`]).
     pub(crate) journal_error: Option<String>,
+    /// F-13: the data folder's instance lock, held for the life of the engine (persistent
+    /// engines only), or why another process holds it.
+    #[allow(dead_code)]
+    instance: Option<crate::instance::InstanceLock>,
+    pub(crate) instance_error: Option<String>,
     next_id: AtomicU64,
 }
 
@@ -128,6 +133,15 @@ impl Engine {
                 std::fs::create_dir_all(d).map_err(|e| mj_core::Error::io(d, e))?;
             }
         }
+        // F-13: one acting process per data folder (GUI, CLI and scheduled runs alike).
+        let (instance, instance_error) = if cfg.persist {
+            match crate::instance::acquire(&cfg.data_dir) {
+                Ok(l) => (Some(l), None),
+                Err(e) => (None, Some(e)),
+            }
+        } else {
+            (None, None)
+        };
         // F-08: an unreadable journal is never silently replaced by one in memory for
         // acting: reading (scan, review, History) keeps working, changing files does not.
         let (journal, journal_error) = if cfg.persist {
@@ -161,11 +175,17 @@ impl Engine {
             reclaimed: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
             journal_error,
+            instance,
+            instance_error,
             next_id: AtomicU64::new(1),
             cfg,
         };
         engine.load_state();
-        engine.recover_journal();
+        // Recovery settles dangling intents; only the process holding the lock may do it
+        // (another live process's intents are in flight, not dangling).
+        if engine.instance_error.is_none() {
+            engine.recover_journal();
+        }
         if let Some(l) = engine.cfg.launch.clone() {
             // Preselect the scope only; an invalid path is dropped (the app opens normally).
             let scope = mj_core::ScanScope { roots: vec![l.path.clone()], ..mj_core::ScanScope::default() };
@@ -198,6 +218,12 @@ impl Engine {
 
     /// Refuse a command that changes files when the journal is not durable (F-08).
     pub(crate) fn require_writable(&self) -> mj_core::Result<()> {
+        if let Some(why) = &self.instance_error {
+            return Err(mj_core::Error::Conflict(format!(
+                "{why}: close it or wait for it to finish, then try again (only one MyJanitor may change files \
+                 at a time)"
+            )));
+        }
         if let Some(why) = &self.journal_error {
             return Err(mj_core::Error::Conflict(format!(
                 "the undo journal could not be opened ({why}). MyJanitor changes no file without it: \
@@ -206,6 +232,12 @@ impl Engine {
             )));
         }
         Ok(())
+    }
+
+    /// Why this engine may not change files because another process holds the data
+    /// folder (F-13), if so. The GUI refuses to open a second window on it.
+    pub fn instance_conflict(&self) -> Option<&str> {
+        self.instance_error.as_deref()
     }
 
     /// Emit an event (never while holding a lock).

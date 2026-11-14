@@ -16,6 +16,7 @@ mod disk;
 mod engine;
 mod fsbrowse;
 mod history;
+pub mod instance;
 mod jobs;
 mod opportunities;
 pub mod paths;

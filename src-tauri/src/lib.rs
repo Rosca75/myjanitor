@@ -6,7 +6,6 @@
 
 pub mod commands;
 pub mod events;
-pub mod instance;
 pub mod launch;
 
 use std::sync::Arc;
@@ -31,13 +30,6 @@ pub fn run() {
         None => mj_engine::paths::default_dirs(),
     };
     let intent = launch.intent;
-    let lock = match instance::acquire(&data_dir) {
-        Ok(l) => l,
-        Err(msg) => {
-            eprintln!("{msg}");
-            std::process::exit(1);
-        }
-    };
     let app = tauri::Builder::default()
         .setup(move |app| {
             let mut cfg = mj_engine::EngineConfig::new(data_dir, cache_dir);
@@ -45,6 +37,12 @@ pub fn run() {
             cfg.launch = intent;
             cfg.events = Arc::new(events::TauriSink::new(app.handle().clone()));
             let engine = mj_engine::Engine::new(cfg).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
+            // F-13: the engine holds the data folder's lock (shared with the CLI and
+            // scheduled runs); a second window on the same folder does not open.
+            if let Some(msg) = engine.instance_conflict() {
+                eprintln!("MyJanitor is already running: {msg}");
+                std::process::exit(1);
+            }
             app.manage(commands::AppState { engine });
             Ok(())
         })
@@ -58,7 +56,6 @@ pub fn run() {
             if let Some(state) = handle.try_state::<commands::AppState>() {
                 state.engine.shutdown(SHUTDOWN_WAIT);
             }
-            let _ = &lock;
         }
     });
 }

@@ -140,3 +140,52 @@ fn f08_unreadable_journal_blocks_every_acting_command_but_not_reading() {
     assert_eq!(e.undo_last().unwrap_err().code(), "conflict");
     assert!(exists(&path(&tree, "photos/a.bin")) && exists(&path(&tree, "downloads/a.bin")));
 }
+
+/// F-13: while another live process holds the data folder (here pid 1, which always
+/// runs), an engine neither recovers its in-flight intents (deleting that process's
+/// temporary output) nor changes files.
+#[cfg(target_os = "linux")]
+#[test]
+fn f13_second_process_neither_recovers_nor_acts() {
+    let app = TempDir::new("f13-app").unwrap();
+    let tree = pair_tree();
+    let original = path(&tree, "photos/a.bin");
+    let temp = path(&tree, "photos/.a.mj-5.tmp.bin");
+    std::fs::write(&temp, b"half-written output of the other process").unwrap();
+    {
+        let j = mj_actions::Journal::open(&app.join("journal")).unwrap();
+        let run = j.next_run_id(mj_core::Timestamp::now());
+        j.put_run(&mj_core::RunRecord {
+            run_id: run,
+            kind: mj_core::RunKind::Apply,
+            title: "other process".into(),
+            started: mj_core::Timestamp::now(),
+            finished: None,
+            steps: vec![],
+            undo_of: None,
+        })
+        .unwrap();
+        let md = std::fs::symlink_metadata(&original).unwrap();
+        let stamp =
+            mj_core::FileStamp { size: md.len(), mtime: mj_core::Timestamp::from_system_time(md.modified().unwrap()) };
+        let entry: mj_core::JournalEntry = serde_json::from_value(serde_json::json!({
+            "id": run.0 * 1_000_000, "run_id": run.0, "job_id": 1, "at": 0, "state": "intent",
+            "action": "optimise", "target": "file", "original": original, "original_stamp": stamp,
+            "bytes_before": md.len(), "bytes_after": md.len(), "created": [temp], "reversible": false
+        }))
+        .unwrap();
+        j.append(&entry).unwrap();
+    }
+    std::fs::create_dir_all(app.join("data")).unwrap();
+    std::fs::write(app.join("data/myjanitor.lock"), "1").unwrap();
+    let e = mj_engine::Engine::new(config(&app, std::sync::Arc::new(TimedSink::default()))).unwrap();
+    assert!(e.instance_conflict().is_some());
+    assert!(temp.exists(), "the other process's in-flight output was left alone");
+    e.scope_add_root(ScopePathRequest { path: tree.path().to_path_buf() }).unwrap();
+    scan(&e);
+    e.plan_add_step(PlanAddStepRequest { opportunity_id: oid("det:exact_duplicates"), action: None, params: None })
+        .unwrap();
+    let err = e.plan_apply(PlanApplyRequest::default()).unwrap_err();
+    assert_eq!(err.code(), "conflict");
+    assert!(err.to_string().contains("another MyJanitor"), "{err}");
+}
