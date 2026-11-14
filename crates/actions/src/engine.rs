@@ -274,11 +274,21 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
     if matches!(item.action, Action::None) {
         return Err(Error::InvalidInput("this step has no action".into()));
     }
+    // F-10: online-only state is re-read now, before any content is read (a read would
+    // download the file). Removing or moving a placeholder out of its sync root deletes
+    // the cloud copy and leaves nothing to restore; reading it downloads it.
+    let touches_content = !matches!(item.action, Action::Dehydrate | Action::Copy { .. });
+    if touches_content && md.kind == EntryKind::File && md.is_online_only() {
+        return Err(online_only(&item.path, 1));
+    }
     // F-01: a folder is acted on as a whole, so everything below it must be acceptable
     // too (protected paths, `.git`, `.ssh`, MyJanitor's own folders, mounted volumes).
     // A copy changes nothing at the source and is exempt.
     if md.kind == EntryKind::Dir && !matches!(item.action, Action::Copy { .. }) {
         let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+        if touches_content && walk.online_only > 0 {
+            return Err(online_only(&item.path, walk.online_only));
+        }
         // F-04: the folder must still hold exactly what the scan saw (the user reviewed
         // that); a folder item without a scan stamp of its subtree is not acted on.
         if item.expected_tree != Some(walk.stamp()) {
@@ -302,6 +312,15 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
         }
     }
     Ok(md)
+}
+
+/// The refusal for online-only content (F-10).
+fn online_only(path: &Path, n: u64) -> Error {
+    Error::Conflict(format!(
+        "skipped: {} holds {n} online-only file(s); removing or reading them would delete or download the \
+         cloud copy (make them available offline first, or choose \"free up space\")",
+        path.display()
+    ))
 }
 
 /// True for actions after which the item's content is gone from the scanned tree (the

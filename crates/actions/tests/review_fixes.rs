@@ -687,3 +687,29 @@ fn f09_cross_volume_quarantine_is_journalled_and_undone_exactly() {
     assert_eq!(f.undo_run(run).succeeded, 1);
     assert_eq!(snapshot(&f.root()), before);
 }
+
+#[test]
+fn f10_online_only_state_is_rechecked_at_act_time() {
+    let f = Fixture::new("f10");
+    let file = f.write("OneDrive/report.docx", b"placeholder");
+    f.write("OneDrive/folder/a.txt", b"local");
+    let held = f.write("OneDrive/folder/b.txt", b"placeholder");
+    // Scanned while local; dehydrated by the sync client afterwards (same size and mtime).
+    let items = vec![
+        f.item(&file, Action::Trash),
+        f.item(&file, Action::Move { dest: f.t.join("moved"), keep_structure: false }),
+        f.item(&f.root().join("OneDrive/folder"), Action::Quarantine { purge_after_days: 30 }),
+    ];
+    f.platform.online.lock().unwrap().insert(file.clone());
+    f.platform.online.lock().unwrap().insert(held.clone());
+    let before = snapshot(&f.root());
+    for item in items {
+        let (_, out) = f.apply(std::slice::from_ref(&item), &confirmed());
+        assert_eq!((out.succeeded, out.skipped), (0, 1), "{:?}: {out:?}", item.action);
+        assert!(out.errors[0].error.as_ref().unwrap().message.contains("online-only"));
+    }
+    assert_eq!(snapshot(&f.root()), before);
+    // Freeing space stays possible.
+    let (_, out) = f.apply(&[f.item(&f.root().join("OneDrive/folder/a.txt"), Action::Dehydrate)], &opts());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+}
