@@ -2,9 +2,11 @@
 
 use std::path::Path;
 
-use mj_core::{EntryKind, Error, FileIndex, Result};
+use mj_core::{lock, EntryKind, Error, FileIndex, Result};
 
-use crate::api::{Breakdown, BreakdownRequest, DiskNode, DiskOther, DiskUsageRequest, Drive};
+use crate::api::{
+    Breakdown, BreakdownBy, BreakdownRequest, BreakdownRow, DiskNode, DiskOther, DiskUsageRequest, Drive,
+};
 use crate::Engine;
 
 fn node(index: &FileIndex, i: usize, depth: u8, min_fraction: f32) -> DiskNode {
@@ -55,11 +57,57 @@ fn node_shallow(index: &FileIndex, i: usize) -> DiskNode {
     }
 }
 
+/// IPC age bucket keys (docs/IPC.md `breakdown`).
+fn ipc_age_key(k: &str) -> &str {
+    match k {
+        "lt_1m" => "<1m",
+        "1m_6m" => "1-6m",
+        "6m_1y" => "6-12m",
+        "1y_2y" => "1-2y",
+        "2y_5y" => "2-5y",
+        "gt_5y" => ">5y",
+        other => other,
+    }
+}
+
 impl Engine {
-    /// Volumes with the plan's effect.
+    /// Volumes with the plan's effect: each plan step's saving attributed to the volume
+    /// holding each selected item (longest mount point wins), scaled to the step estimate.
     pub fn drives_list(&self) -> Result<Vec<Drive>> {
         let vols = self.platform().volumes()?;
-        Ok(vols.into_iter().map(|v| Drive { free_after_plan: v.free, plan_saving: 0, volume: v }).collect())
+        let plan = lock(&self.plan).plan.clone();
+        let mut saving = vec![0u64; vols.len()];
+        let skip = crate::results::skip_badges(&lock(&self.settings));
+        {
+            let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+            for step in &plan.steps {
+                let Some(rec) = results.get(&step.opportunity) else { continue };
+                let rows: Vec<(&std::path::Path, u64)> = rec
+                    .candidates
+                    .iter()
+                    .filter(|c| crate::results::is_selected(rec, c, skip))
+                    .map(|c| (c.path.as_path(), c.saving()))
+                    .collect();
+                let sum: u64 = rows.iter().map(|r| r.1).sum();
+                let target = step.estimate.saving();
+                for (path, s) in rows {
+                    let share = if sum == 0 { 0 } else { (s as u128 * target as u128 / sum as u128) as u64 };
+                    if let Some((i, _)) = vols
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, v)| mj_core::pathutil::is_within(&v.mount, path))
+                        .max_by_key(|(_, v)| v.mount.components().count())
+                    {
+                        saving[i] += share;
+                    }
+                }
+            }
+        }
+        Ok(vols
+            .into_iter()
+            .zip(saving)
+            .map(|(v, s)| Drive { free_after_plan: v.free.saturating_add(s), plan_saving: s, volume: v })
+            .collect())
     }
 
     /// Folder tree by size.
@@ -100,7 +148,34 @@ impl Engine {
 
     /// Size by type, extension, age or owner.
     pub fn breakdown(&self, req: BreakdownRequest) -> Result<Breakdown> {
-        let _ = req;
-        Err(Error::not_implemented("breakdown (W3-D)"))
+        let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+        let index = results.index.as_ref().ok_or_else(|| Error::InvalidInput("scan first".into()))?;
+        let tree = mj_scan::FolderTree::build(index);
+        let at = match &req.path {
+            Some(p) => Some(index.position(p).ok_or_else(|| Error::NotFound(p.clone()))?),
+            None => None,
+        };
+        let rows = match req.by {
+            BreakdownBy::Type => {
+                let groups = mj_filters::groups::effective(&lock(&self.settings).type_groups);
+                tree.by_group(at, &groups)
+            }
+            BreakdownBy::Extension => tree.by_extension(at),
+            BreakdownBy::Age => {
+                let mut rows = tree.by_age(at, mj_core::Timestamp::now());
+                for r in &mut rows {
+                    r.key = ipc_age_key(&r.key).to_string();
+                }
+                rows
+            }
+            BreakdownBy::Owner => tree.by_owner(at),
+        };
+        Ok(Breakdown {
+            by: req.by,
+            rows: rows
+                .into_iter()
+                .map(|r| BreakdownRow { key: r.key, label: r.label, bytes: r.bytes, files: r.files })
+                .collect(),
+        })
     }
 }
