@@ -19,7 +19,7 @@ State: todo / in progress / done / blocked.
 | 3 | W3-A | Optimisation framework, ZIP, OOXML | Opus | in progress |
 | 3 | W3-B | PDF, archiving, file-system compression | Opus | done |
 | 3 | W3-C | Images, external-tool media adapters | Sonnet | done |
-| 3 | W3-D | Real IPC wiring, derived screens | Sonnet | in progress |
+| 3 | W3-D | Real IPC wiring, derived screens | Sonnet | in progress (D2 done, D1 running) |
 | 3 | W3-E | Settings, schedules, CLI, context menu, portable | Sonnet | done |
 | 4 | W4-1 | Integration pass | Opus | todo |
 | 4 | W4-2 | Adversarial review of destructive paths | Opus | todo |
