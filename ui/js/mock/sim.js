@@ -64,6 +64,7 @@ export function createSim(m, emit, later) {
   // ------------------------------------------------------------------ jobs
   const emitState = (job) => emit('job://state', m.jobJson(job));
   const isDone = (job) => ['completed', 'completed_with_errors', 'cancelled', 'failed'].includes(job.state);
+  const okState = (j) => j.state === 'completed' || j.state === 'completed_with_errors';
 
   /** Queue runner: one job at a time, in order. */
   let running = false;
@@ -93,9 +94,9 @@ export function createSim(m, emit, later) {
 
   /** @param {any} job @param {string} state */
   function endJob(job, state) {
-    job.state = state;
     job.finished = m.nowNs();
-    job.outcome = { succeeded: job.progress.done, skipped: 0, failed: 0, bytes_saved: job.progress.saved, errors: [] };
+    job.outcome = job.makeOutcome && state === 'completed' ? job.makeOutcome(job) : { succeeded: job.progress.done, skipped: 0, failed: 0, bytes_saved: job.progress.saved, errors: [] };
+    job.state = state === 'completed' && (job.outcome.failed > 0 || job.outcome.skipped > 0) ? 'completed_with_errors' : state;
     emitState(job);
     emit('job://done', { job: m.jobJson(job), report_available: job.kind === 'apply' });
     running = false;
@@ -112,8 +113,8 @@ export function createSim(m, emit, later) {
 
   /** Strip the internals before a job goes over the wire. @param {any} j */
   m.jobJson = (j) => {
-    const { runner, totals, currentPath, onEnd, resume, appliedStep, ...wire } = j;
-    void [runner, totals, currentPath, onEnd, resume, appliedStep];
+    const { runner, totals, currentPath, onEnd, resume, appliedStep, makeOutcome, ...wire } = j;
+    void [runner, totals, currentPath, onEnd, resume, appliedStep, makeOutcome];
     return structuredClone(wire);
   };
 
@@ -125,6 +126,7 @@ export function createSim(m, emit, later) {
       kind: 'apply', run_id: runId, step_id: st.id, title: st.title,
       totals: { total: st.estimate.files, bytes: st.estimate.bytes_before, saved: st.estimate.bytes_before - st.estimate.bytes_after },
       currentPath: (i) => m.rows.get(st.opportunity)?.[i]?.path ?? '',
+      makeOutcome: (job) => faultOutcome(job, st),
       onEnd: () => {
         if (m.jobs.filter((x) => x.run_id === runId && x.kind === 'apply').every(isDone)) finishRun(runId, steps);
       },
@@ -135,10 +137,24 @@ export function createSim(m, emit, later) {
     return { run_id: runId, jobs: queued };
   };
 
+  /** Outcome of an apply job; the `rich` scenario injects skipped and failed items. */
+  function faultOutcome(job, st) {
+    const f = m.faults?.[st.opportunity];
+    const base = { succeeded: job.progress.done, skipped: 0, failed: 0, bytes_saved: job.progress.saved, errors: [] };
+    if (!f) return base;
+    const rows = m.rows.get(st.opportunity) ?? [];
+    const mkErr = (r, status, code, msg, hint) => ({ path: r.path, status, bytes_before: r.size, bytes_after: r.size, error: { code, message: `${msg}: ${r.path}`, hint, path: r.path } });
+    const errors = [
+      ...rows.slice(0, f.failed).map((r) => mkErr(r, 'failed', 'permission_denied', 'Permission denied', 'MyJanitor has no access to this path. Skip it, or run with access to it.')),
+      ...rows.slice(f.failed, f.failed + f.skipped).map((r) => mkErr(r, 'skipped', 'changed', 'Changed since the scan', 'The file changed after the scan, so it was skipped. Scan again.')),
+    ];
+    return { succeeded: Math.max(0, job.progress.done - f.failed - f.skipped), skipped: f.skipped, failed: f.failed, bytes_saved: job.progress.saved, errors };
+  }
+
   /** All jobs of a run ended: log history, remove applied steps. */
   function finishRun(runId, steps) {
     const jobs = m.jobs.filter((j) => j.run_id === runId && j.kind === 'apply');
-    const doneJobs = jobs.filter((j) => j.state === 'completed');
+    const doneJobs = jobs.filter(okState);
     const doneIds = new Set(doneJobs.map((j) => j.step_id));
     const saved = doneJobs.reduce((a, j) => a + (j.outcome?.bytes_saved ?? 0), 0);
     const files = doneJobs.reduce((a, j) => a + (j.outcome?.succeeded ?? 0), 0);
@@ -150,7 +166,7 @@ export function createSim(m, emit, later) {
       }
     }
     const now = m.nowNs();
-    m.runs.unshift({ run_id: runId, kind: 'apply', title: `Plan · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`, started: jobs[0]?.started ?? now, finished: now, steps: steps.map((s) => s.title), items: files, done: files, failed: 0, undone: 0, bytes_saved: saved, undoable: doneJobs.length > 0, undo_until: now + m.settings.general.undo_days * 86_400_000_000_000 });
+    m.runs.unshift({ run_id: runId, kind: 'apply', title: `Plan · ${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`, started: jobs[0]?.started ?? now, finished: now, steps: steps.map((s) => s.title), items: files + jobs.reduce((a, j) => a + (j.outcome?.failed ?? 0) + (j.outcome?.skipped ?? 0), 0), done: files, failed: jobs.reduce((a, j) => a + (j.outcome?.failed ?? 0), 0), undone: 0, bytes_saved: saved, undoable: doneJobs.length > 0, undo_until: now + m.settings.general.undo_days * 86_400_000_000_000 });
     m.journals.set(runId, entries);
     m.freed += saved;
     m.plan.steps = m.plan.steps.filter((s) => !doneIds.has(s.id));
@@ -176,13 +192,51 @@ export function createSim(m, emit, later) {
 
   /** @param {any} run */
   m.startUndo = (run) => {
-    const job = newJob({ kind: 'undo', run_id: run.run_id, title: `Undo ${run.title}`, totals: { total: run.items, bytes: 0, saved: 0 }, currentPath: () => '', onEnd: (j) => {
-      if (j.state !== 'completed') return;
-      run.undone = run.done;
-      run.undoable = false;
+    const entries = (m.journals.get(run.run_id) ?? []).filter((e) => e.reversible && ['done', 'undo_failed'].includes(e.state));
+    const job = newJob({ kind: 'undo', run_id: run.run_id, title: `Undo ${run.title}`, totals: { total: run.items, bytes: 0, saved: 0 }, currentPath: (i) => entries[i]?.original ?? '', makeOutcome: (j) => settleRestore(j, entries), onEnd: (j) => {
+      if (!okState(j)) return;
+      run.undone = run.done - (m.journals.get(run.run_id) ?? []).filter((e) => e.state === 'undo_failed').length;
+      run.undoable = (m.journals.get(run.run_id) ?? []).some((e) => e.state === 'undo_failed');
       emit('history://changed', { run_id: run.run_id });
       emit('opportunities://changed', { generation: m.scan.generation });
     } });
+    emitState(job);
+    pump();
+    return m.jobJson(job);
+  };
+
+  /** Restore entries: an entry whose place is occupied is refused with the reason. @param {any} job @param {any[]} entries */
+  function settleRestore(job, entries) {
+    const errors = [];
+    let ok = 0;
+    for (const e of entries) {
+      if (m.occupied?.has(e.id)) {
+        e.state = 'undo_failed';
+        e.error = { code: 'conflict', message: `The original location is occupied: ${e.original}`, hint: 'Move or rename the file that is there, then restore again.' };
+        errors.push({ path: e.original, status: 'failed', bytes_before: e.bytes_before, bytes_after: e.bytes_after, error: { ...e.error, path: e.original } });
+      } else { e.state = 'undone'; delete e.error; ok += 1; }
+    }
+    return { succeeded: ok, skipped: 0, failed: errors.length, bytes_saved: 0, errors };
+  }
+
+  /** @param {number[]} ids */
+  m.startRestore = (ids) => {
+    const all = [...m.journals.values()].flat();
+    const entries = ids.map((id) => all.find((e) => e.id === id)).filter(Boolean);
+    if (!entries.length) throw { code: 'invalid_input', message: 'None of these items can be restored', hint: 'Reload History and try again.' };
+    const runId = entries[0].run_id;
+    const job = newJob({ kind: 'undo', run_id: runId, title: `Restore ${entries.length} ${entries.length === 1 ? 'item' : 'items'}`, totals: { total: entries.length, bytes: 0, saved: 0 }, currentPath: (i) => entries[i]?.original ?? '', makeOutcome: (j) => settleRestore(j, entries), onEnd: (j) => {
+      const run = m.runs.find((r) => r.run_id === runId);
+      if (run && okState(j)) { const list = m.journals.get(runId) ?? []; run.undone = Math.min(run.done, (run.undone ?? 0) + j.outcome.succeeded); run.undoable = list.some((e) => e.reversible && ['done', 'undo_failed'].includes(e.state)); }
+      emit('history://changed', { run_id: runId });
+    } });
+    emitState(job);
+    pump();
+    return m.jobJson(job);
+  };
+
+  m.startPurge = () => {
+    const job = newJob({ kind: 'purge_quarantine', title: 'Purge quarantine', totals: { total: 38, bytes: 7408715776, saved: 0 }, currentPath: () => '', onEnd: () => { emit('history://changed', {}); } });
     emitState(job);
     pump();
     return m.jobJson(job);
