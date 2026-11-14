@@ -37,13 +37,15 @@ pub fn seven_zip_add_args(dst: &Path, level: u8, list: Option<&Path>, names: &[&
             .iter()
             .map(OsString::from)
             .collect();
-    a.push("--".into());
-    a.push(path_arg(dst));
+    // The list file goes in as an include switch, before `--`: after the terminator newer
+    // 7-Zip releases read `@file` as a literal file name and fail with "No such file".
     if let Some(l) = list {
-        let mut s = OsString::from("@");
+        let mut s = OsString::from("-i@");
         s.push(l.as_os_str());
         a.push(s);
     }
+    a.push("--".into());
+    a.push(path_arg(dst));
     a.extend(names.iter().map(|n| path_arg(Path::new(n))));
     a
 }
@@ -197,7 +199,9 @@ pub fn verify_7z(
         if let Kind::File { size } = it.kind {
             expected += 1;
             let (s, c) = files.get(it.rel.as_str()).ok_or_else(|| bad(format!("{} missing", it.rel)))?;
-            if *s != size || *c != Some(crc_file(&it.abs, cancel)?) {
+            // 7z lists no CRC for an empty file; the CRC-32 of no bytes is 0.
+            let listed = if *s == 0 { c.or(Some(0)) } else { *c };
+            if *s != size || listed != Some(crc_file(&it.abs, cancel)?) {
                 return Err(bad(format!("{}: content differs from the source", it.rel)));
             }
         }
@@ -249,7 +253,10 @@ mod tests {
     #[test]
     fn builders() {
         let a = s(&seven_zip_add_args(Path::new("/o/x.7z"), 9, Some(Path::new("/t/l.txt")), &[]));
-        assert_eq!(a, ["a", "-t7z", "-mx=9", "-ms=on", "-snl", "-bd", "-y", "-scsUTF-8", "--", "/o/x.7z", "@/t/l.txt"]);
+        assert_eq!(
+            a,
+            ["a", "-t7z", "-mx=9", "-ms=on", "-snl", "-bd", "-y", "-scsUTF-8", "-i@/t/l.txt", "--", "/o/x.7z"]
+        );
         let a = s(&seven_zip_add_args(Path::new("x.7z"), 3, None, &["-INDEX.csv"]));
         assert_eq!(a.last().unwrap(), "./-INDEX.csv");
         assert_eq!(s(&seven_zip_test_args(Path::new("/o/x.7z")))[0], "t");

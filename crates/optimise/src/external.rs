@@ -266,7 +266,6 @@ pub fn run(program: &Path, args: &[OsString], opts: &RunOptions<'_>) -> Result<R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
     #[test]
     fn path_arg_guards_leading_dash() {
@@ -362,7 +361,7 @@ mod tests {
         fn working_directory_and_line_hook() {
             let dir = mj_core::testutil::TempDir::new("run-cwd").unwrap();
             let (p, a) = sh("pwd; printf 'a\\rb\\nc'", &[]);
-            let seen = Mutex::new(Vec::new());
+            let seen = std::sync::Mutex::new(Vec::new());
             let hook = |s: Stream, l: &str| seen.lock().unwrap().push((s, l.to_string()));
             let o =
                 run(&p, &a, &RunOptions { cwd: Some(dir.path()), on_line: Some(&hook), ..Default::default() }).unwrap();

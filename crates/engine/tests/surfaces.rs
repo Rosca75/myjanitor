@@ -336,6 +336,7 @@ fn search_params_preview_and_disk() {
     let l = e
         .fs_list_dir(FsListDirRequest { path: Some(f.tree.join("photos")), show_hidden: false, include_files: true })
         .unwrap();
+    assert!(l.entries.iter().any(|x| !x.is_dir), "files are listed when asked for");
     #[cfg(unix)]
     assert!(l.entries.iter().any(|x| x.is_link && !x.is_dir));
     assert_eq!(
