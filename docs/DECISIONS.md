@@ -145,13 +145,12 @@ One entry per non-trivial decision: *context → options → choice → why*.
 - **Choice:** W3-D1 (Opus) applies the contract revision and builds the engine facade and Tauri commands; W3-D2 (Sonnet) builds the derived screens against `docs/IPC.md`.
 - **Why:** the brief's rule of thumb assigns code that could lose user data to Opus; UI screens stay with Sonnet.
 
-<<<<<<< HEAD
 ## D-011 CI toolchain pinned to the development toolchain
 - **Context:** the first CI runs failed in clippy: CI pinned Rust 1.92.0, whose clippy reports `nonminimal_bool` on an expression that 1.97.0 (used for every local gate) accepts.
 - **Options:** (a) rewrite code to satisfy every clippy version between the MSRV and current; (b) pin CI to the toolchain the gates are run with.
 - **Choice:** (b), `RUST_VERSION: 1.97.0` in `.github/workflows/ci.yml`.
 - **Why:** lints differ between releases, so one pinned version is the only stable definition of "clippy clean". `rust-version = 1.88` remains the declared minimum for building, not for linting.
-=======
+
 ## Index of workstream decisions
 
 Each workstream wrote its own file under `docs/decisions/` (D-008). This index was written at the end of the build from those files and from the code. Where a decision file and the code disagreed, the code was checked; the differences are listed at the end of this section.
@@ -196,4 +195,3 @@ Checked against the code at the commit that carries this index. The code is righ
 - **`miniz_oxide` "same version as Tauri's PNG stack" (DEPENDENCIES.md, earlier text).** `Cargo.lock` holds 0.8.9 and 0.9.1.
 - **Settings that are stored but read by nothing:** `performance.low_memory`, `performance.cpu_priority`, `performance.parallel_jobs`, `optimise.preserve_ads`, `optimise.lossless_only`. W3-D1 and W4-INT already note that jobs run one at a time.
 - **Adversarial review 1** (20 findings) was delivered after the workstreams wrote their files. Its findings are not yet resolved in any decision entry: the fix pass owns that, and the definition of done requires each finding to be fixed or accepted with a reason in this file.
->>>>>>> ws/w4docs
