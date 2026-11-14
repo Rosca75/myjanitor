@@ -9,7 +9,7 @@ export const GB = 1024 ** 3;
 export const MB = 1024 ** 2;
 
 const ACTION_TRASH = { kind: 'trash' };
-const ARCHIVE_ACTION = { kind: 'archive', format: '7z', level: 5, originals: { policy: 'recycle_bin' }, keep_sources: false };
+const ARCHIVE_ACTION = { kind: 'archive', format: 'seven_zip', level: 5, originals: { policy: 'recycle_bin' }, keep_sources: false };
 
 /** The nine cards of the first page, in wireframe order, then nine smaller ones. */
 const SPECS = [

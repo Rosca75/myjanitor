@@ -103,6 +103,7 @@ const ICONS = {
   down: 'M6 10l6 6 6-6',
   pause: 'M8 5v14M16 5v14',
   stop: 'M6 6h12v12H6z',
+  lock: 'M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z',
   undo: 'M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-3',
 };
 
@@ -126,10 +127,15 @@ export function icon(name, size = 16) {
 export function replaceKeepingFocus(container, node) {
   const active = document.activeElement;
   const key = active && container.contains?.(active) ? active.getAttribute?.('data-fk') : null;
+  const from = key ? active.selectionStart : undefined; // keep the caret of a text box being typed in
+  const to = key ? active.selectionEnd : undefined;
   container.replaceChildren(node);
   if (key) {
     const again = container.querySelector(`[data-fk="${key}"]`);
     if (again && typeof again.focus === 'function') again.focus();
+    if (again && typeof again.setSelectionRange === 'function' && typeof from === 'number' && typeof to === 'number') {
+      try { again.setSelectionRange(from, to); } catch { /* not a text input */ }
+    }
   }
 }
 

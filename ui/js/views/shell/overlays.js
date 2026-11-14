@@ -10,15 +10,19 @@ import { button } from '../../components/controls.js';
 import { renderConfirmDialog } from '../step/confirm-dialog.js';
 import { renderBrowser } from './browser.js';
 import { renderReport } from './report.js';
+import { renderAsk } from './ask.js';
+import { renderCompare } from './compare.js';
 
 /** Which overlay is open, if any. @param {any} s */
-export const overlayKind = (s) => (s.dialog ? 'dialog' : s.browser ? 'browser' : s.report ? 'report' : null);
+export const overlayKind = (s) => (s.dialog ? 'dialog' : s.ask ? 'ask' : s.browser ? 'browser' : s.compare ? 'compare' : s.report ? 'report' : null);
 
 /** @param {any} s @param {any} actions */
 export function renderOverlay(s, actions) {
   const kind = overlayKind(s);
   if (kind === 'dialog') return renderConfirmDialog(s, actions);
   if (kind === 'browser') return renderBrowser(s, actions);
+  if (kind === 'ask') return renderAsk(s, actions);
+  if (kind === 'compare') return renderCompare(s, actions);
   if (kind === 'report') return renderReport(s, actions);
   return h('span', {});
 }

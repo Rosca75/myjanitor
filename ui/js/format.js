@@ -105,3 +105,51 @@ export function pct(part, whole) {
   if (!whole || whole <= 0) return 0;
   return Math.min(100, Math.max(0, (part / whole) * 100));
 }
+
+/**
+ * Shorten a long text in the middle ("C:\Users\Mic…\report.pdf"), keeping a
+ * little more of the end because that is where the file name is. Callers put
+ * the full text in a `title` attribute. Texts up to `max` characters are
+ * returned unchanged.
+ * @param {string} text
+ * @param {number} [max]
+ */
+export function middleEllipsis(text, max = 48) {
+  const t = String(text ?? '');
+  const limit = Math.max(5, Math.floor(max));
+  if (t.length <= limit) return t;
+  const keep = limit - 1;
+  const tail = Math.ceil(keep * 0.55);
+  return `${t.slice(0, keep - tail)}…${t.slice(t.length - tail)}`;
+}
+
+/** `13 Nov 2026, 14:05` (UTC). @param {number} tsNs */
+export function formatDateTime(tsNs) {
+  const d = new Date(tsNs / 1e6);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${formatDate(tsNs)}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+}
+
+/** Whole percent, or one decimal below 10 (`0.4 %`, `37 %`). @param {number} fraction 0..1 */
+export function formatPercent(fraction) {
+  const p = Math.max(0, Math.min(1, Number(fraction) || 0)) * 100;
+  return `${p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)} %`;
+}
+
+/**
+ * Join a folder and a new file name for display or for an export target. The
+ * separator follows the platform; only used for names the user typed, never
+ * for paths the engine handed out.
+ * @param {string} dir @param {string} name @param {string} [platform]
+ */
+export function joinPath(dir, name, platform = 'windows') {
+  const sep = platform === 'windows' || /^[A-Za-z]:/.test(dir) ? '\\' : '/';
+  const base = String(dir).replace(/[\\/]+$/, '');
+  return base === '' ? `${sep}${name}` : /^[A-Za-z]:$/.test(base) ? `${base}${sep}${name}` : `${base}${sep}${name}`;
+}
+
+/** Compression saved by the file system: 0..1, or null when nothing is compressed. @param {number} size @param {number} allocated */
+export function compressionRate(size, allocated) {
+  if (!size || !allocated || allocated >= size) return null;
+  return 1 - allocated / size;
+}

@@ -9,6 +9,7 @@ import { createStore, initialState } from './state.js';
 import { createController } from './controller.js';
 import { bridgeEvents } from './events.js';
 import { mountApp } from './app.js';
+import { copy } from './copy.js';
 
 async function start() {
   const root = document.getElementById('app');
@@ -18,8 +19,10 @@ async function start() {
   await backendKind();
   const store = createStore(initialState());
   const actions = createController({ api, store });
-  mountApp(root, store, actions);
-  await bridgeEvents({ api, store, actions });
+  const app = mountApp(root, store, actions);
+  const unlisten = await bridgeEvents({ api, store, actions });
+  // Tear everything down when the page goes away: no listener outlives its view.
+  globalThis.addEventListener?.('pagehide', () => { unlisten(); app.dispose(); });
   // Dev aid for the mock backend only: lets browser tests read the state.
   if ((await backendKind()) === 'mock') /** @type {any} */ (globalThis).__mj = { store, actions };
   await actions.init();
@@ -27,5 +30,5 @@ async function start() {
 
 start().catch((e) => {
   const root = document.getElementById('app');
-  if (root) root.textContent = `MyJanitor could not start: ${e?.message ?? e}`;
+  if (root) root.textContent = copy.boot.failed(e?.message ?? e);
 });

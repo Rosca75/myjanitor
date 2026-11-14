@@ -56,11 +56,11 @@ test('step review: only a window of rows is built and paging moves the window', 
   await env.actions.openStep('det:exact_duplicates');
   await env.settle();
   assert.equal(env.$$('.row').length, 50, 'never more than one page of rows');
-  assert.equal(env.$('.pager__range').textContent, '1 to 50 of 214');
+  assert.equal(env.$('.pager__range').textContent, '1 to 50 of 214  ·  Page 1 of 5');
   assert.ok(env.$('[data-fk="page-prev"]').disabled);
   env.clearCalls();
   await env.click(env.$('[data-fk="page-next"]'));
-  assert.equal(env.$('.pager__range').textContent, '51 to 100 of 214');
+  assert.equal(env.$('.pager__range').textContent, '51 to 100 of 214  ·  Page 2 of 5');
   assert.equal(env.sent('candidates_page')[0].req.offset, 50);
   assert.equal(env.sent('candidates_page')[0].req.limit, 50);
 });
@@ -127,7 +127,7 @@ test('what happens to them: action tiles with Recycle Bin by default, keep rule,
   assert.equal(tiles[0].getAttribute('aria-checked'), 'true');
   const keep = panel.querySelector('select');
   assert.equal(keep.getAttribute('aria-label'), 'Keep the');
-  assert.deepEqual(keep.querySelectorAll('option').map((o) => o.textContent), ['Newest copy', 'Oldest copy', 'Shortest path', 'Highest resolution']);
+  assert.deepEqual(keep.querySelectorAll('option').map((o) => o.textContent), ['Newest copy', 'Oldest copy', 'Shortest path', 'Highest resolution', 'Preferred folder…']);
   assert.equal(panel.querySelector('.disclosure').getAttribute('aria-expanded'), 'false');
   assert.equal(panel.querySelectorAll('.tile--selected').length, 1);
 });

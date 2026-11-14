@@ -28,7 +28,7 @@ export async function bridgeEvents({ api, store, actions }) {
       set({ dryRunning: false });
       actions.notify?.(copy.plan.dryRunDone(r.total.files, formatBytes(r.total.bytes_before - r.total.bytes_after)), 'success');
     },
-    'job://progress': (p) => set({ jobProgress: { ...get().jobProgress, [p.job_id]: p.progress } }),
+    'job://progress': (p) => set({ jobProgress: { ...get().jobProgress, [p.job_id]: p.progress }, jobCurrent: { ...get().jobCurrent, [p.job_id]: p.current ?? '' } }),
     'job://state': (job) => set({ jobs: upsertJob(get().jobs, job), jobProgress: { ...get().jobProgress, [job.id]: job.progress } }),
     'job://done': ({ job }) => {
       const jobs = upsertJob(get().jobs, job);
@@ -40,12 +40,19 @@ export async function bridgeEvents({ api, store, actions }) {
           patch.reclaimed = get().reclaimed + done.saved;
         }
       }
+      if (job.kind === 'undo') patch.historyUi = { ...get().historyUi, result: { job } };
       set(patch);
     },
-    'history://changed': () => actions.refreshHistory(),
+    'history://changed': () => { actions.refreshHistory(); actions.refreshOpenRuns?.(); },
   };
 
   const offs = [];
-  for (const [name, fn] of Object.entries(handlers)) offs.push(await api.on(name, fn)); // sequential: see main.js
-  return () => offs.forEach((off) => off());
+  for (const [name, fn] of Object.entries(handlers)) {
+    try {
+      offs.push(await api.on(name, fn)); // sequential: see main.js
+    } catch (e) {
+      actions.notify?.(e?.message ?? String(e), 'error');
+    }
+  }
+  return () => { offs.splice(0).forEach((off) => { try { off(); } catch { /* already gone */ } }); };
 }

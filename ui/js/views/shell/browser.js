@@ -20,9 +20,11 @@ export function renderBrowser(s, actions) {
         b.entries.length
           ? h('ul', { class: 'browser__list' }, b.entries.filter((e) => e.is_dir).map((e) => h('li', {}, h('button', { type: 'button', class: 'browser__entry', 'data-fk': `dir-${e.name}`, on: { click: () => actions.browseTo(e.path) } }, icon('folder', 14), h('span', {}, displayPath(e.name))))))
           : h('p', { class: 'browser__empty' }, b.loading ? copy.browser.loading : copy.browser.empty))),
+    b.mode === 'export' && h('label', { class: 'browser__name' }, h('span', {}, copy.browser2.fileName),
+      h('input', { type: 'text', class: 'input', value: b.filename, 'aria-label': copy.browser2.fileName, 'data-fk': 'export-name', on: { change: (e) => actions.setExportName(e.target.value), input: (e) => actions.setExportName(e.target.value) } })),
     h('div', { class: 'modal__foot' }, h('span', { class: 'modal__spacer' }),
       button({ label: copy.browser.cancel, variant: 'secondary', fk: 'browser-cancel', onClick: () => actions.closeBrowser() }),
-      button({ label: copy.browser.choose, variant: 'primary', disabled: !b.path, fk: 'browser-choose', onClick: () => actions.chooseFolder() })),
+      button({ label: b.mode === 'export' ? copy.browser2.save : copy.browser.choose, variant: 'primary', disabled: !b.path || (b.mode === 'export' && !String(b.filename).trim()), fk: 'browser-choose', onClick: () => actions.chooseFolder() })),
   ];
   return modal({ labelId: 'browser-title', title: copy.browser.title, children, extra: 'modal--browser', onClose: () => actions.closeBrowser() });
 }

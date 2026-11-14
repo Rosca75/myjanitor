@@ -381,7 +381,7 @@ test('job controls send job_pause, job_resume and job_cancel', async () => {
   await env.settle();
 });
 
-test('History Restore sends undo_run for that run', async () => {
+test('History Restore asks, then sends undo_run for that run', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
   await env.click(env.byText('button', 'Apply plan  ·  25.1 GB'));
@@ -390,6 +390,9 @@ test('History Restore sends undo_run for that run', async () => {
   await env.settle();
   const runId = env.state().history.runs[0].run_id;
   await env.click(env.$(`[data-fk="restore-${runId}"]`));
+  assert.equal(env.sent('undo_run').length, 0, 'asks first');
+  assert.ok(env.$('[role="dialog"] [data-fk="ask-confirm"]'));
+  await env.click(env.$('[data-fk="ask-confirm"]'));
   assert.deepEqual(last(env, 'undo_run'), { run_id: runId });
 });
 
