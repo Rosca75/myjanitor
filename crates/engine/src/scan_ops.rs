@@ -1,37 +1,51 @@
-//! Scan orchestration (SCAN-10/11). Owner: W3-D.
+//! Scan orchestration (SCAN-04/09/10/11). Owner: W3-D.
 //!
-//! Wave 1 wiring (real, minimal): walk with `mj_scan`, run every detector and
-//! available optimiser analysis on the index (each isolated with
-//! `catch_unwind`; `not_implemented`/`unsupported` outputs are skipped), build
-//! opportunity records, publish them if the generation is still current, emit
-//! `scan://progress` (throttled), `scan://detector`, `scan://done`.
+//! One scan = one generation, on one large-stack thread:
+//!
+//! 1. walk with `mj_scan::scan_with_cache` (cache hits/misses in `ScanStats`);
+//! 2. run every detector and every *available* optimiser analysis on worker threads
+//!    (`parallel_map`, each item isolated with `catch_unwind`), emitting a
+//!    `scan://detector` event as each finishes (live per-card totals, SCAN-10);
+//! 3. badge candidates: path badges (protected, synced, online-only, encrypted
+//!    attribute) and content badges (signed, labelled, encrypted) for document files;
+//! 4. if the generation is still current: prune and atomically save the cache,
+//!    publish the results, refresh the plan, emit `scan://done` and
+//!    `opportunities://changed`. A stale or stopped scan publishes nothing.
+//!
+//! Progress goes through `ThrottledSink` (50 ms; final values and phase changes pass).
+//! Detectors' own progress is not forwarded (several run at once and their phases
+//! would interleave); the engine reports `detecting` as analyses done / total.
 
+use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use mj_core::detector::env;
 use mj_core::{
-    lock, Badges, CancelToken, DetectContext, Error, Progress, ProgressSink, Result, ScanScope, ThrottledSink,
-    Timestamp,
+    lock, Availability, Badges, CancelToken, DetectContext, Detector, DetectorOutput, Error, FileIndex, NullProgress,
+    Optimiser, ParamValue, ParamValues, Phase, Progress, ProgressSink, Result, ScanScope, ThrottledSink, Timestamp,
 };
+use mj_platform::SyncRoot;
 use mj_scan::ScanRequest;
 
 use crate::api::{
     DetectorTotalsEvent, Event, OpportunitiesChanged, ScanProgressEvent, ScanRunState, ScanStartRequest, ScanStarted,
     ScanStatus, ScopeSetRequest,
 };
-use crate::opportunities::{build_record, CardInfo};
+use crate::opportunities::{build_record, disabled_record, CardInfo};
 use crate::results::OpportunityRecord;
 use crate::Engine;
-
-/// One analysis (detector run or optimiser analysis).
-type AnalysisFn<'a> = dyn Fn(&DetectContext<'_>) -> Result<mj_core::DetectorOutput> + 'a;
 
 /// Scan state of the session.
 #[derive(Debug)]
 pub struct ScanState {
     pub status: ScanStatus,
     pub cancel: Option<CancelToken>,
+    /// The scan thread is alive (also while `stopping`).
+    pub thread_alive: bool,
 }
 
 impl Default for ScanState {
@@ -48,6 +62,7 @@ impl Default for ScanState {
                 error: None,
             },
             cancel: None,
+            thread_alive: false,
         }
     }
 }
@@ -56,13 +71,94 @@ fn running(s: ScanRunState) -> bool {
     matches!(s, ScanRunState::Scanning | ScanRunState::Paused | ScanRunState::Stopping)
 }
 
-fn skippable(e: &Error) -> bool {
-    matches!(e, Error::NotImplemented(_) | Error::Unsupported { .. })
+/// One analysis to run.
+#[derive(Clone, Copy)]
+enum Analysis<'a> {
+    Det(&'a dyn Detector),
+    Opt(&'a dyn Optimiser),
+}
+
+/// Extensions whose content is inspected for signatures, labels and encryption.
+const CONTENT_EXTS: &[&str] = &[
+    "pdf", "docx", "docm", "dotx", "xlsx", "xlsm", "xltx", "pptx", "pptm", "potx", "doc", "xls", "ppt", "odt", "ods",
+    "odp", "msg", "vsdx",
+];
+
+/// What the engine knows about the machine for detectors (`mj_core::detector::env`).
+pub(crate) struct ScanEnv {
+    pub sync_roots: Option<Vec<SyncRoot>>,
+    pub downloads: Vec<PathBuf>,
+    pub fonts: Vec<PathBuf>,
+    pub protected: Vec<String>,
+}
+
+impl ScanEnv {
+    pub(crate) fn detect(engine: &Engine) -> ScanEnv {
+        let settings = lock(&engine.settings).clone();
+        let home = crate::paths::home_dir();
+        let mut downloads = Vec::new();
+        let mut fonts = Vec::new();
+        if let Some(h) = &home {
+            downloads.push(h.join("Downloads"));
+            if cfg!(windows) {
+                if let Some(l) = std::env::var_os("LOCALAPPDATA") {
+                    fonts.push(PathBuf::from(l).join("Microsoft").join("Windows").join("Fonts"));
+                }
+            } else {
+                fonts.push(h.join(".fonts"));
+                fonts.push(h.join(".local/share/fonts"));
+            }
+        }
+        if cfg!(windows) {
+            let windir = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
+            fonts.push(windir.join("Fonts"));
+        } else {
+            fonts.push("/usr/share/fonts".into());
+            fonts.push("/usr/local/share/fonts".into());
+        }
+        let mut protected: Vec<String> = mj_actions::protected::builtin_paths();
+        protected.extend(mj_actions::protected::builtin_patterns());
+        protected.extend(settings.safety.protected_paths.iter().map(|p| mj_core::pathutil::encode_path(p)));
+        protected.extend(engine.cfg.app_dirs().iter().map(|p| mj_core::pathutil::encode_path(p)));
+        ScanEnv { sync_roots: engine.platform().sync_roots().ok(), downloads, fonts, protected }
+    }
+
+    /// Add the env keys, and fill W2-B's own folder parameters when the user left them empty.
+    fn inject(&self, params: &mut ParamValues) {
+        if let Some(roots) = &self.sync_roots {
+            let paths: Vec<PathBuf> = roots.iter().map(|r| r.path.clone()).collect();
+            params.set(env::SYNC_ROOTS, ParamValue::Text(env::encode_paths(&paths)));
+            fill_text(params, "synced_folders", &paths);
+        }
+        params.set(env::DOWNLOADS, ParamValue::Text(env::encode_paths(&self.downloads)));
+        params.set(env::FONT_FOLDERS, ParamValue::Text(env::encode_paths(&self.fonts)));
+        params.set(env::PROTECTED, ParamValue::Text(env::encode(&self.protected)));
+        fill_text(params, "downloads_folders", &self.downloads);
+        fill_text(params, "font_folders", &self.fonts);
+    }
+}
+
+/// Set a text parameter (one path per line) when it exists and is empty.
+fn fill_text(params: &mut ParamValues, key: &str, paths: &[PathBuf]) {
+    if let Some(ParamValue::Text(t)) = params.0.get(key) {
+        if t.trim().is_empty() && !paths.is_empty() {
+            let v: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+            params.set(key, ParamValue::Text(v.join("\n")));
+        }
+    }
+}
+
+/// Parameters as the user sees them (env keys removed).
+pub(crate) fn visible_params(p: &ParamValues) -> ParamValues {
+    ParamValues(p.0.iter().filter(|(k, _)| !k.starts_with("env.")).map(|(k, v)| (k.clone(), v.clone())).collect())
 }
 
 impl Engine {
     /// Start scanning the scope.
     pub fn scan_start(self: &Arc<Self>, req: ScanStartRequest) -> Result<ScanStarted> {
+        if self.shutting_down.load(Ordering::SeqCst) {
+            return Err(Error::Conflict("MyJanitor is shutting down".into()));
+        }
         if let Some(scope) = req.scope {
             self.scope_set(ScopeSetRequest { scope })?;
         }
@@ -73,7 +169,7 @@ impl Engine {
         let cancel = CancelToken::new();
         let generation = {
             let mut st = lock(&self.scan);
-            if running(st.status.state) {
+            if running(st.status.state) || st.thread_alive {
                 return Err(Error::Conflict("a scan is already running".into()));
             }
             let generation = st.status.generation + 1;
@@ -88,22 +184,42 @@ impl Engine {
                 error: None,
             };
             st.cancel = Some(cancel.clone());
+            st.thread_alive = true;
             generation
         };
         let me = Arc::clone(self);
-        mj_core::pool::spawn_large("mj-scan", move || me.run_scan(generation, scope, cancel))
-            .map_err(|e| Error::Internal(format!("cannot start the scan thread: {e}")))?;
+        let spawned = mj_core::pool::spawn_large("mj-scan", move || {
+            me.run_scan(generation, scope, cancel);
+            lock(&me.scan).thread_alive = false;
+        });
+        if let Err(e) = spawned {
+            let mut st = lock(&self.scan);
+            st.thread_alive = false;
+            st.status.state = ScanRunState::Failed;
+            return Err(Error::Internal(format!("cannot start the scan thread: {e}")));
+        }
         Ok(ScanStarted { generation })
+    }
+
+    /// True while a scan thread is alive.
+    pub(crate) fn scan_running(&self) -> bool {
+        lock(&self.scan).thread_alive
+    }
+
+    /// True when `generation` is the newest scan.
+    fn is_current(&self, generation: u64) -> bool {
+        lock(&self.scan).status.generation == generation
     }
 
     fn run_scan(&self, generation: u64, scope: ScanScope, cancel: CancelToken) {
         let started = Instant::now();
         let settings = lock(&self.settings).clone();
         let emit_progress = |p: &Progress| {
+            let walking = p.phase == Phase::Walking;
             let ev = ScanProgressEvent {
                 generation,
                 phase: Some(p.phase),
-                files: 0,
+                files: if walking { p.done } else { 0 },
                 dirs: 0,
                 bytes: p.bytes,
                 done: p.done,
@@ -111,32 +227,50 @@ impl Engine {
                 current: p.current.clone(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
             };
-            lock(&self.scan).status.progress = ev.clone();
+            {
+                let mut st = lock(&self.scan);
+                if st.status.generation != generation {
+                    return;
+                }
+                let mut ev2 = ev.clone();
+                if !walking {
+                    ev2.files = st.status.progress.files;
+                }
+                st.status.progress = ev2;
+            }
             self.emit(Event::ScanProgress(ev));
         };
         let sink = ThrottledSink::new(emit_progress);
-        let outcome =
-            catch_unwind(AssertUnwindSafe(|| -> Result<(Arc<mj_core::FileIndex>, Vec<OpportunityRecord>)> {
-                let req = ScanRequest {
-                    scope: &scope,
-                    exclusions: &settings.safety.exclusions,
-                    platform: self.platform(),
-                    cancel: &cancel,
-                    progress: &sink,
-                };
-                let index = Arc::new(mj_scan::scan(&req)?);
-                let records = self.run_analyses(generation, &index, &cancel, &sink)?;
-                Ok((index, records))
-            }));
+        let outcome = catch_unwind(AssertUnwindSafe(|| -> Result<(Arc<FileIndex>, Vec<OpportunityRecord>)> {
+            let req = ScanRequest {
+                scope: &scope,
+                exclusions: &settings.safety.exclusions,
+                platform: self.platform(),
+                cancel: &cancel,
+                progress: &sink,
+            };
+            let index = Arc::new(mj_scan::scan_with_cache(&req, &self.cache)?);
+            cancel.checkpoint()?;
+            let records = self.run_analyses(generation, &index, &cancel, &sink)?;
+            Ok((index, records))
+        }));
         let (state, error, stats) = match outcome {
             Ok(Ok((index, records))) => {
                 let stats = index.stats.clone();
-                let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
-                if lock(&self.scan).status.generation == generation {
-                    results.generation = generation;
-                    results.index = Some(index);
-                    results.opportunities = records;
-                    results.cached = stats.cache_hits > 0;
+                if self.is_current(generation) {
+                    if scope.options.use_cache && self.cfg.persist {
+                        self.cache.prune(&index);
+                        // Cache write failures are never fatal (ARCHITECTURE §6).
+                        let _ = self.cache.save();
+                    }
+                    {
+                        let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
+                        results.generation = generation;
+                        results.index = Some(index);
+                        results.opportunities = records;
+                        results.cached = stats.cache_hits > 0;
+                    }
+                    self.plan_after_rescan();
                 }
                 (ScanRunState::Done, None, Some(stats))
             }
@@ -155,6 +289,10 @@ impl Engine {
             st.status.finished = Some(Timestamp::now());
             st.status.error = error;
             st.status.cached = stats.as_ref().is_some_and(|s| s.cache_hits > 0);
+            if let Some(s) = &stats {
+                st.status.progress.files = s.files;
+                st.status.progress.dirs = s.dirs;
+            }
             st.status.stats = stats;
             st.cancel = None;
             st.status.clone()
@@ -165,62 +303,174 @@ impl Engine {
         }
     }
 
+    /// Effective parameters for an analysis: spec defaults, then the plan step's
+    /// parameters when the opportunity is in the plan.
+    fn params_for(&self, card: &CardInfo) -> ParamValues {
+        let defaults = mj_core::params::defaults(&card.settings);
+        let plan = lock(&self.plan);
+        match plan.plan.steps.iter().find(|s| s.opportunity == card.id) {
+            Some(step) => defaults.merged(&step.params),
+            None => defaults,
+        }
+    }
+
+    /// Run one analysis (detector or optimiser) with `params` on the index.
+    pub(crate) fn run_one(
+        &self,
+        card: CardInfo,
+        run: &(dyn Fn(&DetectContext<'_>) -> Result<DetectorOutput> + Sync),
+        params: ParamValues,
+        index: &FileIndex,
+        env: &ScanEnv,
+        cancel: &CancelToken,
+    ) -> Result<OpportunityRecord> {
+        let settings = lock(&self.settings).clone();
+        if let Availability::Disabled { reason } = &card.availability {
+            return Ok(disabled_record(self, card.clone(), reason.clone()));
+        }
+        let mut full = params.clone();
+        env.inject(&mut full);
+        let ctx = DetectContext {
+            index,
+            params: &full,
+            now: Timestamp::now(),
+            fingerprints: &self.cache,
+            cancel,
+            progress: &NullProgress,
+            threads: settings.performance.threads as usize,
+        };
+        let output = match catch_unwind(AssertUnwindSafe(|| run(&ctx))) {
+            Ok(Ok(o)) => o,
+            Ok(Err(Error::Cancelled)) => return Err(Error::Cancelled),
+            Ok(Err(e @ (Error::NotImplemented(_) | Error::Unsupported { .. }))) => {
+                return Ok(disabled_record(self, card, e.to_string()))
+            }
+            Ok(Err(e)) => return Ok(disabled_record(self, card, format!("The analysis failed: {e}"))),
+            Err(_) => return Ok(disabled_record(self, card, "The analysis failed (internal error)".into())),
+        };
+        let badges = self.badger(index, &output, cancel);
+        Ok(build_record(self, card, output, visible_params(&params), &|c| {
+            badges.get(&c.path).copied().unwrap_or_default()
+        }))
+    }
+
+    /// Path and content badges for every candidate of an output.
+    pub(crate) fn badger(
+        &self,
+        index: &FileIndex,
+        out: &DetectorOutput,
+        cancel: &CancelToken,
+    ) -> HashMap<PathBuf, Badges> {
+        let settings = lock(&self.settings).clone();
+        let protected =
+            mj_actions::ProtectedPaths::new(&settings.safety.protected_paths).with_app_dirs(&self.cfg.app_dirs());
+        let inspector = mj_actions::SafetyInspector::new(self.platform(), protected);
+        let mut map: HashMap<PathBuf, Badges> = HashMap::new();
+        let mut to_read = Vec::new();
+        for c in &out.candidates {
+            let mut b = match index.get(&c.path) {
+                Some(e) => inspector.path_badges(e),
+                None => Badges::empty(),
+            };
+            if inspector.sync_root_of(&c.path).is_some() {
+                b |= Badges::SYNCED;
+            }
+            let ext = mj_core::pathutil::extension_lower(&c.path);
+            if c.target == mj_core::TargetKind::File
+                && !b.contains(Badges::ONLINE_ONLY)
+                && CONTENT_EXTS.contains(&ext.as_str())
+            {
+                to_read.push(c.path.clone());
+            }
+            map.insert(c.path.clone(), b);
+        }
+        let read = mj_core::pool::parallel_map(&to_read, 0, cancel, |_, p| inspector.content_badges(p).ok());
+        for (p, b) in to_read.iter().zip(read) {
+            if let Some(Some(b)) = b {
+                *map.entry(p.clone()).or_default() |= b;
+            }
+        }
+        map
+    }
+
     fn run_analyses(
         &self,
         generation: u64,
-        index: &Arc<mj_core::FileIndex>,
+        index: &Arc<FileIndex>,
         cancel: &CancelToken,
         sink: &dyn ProgressSink,
     ) -> Result<Vec<OpportunityRecord>> {
-        let settings = lock(&self.settings).clone();
         let tools = lock(&self.tools).clone();
-        let inspector = mj_actions::SafetyInspector::new(
-            self.platform(),
-            mj_actions::ProtectedPaths::new(&settings.safety.protected_paths),
-        );
-        let badges = |c: &mj_core::Candidate| -> Badges {
-            index.get(&c.path).map(|e| inspector.path_badges(e)).unwrap_or_default()
-        };
-        let mut out = Vec::new();
-        let mut jobs: Vec<(CardInfo, Box<AnalysisFn<'_>>)> = Vec::new();
+        let env = ScanEnv::detect(self);
+        let mut list: Vec<(CardInfo, Analysis<'_>)> = Vec::new();
         for d in &self.detectors {
-            jobs.push((CardInfo::detector(d.info()), Box::new(move |ctx| d.run(ctx))));
+            list.push((CardInfo::detector(d.info()), Analysis::Det(d.as_ref())));
         }
         for o in &self.optimisers {
-            jobs.push((CardInfo::optimiser(o.info(), o.availability(&tools)), Box::new(move |ctx| o.analyse(ctx))));
+            list.push((CardInfo::optimiser(o.info(), o.availability(&tools)), Analysis::Opt(o.as_ref())));
         }
-        let now = Timestamp::now();
-        for (card, run) in jobs {
-            cancel.checkpoint()?;
-            let params = mj_core::params::defaults(&card.settings);
-            let ctx = DetectContext {
-                index,
-                params: &params,
-                now,
-                fingerprints: &self.cache,
-                cancel,
-                progress: sink,
-                threads: settings.performance.threads as usize,
+        let total = list.len() as u64;
+        let done = AtomicU64::new(0);
+        sink.report(&Progress::new(Phase::Detecting, 0, Some(total)));
+        let workers = mj_core::pool::default_workers().clamp(2, 8);
+        let results = mj_core::pool::parallel_map(&list, workers, cancel, |_, (card, a)| {
+            let params = self.params_for(card);
+            let rec = match a {
+                Analysis::Det(d) => self.run_one(card.clone(), &|ctx| d.run(ctx), params, index, &env, cancel),
+                Analysis::Opt(o) => self.run_one(card.clone(), &|ctx| o.analyse(ctx), params, index, &env, cancel),
             };
-            let result = catch_unwind(AssertUnwindSafe(|| run(&ctx)));
-            let output = match result {
-                Ok(Ok(o)) => o,
-                Ok(Err(Error::Cancelled)) => return Err(Error::Cancelled),
-                Ok(Err(e)) if skippable(&e) => continue,
-                Ok(Err(_)) | Err(_) => continue,
-            };
-            let rec = build_record(self, card, output, &badges);
-            self.emit(Event::ScanDetector(DetectorTotalsEvent {
-                generation,
-                opportunity_id: rec.opportunity.id.clone(),
-                title: rec.opportunity.title.clone(),
-                saving: rec.opportunity.saving,
-                count: rec.opportunity.count,
-                finished: true,
-            }));
-            out.push(rec);
+            if let Ok(r) = &rec {
+                if self.is_current(generation) {
+                    self.emit(Event::ScanDetector(DetectorTotalsEvent {
+                        generation,
+                        opportunity_id: r.opportunity.id.clone(),
+                        title: r.opportunity.title.clone(),
+                        saving: r.opportunity.saving,
+                        count: r.opportunity.count,
+                        finished: true,
+                    }));
+                }
+            }
+            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+            sink.report(&Progress::new(Phase::Detecting, n, Some(total)));
+            rec
+        });
+        cancel.checkpoint()?;
+        let mut out = Vec::with_capacity(results.len());
+        for (r, (card, _)) in results.into_iter().zip(list) {
+            match r {
+                Some(Ok(rec)) => out.push(rec),
+                Some(Err(Error::Cancelled)) => return Err(Error::Cancelled),
+                Some(Err(e)) => out.push(disabled_record(self, card, format!("The analysis failed: {e}"))),
+                None => out.push(disabled_record(self, card, "The analysis failed (internal error)".into())),
+            }
         }
         Ok(out)
+    }
+
+    /// Re-run one detector or optimiser with new parameters on the current index
+    /// (step parameters changed). Returns the new record.
+    pub(crate) fn rerun_analysis(&self, id: &mj_core::OpportunityId, params: ParamValues) -> Result<OpportunityRecord> {
+        let index = {
+            let r = self.results.read().unwrap_or_else(|e| e.into_inner());
+            r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?
+        };
+        let tools = lock(&self.tools).clone();
+        let env = ScanEnv::detect(self);
+        let cancel = CancelToken::new();
+        for d in &self.detectors {
+            let card = CardInfo::detector(d.info());
+            if &card.id == id {
+                return self.run_one(card, &|ctx| d.run(ctx), params, &index, &env, &cancel);
+            }
+        }
+        for o in &self.optimisers {
+            let card = CardInfo::optimiser(o.info(), o.availability(&tools));
+            if &card.id == id {
+                return self.run_one(card, &|ctx| o.analyse(ctx), params, &index, &env, &cancel);
+            }
+        }
+        Err(crate::results::unknown(id))
     }
 
     /// Pause the running scan.
@@ -247,11 +497,12 @@ impl Engine {
         Ok(st.status.clone())
     }
 
-    /// Stop the scan.
+    /// Stop the scan (the previous results stay visible).
     pub fn scan_stop(&self) -> Result<ScanStatus> {
         let mut st = lock(&self.scan);
         if running(st.status.state) {
             if let Some(c) = &st.cancel {
+                c.resume();
                 c.cancel();
             }
             st.status.state = ScanRunState::Stopping;

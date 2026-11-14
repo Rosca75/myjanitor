@@ -1,6 +1,6 @@
 # MyJanitor architecture
 
-**Frozen in Wave 1** (contracts: `crates/core`, the platform traits,
+**Frozen in Wave 1, revised additively in Wave 3 by W3-D1** (see §12) (contracts: `crates/core`, the platform traits,
 `crates/engine/src/api`, `docs/IPC.md`, `ui/styles/tokens.css`, `ui/js/api.js`).
 Changes to frozen files go through the orchestrator. Decisions referenced as
 D-xxx are in `docs/DECISIONS.md`; dependencies in `docs/DEPENDENCIES.md`.
@@ -93,7 +93,10 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
    (mj-optimise) and custom searches (mj-filters) read the index through a
    `DetectContext` (index, params, fixed `now`, fingerprint store, cancel,
    progress, threads) and return a `DetectorOutput`. They never modify files and
-   must report what they could not cover in `Diagnostics`.
+   must report what they could not cover in `Diagnostics`. The engine supplies the
+   environment under reserved parameter keys (`mj_core::detector::env`: real sync
+   roots, Downloads folders, font folders and the protected-path list), read with
+   `DetectContext::env_paths` / `is_protected`; a missing key means *unknown*.
 4. **Rank**: the engine turns each output into an `OpportunityRecord`: assigns
    candidate and group ids, adds path badges (protected, synced, online-only,
    encrypted attribute) from `mj_actions::SafetyInspector`, applies the
@@ -156,6 +159,8 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
   failures reject the promise with it; per-item failures live in
   `ItemOutcome.error`, journal entries and reports, so one bad file never
   fails a batch.
+- Per-item codes added in Wave 3: `needs_elevation` (SAF-05: refused, never
+  elevated) and `confidential` (SAF-07/09 skip).
 - `NotImplemented` = owner has not landed it (UI shows the feature disabled);
   `Unsupported` = not possible here (platform/filesystem), shown disabled with
   the reason. Neither may ever be reported as "nothing found".
@@ -184,7 +189,11 @@ dHash 9x8 and pHash 32x32 from the same decode, both always stored, algorithm
 chosen at match time, threshold percent capped at 18 % (11 bits) and converted
 once, BK-tree + Union-Find candidates, leader refinement (scan limit 256),
 confidence from the group diameter, deterministic ordering, no aspect-ratio
-bucketing, no full-decode fallback for files without an embedded thumbnail.
+bucketing, no full-decode fallback for files without an embedded thumbnail
+**for HEIC**. Deviation D-2B04: a JPEG without an embedded thumbnail (and any PNG) is
+fully decoded by default within limits (64 MiB file, 64 MP, 32768 px a side, at most
+two images over 16 MP at once); the `decode_full` toggle restores the strict
+reference behaviour (`skipped["no_thumbnail"]`).
 
 ## 7. Safety model
 
@@ -217,7 +226,8 @@ confirmation (D-116).
    `link_not_followed`. The item itself may be a link only for removal of the
    link (broken-link detector). Folder removals walk without following links.
 4. **TOCTOU guard**: right before acting, re-stat and compare with the scan
-   stamp (`ActionItem::expected`); mismatch → item `skipped` with `changed`.
+   stamp (`ActionItem::expected`, plus `expected_id` = the scan's file id when both
+   sides know one); mismatch → item `skipped` with `changed`.
 5. **Journal before act**: write the `intent` record and `sync_data` before
    touching the file; write `done`/`failed` after. Crash recovery settles
    dangling intents at start-up by inspecting both locations.
@@ -230,7 +240,9 @@ confirmation (D-116).
    exports and light copies use ` (n)` suffixes; Windows reserved names are
    avoided on every platform.
 8. **Confidential files** (SAF-07/09): signed, sensitivity-labelled and
-   encrypted files are badged and auto-unchecked; optimisers skip them
+   encrypted files are badged, auto-unchecked and locked in the step table while the
+   matching `skip_*` setting is on; the action engine skips them with code
+   `confidential`; optimisers skip them
    (repacks preserve labels, SAF-08; no conversion to 97-2003 formats).
 9. **Synced folders** (SAF-10): removal under a sync root is flagged in the
    confirmation dialog with the online-only alternative. If sync roots cannot
@@ -254,7 +266,9 @@ confirmation (D-116).
   `purged`. Paths use the lossless codec.
 - Everything needed to undo: `original` + `original_stamp`, `retained_at`
   (quarantine / move / backup), `trash` ticket, `created` files, `link_source`,
-  `reversible`, `undo_deadline`. Audit fields: `bytes_before/after`,
+  `reversible`, `undo_deadline`, `original_mode` (permissions, restored when a link
+  replacement is undone), `previous_compression` (undo of `fs_decompress`). Undo-run
+  entries carry `undo_of` = the entry they reverse. Audit fields: `bytes_before/after`,
   `original_sha256`, `lossy`, `error`.
 
 ### 7.4 Quarantine
@@ -347,3 +361,18 @@ Living documents (`docs/PLAN.md`, `docs/STATUS.md`, `docs/FEATURE-STATUS.md`,
 `docs/DECISIONS.md`) are edited by the orchestrator; workstreams append their
 decisions to `docs/DECISIONS.md` using their own id range (W2-A: D-2Axx,
 W2-B: D-2Bxx, ... W3-E: D-3Exx) so appends never collide.
+
+## 12. Wave 3 contract revision (W3-D1)
+
+Additive changes (details and rationale in `docs/decisions/W3-D1.md`):
+
+| Area | Change |
+|---|---|
+| `mj_core::rule` | `Condition::Media { cond: MediaCondition }`; `MediaCondition`, `MediaNumField`, `MediaTextField` moved from `mj-filters` (re-exported there as `MediaCondition`, `NumField`, `TextField`). `mj_filters::ContentConfig::media` supplies the provider. |
+| `mj_core::detector` | `env` reserved parameter keys + `DetectContext::env_paths`, `DetectContext::is_protected` (no new field). |
+| `mj_core::candidate` | `columns` reserved keys (`resolution`, `pixels`, `safety`), `Candidate::pixels()`, `Candidate::safety_override()`; `apply_keep_rule` now passes pixels. |
+| `mj_core::ActionItem` | `expected_id: Option<FileId>` (serde default). |
+| `mj_core::Error` | variants `NeedsElevation(PathBuf)` (`needs_elevation`), `Confidential(PathBuf)` (`confidential`). |
+| `mj_core::JournalEntry` | `original_mode`, `previous_compression`, `undo_of` (all optional). |
+| `mj_core::SavingsSummary` | `reclaimed` (serde default). |
+| `api::FsListDirResponse` | `omitted` (serde default). |

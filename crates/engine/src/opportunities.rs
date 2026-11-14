@@ -1,21 +1,26 @@
 //! Opportunity building and the overview list. Owner: W3-D.
 //!
 //! Ranking (frozen default): "Biggest saving first" orders by `saving` desc, then
-//! title; `rank` = saving in bytes as f64 (W3-D may refine, keeping the sort keys).
+//! title; `rank` = saving in bytes as f64. Disabled cards (unavailable optimiser,
+//! detector not implemented here) are listed with their reason and never counted in
+//! the hero summary; available cards with no candidate are hidden. The hero summary
+//! buckets each selected row by its own safety class (`columns["safety"]`), so a card
+//! mixing classes is split correctly.
 
 use std::collections::BTreeMap;
 
 use mj_core::{
     Action, ActionKind, Availability, Badges, Category, Confidence, DetectorInfo, DetectorOutput, GroupId,
-    OpportunityId, OptimiserInfo, ParamValues, Result, SafetyClass, SavingsSummary, SelectionOverrides, Source,
-    SubGroup,
+    OpportunityId, OptimiserInfo, ParamValues, Result, SafetyClass, SavingsBucket, SavingsSummary, SelectionOverrides,
+    Source, SubGroup,
 };
 
 use crate::api::{OpportunitiesList, OpportunitiesRequest, OpportunitySort, OpportunityTab, TabCounts};
-use crate::results::OpportunityRecord;
+use crate::results::{candidate_safety, is_selected, severity, skip_badges, OpportunityRecord};
 use crate::Engine;
 
 /// Static card data shared by detectors and optimisers.
+#[derive(Clone)]
 pub(crate) struct CardInfo {
     pub id: OpportunityId,
     pub source: Source,
@@ -121,14 +126,17 @@ pub(crate) fn default_action(kind: ActionKind, source: &Source, settings: &mj_co
 }
 
 /// Turn one analysis output into a record: assign candidate ids, re-key groups,
-/// apply badges and the auto-uncheck rule, compute card numbers.
+/// apply badges and the auto-uncheck rule, compute card numbers. `params` are the
+/// effective (user-visible) parameters the analysis ran with.
 pub(crate) fn build_record(
     engine: &Engine,
     card: CardInfo,
     mut out: DetectorOutput,
+    params: ParamValues,
     extra_badges: &dyn Fn(&mj_core::Candidate) -> Badges,
 ) -> OpportunityRecord {
     let settings = mj_core::lock(&engine.settings).clone();
+    let skip = skip_badges(&settings);
     let mut regroup: BTreeMap<GroupId, GroupId> = BTreeMap::new();
     for g in &mut out.groups {
         let new = GroupId(engine.next_id());
@@ -139,6 +147,9 @@ pub(crate) fn build_record(
         c.id = mj_core::CandidateId(engine.next_id());
         c.group = c.group.and_then(|g| regroup.get(&g).copied());
         c.badges |= extra_badges(c);
+        if c.badges.intersects(Badges::LABELLED) {
+            c.badges |= Badges::CONFIDENTIAL;
+        }
         c.normalise_selection();
     }
     let action = default_action(card.default_action, &card.source, &settings);
@@ -159,7 +170,7 @@ pub(crate) fn build_record(
         badges: Badges::empty(),
         default_action: action,
         available_actions: card.available_actions,
-        params: mj_core::params::defaults(&card.settings),
+        params,
         presets: card.presets,
         settings: card.settings,
         sub_groups: Vec::new(),
@@ -175,13 +186,21 @@ pub(crate) fn build_record(
         diagnostics: out.diagnostics,
         selection: SelectionOverrides::default(),
     };
-    recompute(&mut rec);
+    recompute(&mut rec, skip);
     rec
 }
 
-/// Recompute the card numbers from candidates and the current selection.
-pub(crate) fn recompute(rec: &mut OpportunityRecord) {
-    let o = &mut rec.opportunity;
+/// A card for an analysis that could not run here (shown greyed with the reason; never
+/// presented as "nothing found").
+pub(crate) fn disabled_record(engine: &Engine, mut card: CardInfo, reason: String) -> OpportunityRecord {
+    card.availability = Availability::Disabled { reason };
+    let params = mj_core::params::defaults(&card.settings);
+    build_record(engine, card, DetectorOutput::default(), params, &|_| Badges::empty())
+}
+
+/// Recompute the card numbers from candidates and the current selection. Online-only
+/// rows never count towards savings (SCAN-09).
+pub(crate) fn recompute(rec: &mut OpportunityRecord, skip: Badges) {
     let (mut before, mut saving, mut selected, mut badges) = (0u64, 0u64, 0u64, Badges::empty());
     let mut conf = Confidence::Exact;
     let mut subs: BTreeMap<String, u64> = BTreeMap::new();
@@ -190,13 +209,16 @@ pub(crate) fn recompute(rec: &mut OpportunityRecord) {
         if let Some(s) = &c.sub_group {
             *subs.entry(s.clone()).or_default() += 1;
         }
-        if rec.selection.is_selected(c.id, c.default_selected) && !c.badges.intersects(Badges::BLOCKING) {
+        if is_selected(rec, c, skip) {
             selected += 1;
-            before += c.size;
-            saving += c.saving();
+            if !c.badges.contains(Badges::ONLINE_ONLY) {
+                before += c.size;
+                saving += c.saving();
+            }
             conf = conf.max(c.confidence);
         }
     }
+    let o = &mut rec.opportunity;
     o.candidates = rec.candidates.len() as u64;
     o.selected = selected;
     o.count = selected;
@@ -208,6 +230,17 @@ pub(crate) fn recompute(rec: &mut OpportunityRecord) {
     o.sub_groups = subs.into_iter().map(|(key, count)| SubGroup { label: key.replace('_', " "), key, count }).collect();
 }
 
+/// Savings of one record split by the class of each selected row.
+pub(crate) fn split_by_safety(rec: &OpportunityRecord, skip: Badges) -> BTreeMap<u8, (SafetyClass, u64)> {
+    let mut m: BTreeMap<u8, (SafetyClass, u64)> = BTreeMap::new();
+    for c in &rec.candidates {
+        if is_selected(rec, c, skip) && !c.badges.contains(Badges::ONLINE_ONLY) {
+            let s = candidate_safety(rec, c);
+            m.entry(severity(s)).or_insert((s, 0)).1 += c.saving();
+        }
+    }
+    m
+}
 fn safety_order(s: SafetyClass) -> u8 {
     match s {
         SafetyClass::Reversible => 0,
@@ -235,16 +268,31 @@ impl Engine {
         let results = self.results.read().unwrap_or_else(|e| e.into_inner());
         let in_plan: Vec<OpportunityId> =
             mj_core::lock(&self.plan).plan.steps.iter().map(|s| s.opportunity.clone()).collect();
-        let mut summary = SavingsSummary::default();
+        let skip = skip_badges(&mj_core::lock(&self.settings));
+        let mut summary = SavingsSummary {
+            reclaimed: self.reclaimed.load(std::sync::atomic::Ordering::Relaxed),
+            ..SavingsSummary::default()
+        };
         let mut counts = TabCounts::default();
         let mut items = Vec::new();
         for rec in &results.opportunities {
             let mut o = rec.opportunity.clone();
             o.in_plan = in_plan.contains(&o.id);
-            if o.candidates == 0 {
+            let available = o.availability.is_available();
+            if o.candidates == 0 && available {
                 continue;
             }
-            summary.add(o.safety, o.saving);
+            if available {
+                summary.opportunities += 1;
+                for (_, (class, bytes)) in split_by_safety(rec, skip) {
+                    summary.total += bytes;
+                    match class.bucket() {
+                        SavingsBucket::Reversible => summary.reversible += bytes,
+                        SavingsBucket::OptIn => summary.opt_in += bytes,
+                        SavingsBucket::ReviewOnly => summary.review_only += bytes,
+                    }
+                }
+            }
             counts.all += 1;
             for (tab, n) in [
                 (OpportunityTab::Clean, &mut counts.clean),
@@ -260,15 +308,25 @@ impl Engine {
                 items.push(o);
             }
         }
+        // Disabled cards always come after the available ones.
+        let rank_of = |o: &mj_core::Opportunity| !o.availability.is_available();
         match req.sort {
-            OpportunitySort::Saving => {
-                items.sort_by(|a, b| b.saving.cmp(&a.saving).then_with(|| a.title.cmp(&b.title)))
-            }
-            OpportunitySort::Count => items.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.title.cmp(&b.title))),
-            OpportunitySort::Safety => {
-                items.sort_by(|a, b| safety_order(a.safety).cmp(&safety_order(b.safety)).then(b.saving.cmp(&a.saving)))
-            }
-            OpportunitySort::Name => items.sort_by_key(|a| a.title.to_lowercase()),
+            OpportunitySort::Saving => items.sort_by(|a, b| {
+                rank_of(a).cmp(&rank_of(b)).then(b.saving.cmp(&a.saving)).then_with(|| a.title.cmp(&b.title))
+            }),
+            OpportunitySort::Count => items.sort_by(|a, b| {
+                rank_of(a).cmp(&rank_of(b)).then(b.count.cmp(&a.count)).then_with(|| a.title.cmp(&b.title))
+            }),
+            OpportunitySort::Safety => items.sort_by(|a, b| {
+                rank_of(a)
+                    .cmp(&rank_of(b))
+                    .then(safety_order(a.safety).cmp(&safety_order(b.safety)))
+                    .then(b.saving.cmp(&a.saving))
+                    .then_with(|| a.title.cmp(&b.title))
+            }),
+            OpportunitySort::Name => items.sort_by(|a, b| {
+                rank_of(a).cmp(&rank_of(b)).then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
+            }),
         }
         Ok(OpportunitiesList {
             generation: results.generation,

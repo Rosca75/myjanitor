@@ -129,6 +129,8 @@ fn held(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
         .all_entries()
         .into_iter()
         .filter(|e| e.state == JournalState::Done)
+        // Undo records copy their source's `retained_at`; they hold nothing.
+        .filter(|e| e.undo_of.is_none())
         .filter(|e| e.retained_at.as_deref().is_some_and(|r| is_within(quarantine_dir, r)))
         .collect()
 }

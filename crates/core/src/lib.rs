@@ -75,7 +75,9 @@ pub use params::{ParamValue, ParamValues, SettingKind, SettingSpec, StepPreset};
 pub use plan::{ChecklistItem, ChecklistLevel, Plan, PlanStep, SelectionOverrides, StepConfirmation, StepId};
 pub use progress::{NullProgress, Phase, Progress, ProgressSink, ThrottledSink};
 pub use report::{ExportFormat, Report, ReportSection, ReportTotals};
-pub use rule::{Cmp, Condition, DateField, DateValue, Rule, RulePreset, TextMode};
+pub use rule::{
+    Cmp, Condition, DateField, DateValue, MediaCondition, MediaNumField, MediaTextField, Rule, RulePreset, TextMode,
+};
 pub use safety::{SafetyClass, SavingsBucket};
 pub use scope::{ScanOptions, ScanScope};
 pub use settings::{Cadence, Schedule, ScheduledStep, Settings};

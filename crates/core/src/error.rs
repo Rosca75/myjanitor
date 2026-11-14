@@ -51,6 +51,12 @@ pub enum Error {
     ConfirmationRequired(String),
     /// Something that should not happen; a bug.
     Internal(String),
+    /// The OS refused access to a path that would need administrator rights; MyJanitor never
+    /// elevates by itself (SAF-05). Wave 3 contract revision.
+    NeedsElevation(PathBuf),
+    /// Signed, sensitivity-labelled or encrypted file skipped by the safety settings
+    /// (SAF-07/09). Wave 3 contract revision.
+    Confidential(PathBuf),
 }
 
 impl Error {
@@ -98,6 +104,8 @@ impl Error {
             Error::Conflict(_) => "conflict",
             Error::ConfirmationRequired(_) => "confirmation_required",
             Error::Internal(_) => "internal",
+            Error::NeedsElevation(_) => "needs_elevation",
+            Error::Confidential(_) => "confidential",
         }
     }
 
@@ -124,6 +132,12 @@ impl Error {
             Error::Conflict(_) => "Wait for the running task to finish, or stop it.".into(),
             Error::ConfirmationRequired(_) => "Review the step and confirm it in the dialog.".into(),
             Error::Internal(_) => "This is a bug. The operation was stopped safely.".into(),
+            Error::NeedsElevation(_) => {
+                "This location needs administrator rights. MyJanitor never elevates on its own; it was skipped.".into()
+            }
+            Error::Confidential(_) => {
+                "Signed, labelled and encrypted files are skipped. Change this in Settings › Safety.".into()
+            }
         }
     }
 
@@ -136,7 +150,9 @@ impl Error {
             | Error::Protected(p)
             | Error::OutsideAllowedRoots(p)
             | Error::Changed(p)
-            | Error::LinkNotFollowed(p) => Some(p),
+            | Error::LinkNotFollowed(p)
+            | Error::NeedsElevation(p)
+            | Error::Confidential(p) => Some(p),
             _ => None,
         }
     }
@@ -172,6 +188,8 @@ impl fmt::Display for Error {
             Error::Conflict(m) => write!(f, "{m}"),
             Error::ConfirmationRequired(m) => write!(f, "Confirmation required: {m}"),
             Error::Internal(m) => write!(f, "Internal error: {m}"),
+            Error::NeedsElevation(p) => write!(f, "Administrator rights needed: {}", p.display()),
+            Error::Confidential(p) => write!(f, "Signed, labelled or encrypted: {}", p.display()),
         }
     }
 }

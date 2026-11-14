@@ -15,7 +15,7 @@ pub fn apply_keep_rule(
         let members: Vec<&Candidate> = candidates.iter().filter(|c| c.group == Some(g.id)).collect();
         let infos: Vec<KeepInfo<'_>> = members
             .iter()
-            .map(|c| KeepInfo { path: &c.path, modified: c.modified, size: c.size, pixels: None })
+            .map(|c| KeepInfo { path: &c.path, modified: c.modified, size: c.size, pixels: c.pixels() })
             .collect();
         if let Some(k) = rule.pick(&infos) {
             for (i, c) in members.iter().enumerate() {

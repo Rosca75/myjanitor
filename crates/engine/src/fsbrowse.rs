@@ -56,24 +56,38 @@ impl Engine {
     pub fn fs_list_dir(&self, req: FsListDirRequest) -> Result<FsListDirResponse> {
         let places = places();
         let Some(path) = req.path else {
-            return Ok(FsListDirResponse { path: None, parent: None, entries: Vec::new(), places });
+            return Ok(FsListDirResponse { path: None, parent: None, entries: Vec::new(), places, omitted: 0 });
         };
+        if !path.is_absolute() {
+            return Err(mj_core::Error::InvalidInput(format!("not an absolute path: {}", path.display())));
+        }
+        // `read_dir` and `metadata` use lstat semantics: links are listed as links and
+        // never followed (a link to a folder is shown, not entered).
         let mut entries = Vec::new();
+        let mut omitted = 0u64;
         for item in self.platform().read_dir(&path)? {
             let name = item.name.to_string_lossy().into_owned();
             let is_link = item.kind == EntryKind::Link;
             let md = self.platform().metadata(&item.path).ok();
             let hidden = name.starts_with('.') || md.as_ref().is_some_and(|m| m.attrs.contains(Attributes::HIDDEN));
             if hidden && !req.show_hidden {
+                omitted += 1;
                 continue;
             }
             let is_dir = item.kind == EntryKind::Dir;
             if !is_dir && !req.include_files {
+                omitted += 1;
                 continue;
             }
             entries.push(FsDirEntry { name, path: item.path, is_dir, is_link, hidden });
         }
         entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-        Ok(FsListDirResponse { parent: path.parent().map(Path::to_path_buf), path: Some(path), entries, places })
+        Ok(FsListDirResponse {
+            parent: path.parent().map(Path::to_path_buf),
+            path: Some(path),
+            entries,
+            places,
+            omitted,
+        })
     }
 }

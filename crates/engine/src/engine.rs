@@ -9,10 +9,11 @@
 //! reports through events. Locks are never held across I/O or while emitting.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
-use mj_actions::Journal;
+use mj_actions::{Journal, TrashRoute};
 use mj_core::{Archiver, Detector, ExternalTool, Optimiser, RulePreset, ScanScope, Schedule, Settings};
 use mj_platform::{NativePlatform, Platform};
 use mj_scan::ScanCache;
@@ -20,17 +21,29 @@ use mj_scan::ScanCache;
 use crate::api::{Event, EventSink};
 use crate::{jobs, plan, results, scan_ops};
 
-/// Construction parameters.
+/// Construction parameters. Every folder the engine writes to is explicit, so tests and
+/// the CLI can point everything at temporary directories. The engine never scans or acts
+/// on anything by default: the scope starts empty.
 #[derive(Clone)]
 pub struct EngineConfig {
-    /// Settings, journal, quarantine, schedules (`paths::default_dirs`).
+    /// Settings, presets, schedules, run metadata (`paths::default_dirs`).
     pub data_dir: PathBuf,
     /// Scan cache.
     pub cache_dir: PathBuf,
+    /// Undo journal (default `<data>/journal`).
+    pub journal_dir: PathBuf,
+    /// Quarantine (default `<data>/quarantine`).
+    pub quarantine_dir: PathBuf,
+    /// Scratch folder for dry-run optimiser outputs (default `<cache>/tmp`).
+    pub temp_dir: PathBuf,
+    /// Where "to Recycle Bin / Trash" goes (default: the OS rule, D-2E01). Tests use the
+    /// quarantine so nothing ever reaches the user's real Trash.
+    pub trash_route: TrashRoute,
     pub portable: bool,
     pub events: Arc<dyn EventSink>,
     pub platform: Arc<dyn Platform>,
-    /// Load and save settings/presets/schedules/journal files. False in unit tests.
+    /// Load and save settings/presets/schedules/journal/cache files. False in unit tests
+    /// that need no files at all (the journal is then in memory).
     pub persist: bool,
 }
 
@@ -38,13 +51,36 @@ impl EngineConfig {
     /// Config for the given directories with the native platform and no events.
     pub fn new(data_dir: PathBuf, cache_dir: PathBuf) -> Self {
         EngineConfig {
+            journal_dir: data_dir.join("journal"),
+            quarantine_dir: data_dir.join("quarantine"),
+            temp_dir: cache_dir.join("tmp"),
             data_dir,
             cache_dir,
+            trash_route: TrashRoute::default_for_os(),
             portable: false,
             events: Arc::new(crate::api::NullSink),
             platform: Arc::new(NativePlatform::new()),
             persist: true,
         }
+    }
+
+    /// Config with every folder given explicitly (config/settings, cache, journal, quarantine).
+    pub fn with_dirs(config_dir: PathBuf, cache_dir: PathBuf, journal_dir: PathBuf, quarantine_dir: PathBuf) -> Self {
+        let mut c = EngineConfig::new(config_dir, cache_dir);
+        c.journal_dir = journal_dir;
+        c.quarantine_dir = quarantine_dir;
+        c
+    }
+
+    /// MyJanitor's own folders: always protected from every action.
+    pub fn app_dirs(&self) -> Vec<PathBuf> {
+        vec![
+            self.data_dir.clone(),
+            self.cache_dir.clone(),
+            self.journal_dir.clone(),
+            self.quarantine_dir.clone(),
+            self.temp_dir.clone(),
+        ]
     }
 }
 
@@ -67,6 +103,11 @@ pub struct Engine {
     pub(crate) presets: Mutex<Vec<RulePreset>>,
     pub(crate) schedules: Mutex<Vec<Schedule>>,
     pub(crate) tools: Mutex<Vec<ExternalTool>>,
+    /// Run metadata the journal does not hold (scope roots, step titles), persisted.
+    pub(crate) run_meta: Mutex<std::collections::BTreeMap<u64, crate::history::RunMeta>>,
+    /// Bytes freed by runs applied this session.
+    pub(crate) reclaimed: AtomicU64,
+    pub(crate) shutting_down: AtomicBool,
     next_id: AtomicU64,
 }
 
@@ -75,12 +116,12 @@ impl Engine {
     /// fall back to defaults (and the journal to memory, reported by `app_info`).
     pub fn new(cfg: EngineConfig) -> mj_core::Result<Arc<Engine>> {
         if cfg.persist {
-            for d in [&cfg.data_dir, &cfg.cache_dir] {
+            for d in [&cfg.data_dir, &cfg.cache_dir, &cfg.journal_dir, &cfg.quarantine_dir] {
                 std::fs::create_dir_all(d).map_err(|e| mj_core::Error::io(d, e))?;
             }
         }
         let journal = if cfg.persist {
-            Journal::open(&cfg.data_dir.join("journal")).unwrap_or_else(|_| Journal::in_memory())
+            Journal::open(&cfg.journal_dir).unwrap_or_else(|_| Journal::in_memory())
         } else {
             Journal::in_memory()
         };
@@ -103,11 +144,32 @@ impl Engine {
             presets: Mutex::new(Vec::new()),
             schedules: Mutex::new(Vec::new()),
             tools: Mutex::new(Vec::new()),
+            run_meta: Mutex::new(Default::default()),
+            reclaimed: AtomicU64::new(0),
+            shutting_down: AtomicBool::new(false),
             next_id: AtomicU64::new(1),
             cfg,
         };
         engine.load_state();
+        engine.recover_journal();
         Ok(Arc::new(engine))
+    }
+
+    /// Graceful shutdown: stop the scan and the jobs between items, wait up to `wait` for
+    /// them to settle, then save the scan cache. The journal is synced after every record,
+    /// so nothing else needs flushing. Safe to call more than once.
+    pub fn shutdown(&self, wait: Duration) {
+        self.shutting_down.store(true, Ordering::SeqCst);
+        let _ = self.scan_stop();
+        self.cancel_all_jobs();
+        let deadline = Instant::now() + wait;
+        while Instant::now() < deadline && (self.scan_running() || self.jobs_running()) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if self.cfg.persist {
+            let _ = self.cache.save();
+        }
+        crate::history::save_run_meta(self);
     }
 
     /// Emit an event (never while holding a lock).
@@ -131,5 +193,6 @@ impl Engine {
         crate::presets::load(self);
         crate::schedules::load(self);
         crate::tools::load(self);
+        crate::history::load_run_meta(self);
     }
 }

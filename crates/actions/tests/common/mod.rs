@@ -199,6 +199,7 @@ impl Fixture {
             link_source: None,
             root: self.root(),
             expected: if md.is_dir() { mj_core::FileStamp { size: 0, mtime: Timestamp(0) } } else { md.stamp() },
+            expected_id: None,
         }
     }
 
