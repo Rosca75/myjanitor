@@ -45,6 +45,9 @@ pub struct EngineConfig {
     /// Load and save settings/presets/schedules/journal/cache files. False in unit tests
     /// that need no files at all (the journal is then in memory).
     pub persist: bool,
+    /// Context-menu launch (`--optimise` / `--duplicates <path>`): the scope starts as
+    /// that path and `app_info` reports it. Never scans or applies by itself.
+    pub launch: Option<crate::api::LaunchIntent>,
 }
 
 impl EngineConfig {
@@ -61,6 +64,7 @@ impl EngineConfig {
             events: Arc::new(crate::api::NullSink),
             platform: Arc::new(NativePlatform::new()),
             persist: true,
+            launch: None,
         }
     }
 
@@ -152,6 +156,16 @@ impl Engine {
         };
         engine.load_state();
         engine.recover_journal();
+        if let Some(l) = engine.cfg.launch.clone() {
+            // Preselect the scope only; an invalid path is dropped (the app opens normally).
+            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], ..mj_core::ScanScope::default() };
+            let exists = std::fs::symlink_metadata(&l.path).is_ok();
+            if !exists || engine.scope_set(crate::api::ScopeSetRequest { scope }).is_err() {
+                let mut e = engine;
+                e.cfg.launch = None;
+                return Ok(Arc::new(e));
+            }
+        }
         Ok(Arc::new(engine))
     }
 

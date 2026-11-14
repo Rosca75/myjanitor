@@ -48,6 +48,28 @@ pub struct AppInfo {
     /// by `drives_list`.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// How the app was opened from a context-menu entry (`--optimise <path>` /
+    /// `--duplicates <path>`): the scope is already set to `path`; the UI opens the
+    /// matching view. Nothing is scanned or applied automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<LaunchIntent>,
+}
+
+/// Context-menu entry point (`AppInfo::launch`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchIntent {
+    /// `optimise` or `duplicates`.
+    pub mode: LaunchMode,
+    #[serde(with = "mj_core::pathutil::serde_path")]
+    pub path: PathBuf,
+}
+
+/// What a context-menu launch asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LaunchMode {
+    Optimise,
+    Duplicates,
 }
 
 // ---------------------------------------------------------------- scope + folder browser

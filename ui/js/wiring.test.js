@@ -428,3 +428,18 @@ test('confirmation_required from the engine surfaces if a dialog was somehow ski
   const env = await makeEnv();
   await assert.rejects(env.api.planApply({ confirmations: [] }), (e) => e.code === 'confirmation_required' && /Meeting recordings/.test(e.message));
 });
+
+test('a context-menu launch (app_info.launch) opens the matching view and starts nothing', async () => {
+  for (const [mode, route] of [['optimise', 'optimise'], ['duplicates', 'clean']]) {
+    const env = await makeEnv({ scenario: 'results', mount: false });
+    const base = env.backend.call.bind(env.backend);
+    env.backend.call = async (cmd, req) => {
+      const r = await base(cmd, req);
+      return cmd === 'app_info' ? { ...r, launch: { mode, path: 'C:\\Users\\Michel\\Pictures' } } : r;
+    };
+    await env.actions.init();
+    await env.settle();
+    assert.equal(env.state().route.name, route);
+    for (const cmd of ['scan_start', 'plan_apply', 'plan_add_step']) assert.equal(env.sent(cmd).length, 0, cmd);
+  }
+});

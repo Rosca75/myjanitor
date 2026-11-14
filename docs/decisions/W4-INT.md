@@ -93,3 +93,13 @@ first (reversible over irreversible, skip over guess, report over act).
 - Mock: `schedule_save` (validation, unique names, ids), `schedule_delete`,
   `schedule_run_now` (a `schedule` job), `settings_set` validation (engine's ranges and
   messages for the drawer's fields) and persisted `protected_paths_set`.
+
+## D-4I06 GUI launch arguments
+- `src-tauri/src/launch.rs`: `--data-dir <dir>` (every folder below one root, as the
+  CLI's; used by the smoke run so it never touches real app data), `--optimise <path>`
+  (alias `--optimize`) and `--duplicates <path>`. Unknown arguments are ignored (the
+  webview may add its own); a flag without a value is ignored.
+- The entry point travels as `EngineConfig::launch` → the scope is set to that path at
+  start-up (only if it exists) and `AppInfo::launch` reports it; the UI opens the
+  Optimise view or the Clean view (duplicates live there). No scan and no apply start by
+  themselves: the user still presses Scan and reviews.

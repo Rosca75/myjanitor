@@ -19,6 +19,7 @@ impl Engine {
             elevated: self.platform().is_elevated(),
             journal_persistent: self.journal.is_persistent(),
             capabilities: capabilities(self.cfg.portable),
+            launch: self.cfg.launch.clone(),
         })
     }
 }

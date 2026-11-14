@@ -141,3 +141,23 @@ fn schedule_run_now_returns_a_job_at_once_and_queues_the_apply() {
     assert_eq!(e.quarantine_info().unwrap().items, 1);
     assert!(e.schedules_list().unwrap()[0].last_run.is_some());
 }
+
+#[test]
+fn context_menu_launch_preselects_the_scope_only() {
+    let tree = TempDir::new("engine-launch").unwrap();
+    tree.write("a/x.bin", &bytes(1, 100)).unwrap();
+    let app = TempDir::new("engine-launch-app").unwrap();
+    let mut cfg = config(&app, Default::default());
+    cfg.launch = Some(LaunchIntent { mode: LaunchMode::Duplicates, path: tree.join("a") });
+    let e = mj_engine::Engine::new(cfg).unwrap();
+    assert_eq!(e.scope_get().unwrap().roots, vec![tree.join("a")]);
+    assert_eq!(e.app_info().unwrap().launch.unwrap().mode, LaunchMode::Duplicates);
+    assert_eq!(e.scan_status().unwrap().state, ScanRunState::Idle, "nothing scanned");
+    assert!(e.jobs_list().unwrap().is_empty(), "nothing applied");
+    // A path that does not exist is dropped: the app opens normally.
+    let mut cfg = config(&app, Default::default());
+    cfg.launch = Some(LaunchIntent { mode: LaunchMode::Optimise, path: tree.join("missing") });
+    let e = mj_engine::Engine::new(cfg).unwrap();
+    assert!(e.scope_get().unwrap().roots.is_empty());
+    assert!(e.app_info().unwrap().launch.is_none());
+}

@@ -88,7 +88,11 @@ mode, elevation, and whether the undo journal is persistent (if `false`, show a
 warning that History will not survive a restart). `capabilities` lists the platform
 features this build can use here (`recycle_bin`, `freedesktop_trash`,
 `wof_compression`, `btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
-`context_menu`, `os_schedules`); the UI labels "Windows only" from it.
+`context_menu`, `os_schedules`); the UI labels "Windows only" from it. `launch`
+(absent normally) is `{"mode":"optimise"|"duplicates","path":…}` when the GUI was
+started from a context-menu entry (`--optimise <path>` / `--duplicates <path>`): the
+scope is already that path and the UI opens the Optimise or Clean view; nothing is
+scanned or applied automatically.
 
 ### `scope_get`
 No request → `ScanScope`. The session scope (scope chips).
