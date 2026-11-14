@@ -32,9 +32,6 @@ impl Engine {
 mod tests {
     use std::sync::Arc;
 
-    use mj_core::testutil::TempDir;
-
-    use crate::api::*;
     use crate::{Engine, EngineConfig};
 
     fn engine() -> Arc<Engine> {
@@ -54,6 +51,8 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn refresh_picks_up_a_manual_path_from_settings() {
+        use crate::api::*;
+        use mj_core::testutil::TempDir;
         use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new("engine-tools").unwrap();
         let exe = dir.write("my-oxipng", b"#!/bin/sh\necho 'oxipng 9.1.1'\n").unwrap();
