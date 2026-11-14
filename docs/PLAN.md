@@ -21,7 +21,7 @@ State: todo / in progress / done / blocked.
 | 3 | W3-C | Images, external-tool media adapters | Sonnet | done |
 | 3 | W3-D | Real IPC wiring, derived screens | Sonnet | done |
 | 3 | W3-E | Settings, schedules, CLI, context menu, portable | Sonnet | done |
-| 4 | W4-1 | Integration pass | Opus | in progress |
+| 4 | W4-1 | Integration pass | Opus | done |
 | 4 | W4-2 | Adversarial review of destructive paths | Opus | in progress |
 | 4 | W4-3 | CI | Sonnet | done (first run unproven) |
-| 4 | W4-4 | Docs | Sonnet | todo |
+| 4 | W4-4 | Docs | Sonnet | in progress |

@@ -25,6 +25,7 @@ fn skipped(before: u64, reason: impl Into<String>) -> OptimiseOutput {
         lossy: false,
         skipped: Some(reason.into()),
         notes: Vec::new(),
+        ..Default::default()
     }
 }
 
@@ -94,6 +95,7 @@ pub fn recompress(src: &Path, dst: &Path, cancel: &CancelToken) -> Result<Optimi
         lossy: false,
         skipped: None,
         notes: vec![format!("{} entries recompressed and verified", repacked.entries)],
+        ..Default::default()
     })
 }
 
