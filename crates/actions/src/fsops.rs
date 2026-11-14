@@ -196,20 +196,22 @@ pub fn remove_empty_dirs(dirs: &[PathBuf]) {
 /// Copy one regular file to `dst` (must not exist), preserving mtime and permissions,
 /// fsync it, and verify what is on disk (size + xxh64). Returns the source's hashes.
 pub fn copy_file_verified(src: &Path, dst: &Path) -> Result<ContentHash> {
-    let result = copy_file_inner(src, dst);
-    if result.is_err() && exists(dst) {
-        let _ = fs::remove_file(dst);
-    }
-    result
-}
-
-fn copy_file_inner(src: &Path, dst: &Path) -> Result<ContentHash> {
     let smd = fs::symlink_metadata(src).map_err(|e| Error::io(src, e))?;
     if !smd.is_file() {
         return Err(Error::InvalidInput(format!("not a regular file: {}", src.display())));
     }
     let mut input = File::open(src).map_err(|e| Error::io(src, e))?;
-    let mut out = OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| Error::io(dst, e))?;
+    // Sibling of F-16: `dst` is removed on failure only once this call created it; an
+    // existing file there is someone else's and is never touched.
+    let out = OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| Error::io(dst, e))?;
+    let result = copy_file_inner(src, &smd, &mut input, out, dst);
+    if result.is_err() {
+        let _ = fs::remove_file(dst);
+    }
+    result
+}
+
+fn copy_file_inner(src: &Path, smd: &fs::Metadata, input: &mut File, mut out: File, dst: &Path) -> Result<ContentHash> {
     let mut x = Xxh64::new(0);
     let mut s = Sha256::new();
     let mut buf = vec![0u8; BUF];
@@ -255,8 +257,11 @@ pub fn copy_item_verified(src: &Path, dst: &Path) -> Result<()> {
     if md.is_file() {
         return copy_file_verified(src, dst).map(|_| ());
     }
+    // Sibling of F-16: the top folder is created here; only once it is ours is a failed
+    // copy removed again (a folder that already existed is never touched).
+    fs::create_dir(dst).map_err(|e| Error::io(dst, e))?;
     let r = copy_tree(src, dst);
-    if r.is_err() && exists(dst) {
+    if r.is_err() {
         let _ = fs::remove_dir_all(dst);
     }
     r
@@ -276,7 +281,6 @@ fn copy_link(src: &Path, dst: &Path) -> Result<()> {
 }
 
 fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir(dst).map_err(|e| Error::io(dst, e))?;
     // (source dir, destination dir, depth); folder mtimes/permissions applied afterwards.
     let mut stack = vec![(src.to_path_buf(), dst.to_path_buf(), 0usize)];
     let mut dirs = Vec::new();

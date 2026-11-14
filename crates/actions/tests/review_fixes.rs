@@ -875,3 +875,18 @@ fn f20_dehydrate_that_freed_nothing_saves_nothing() {
     assert_eq!(out.bytes_saved, 0, "{out:?}");
     assert_eq!(f.journal.entries_of(run)[0].bytes_after, 5000, "never journalled as 0 bytes left");
 }
+
+/// Sibling of F-16 found in `fsops`: a verified copy whose destination already exists
+/// used to delete that existing file or folder while cleaning up its "failed" copy.
+#[test]
+fn sibling_f16_failed_copy_never_removes_an_existing_destination() {
+    let f = Fixture::new("sib-copy");
+    let src = f.write("a.txt", b"source");
+    let dst = f.t.write("dest/a.txt", b"already here, not ours").unwrap();
+    assert!(mj_actions::fsops::copy_file_verified(&src, &dst).is_err());
+    assert_eq!(std::fs::read(&dst).unwrap(), b"already here, not ours");
+    f.write("dir/x.txt", b"x");
+    let existing = f.t.write("dest/dir/keep.txt", b"keep").unwrap();
+    assert!(mj_actions::fsops::copy_item_verified(&f.root().join("dir"), &f.t.join("dest/dir")).is_err());
+    assert!(existing.exists());
+}
