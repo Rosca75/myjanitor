@@ -94,6 +94,8 @@ export function initialState() {
     reportUi: { filter: 'all', shown: {} },
     /** Features the backend answered with not_implemented / unsupported: key -> ErrorInfo. */
     unavail: {},
+    /** Action chosen for an opportunity before it is in the plan (archive format): id -> Action. */
+    pendingActions: {},
     /** History: expanded runs, their entries (per run), selection, results of the last restore. */
     historyUi: { loading: false, error: null, expanded: {}, details: {}, selected: {}, result: null, undoDays: null, loadingMore: false },
     /** Generic yes/no dialog (undo a run, purge quarantine), or null. */

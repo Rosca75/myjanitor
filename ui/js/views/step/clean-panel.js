@@ -4,7 +4,7 @@ import { h } from '../../dom.js';
 import { copy } from '../../copy.js';
 import { formatBytes } from '../../format.js';
 import { button, radioTile, select } from '../../components/controls.js';
-import { previewPane } from './preview-pane.js';
+import { previewPane, compareButton } from './preview-pane.js';
 
 const BASIC = ['trash', 'quarantine', 'move'];
 
@@ -35,6 +35,7 @@ export function renderCleanPanel(s, actions) {
       h('label', { class: 'setting__text' }, h('span', { class: 'setting__label' }, copy.clean.keep), h('span', { class: 'setting__help' }, copy.clean.keepHelp)),
       select({ label: copy.clean.keep, value: keepValue(opp.params.keep_rule), fk: 'keep-rule', options: [...Object.entries(copy.clean.keepRules).map(([value, label]) => ({ value, label })), { value: 'preferred_folder', label: copy.step2.keepFolder }], onChange: (v) => (v === 'preferred_folder' ? actions.openBrowser({ mode: 'keep' }) : actions.applyKeepRule(v)) })),
     previewPane(s, actions),
+    opp.category === 'optimise' && compareButton(s, actions),
     h('div', { class: 'estimate', role: 'status', 'aria-live': 'polite' }, h('span', { class: 'estimate__label' }, copy.step.thisStep), h('strong', { class: 'estimate__value', 'data-role': 'step-estimate' }, sum.size_after > 0 ? copy.step.estimateLine(formatBytes(sum.size_before), formatBytes(sum.size_after), formatBytes(sum.saving)) : copy.step.estimateRemove(formatBytes(sum.saving)))),
     h('div', { class: 'advanced' },
       h('button', { type: 'button', class: 'disclosure', 'aria-expanded': String(st.advancedOpen), 'data-fk': 'adv-toggle', on: { click: () => actions.toggleAdvanced() } }, st.advancedOpen ? copy.shrink.hideAdvanced : copy.shrink.showAdvanced),

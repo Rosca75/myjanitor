@@ -11,11 +11,11 @@ import { mountApp } from '../app.js';
 const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
 /**
- * @param {{ scenario?: 'empty'|'fresh'|'results', mount?: boolean, speed?: number, now?: () => number }} [opts]
+ * @param {{ scenario?: 'empty'|'fresh'|'results'|'rich', mount?: boolean, speed?: number, now?: () => number, platform?: string, disabled?: string[] }} [opts]
  */
 export async function makeEnv(opts = {}) {
   const doc = installFakeDom();
-  const backend = createMockBackend({ scenario: opts.scenario ?? 'results', speed: opts.speed ?? 0, now: opts.now });
+  const backend = createMockBackend({ scenario: opts.scenario ?? 'results', speed: opts.speed ?? 0, now: opts.now, platform: opts.platform, disabled: opts.disabled });
   /** @type {{ cmd: string, req: any }[]} */
   const calls = [];
   const api = new Proxy({}, {

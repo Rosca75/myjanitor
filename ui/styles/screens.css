@@ -186,3 +186,6 @@ div.tile2 { cursor: default; }
 .bars__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }
 .bars__size { text-align: right; font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums; }
 .bars__meta { color: var(--text-muted); font-size: var(--text-xs); }
+
+.badge--lock { gap: var(--space-1); }
+.badge__icon { display: inline-grid; }

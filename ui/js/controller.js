@@ -197,7 +197,11 @@ function coreActions(c) {
 
     // ----------------------------------------------------------------- plan
     /** "+ Add" on a card. @param {string} id */
-    addToPlan: guard(async (id) => { set({ plan: await api.planAddStep({ opportunity_id: id }) }); await refreshOpps(); }),
+    addToPlan: guard(async (id) => {
+      const action = get().pendingActions[id];
+      set({ plan: await api.planAddStep({ opportunity_id: id, ...(action ? { action } : {}) }) });
+      await refreshOpps();
+    }),
     /** @param {number} stepId */
     removeStep: guard(async (stepId) => { set({ plan: await api.planRemoveStep({ step_id: stepId }) }); await refreshOpps(); }),
     /** Move a step up (-1) or down (+1) with the arrow buttons or the keyboard. @param {number} stepId @param {number} delta */

@@ -135,14 +135,14 @@ export function stepActions(c) {
       ops.patch({ pendingAction: action });
       await ops.loadDetail();
     }),
-    /** Archive format of the step (plan_update_step when it is in the plan, else kept for "Add to plan"). @param {string} format */
-    setArchiveFormat: guard(async (format) => {
-      const opp = cur().detail.opportunity;
-      const step = get().plan.steps.find((x) => x.opportunity === opp.id);
-      const base = step?.action ?? cur().pendingAction ?? opp.default_action;
+    /** Archive format (plan_update_step when the opportunity is in the plan, else kept for "Add"). @param {string} oppId @param {string} format */
+    setArchiveFormat: guard(async (oppId, format) => {
+      const opp = get().category.items.find((o) => o.id === oppId) ?? get().step?.detail?.opportunity;
+      const step = get().plan.steps.find((x) => x.opportunity === oppId);
+      const base = step?.action ?? get().pendingActions[oppId] ?? opp.default_action;
       const action = { ...base, format };
       if (step) set({ plan: await api.planUpdateStep({ step_id: step.id, action }) });
-      ops.patch({ pendingAction: action });
+      set({ pendingActions: { ...get().pendingActions, [oppId]: action } });
     }),
     /** "Add to plan" in the step header: honours an action chosen before adding. */
     addStepToPlan: guard(async () => {

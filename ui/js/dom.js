@@ -103,6 +103,7 @@ const ICONS = {
   down: 'M6 10l6 6 6-6',
   pause: 'M8 5v14M16 5v14',
   stop: 'M6 6h12v12H6z',
+  lock: 'M7 11V8a5 5 0 0 1 10 0v3M6 11h12v9H6z',
   undo: 'M9 7L4 12l5 5M4 12h11a5 5 0 0 1 0 10h-3',
 };
 

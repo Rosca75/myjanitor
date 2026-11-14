@@ -242,6 +242,7 @@ export function applyRich(m) {
     m.runs.push({ run_id, kind: 'apply', title, started: now - daysAgo * DAY, finished: now - daysAgo * DAY + 120e9, steps: specs.map((s) => s.title), items: entries.length, done, failed: entries.filter((e) => e.state === 'failed').length, undone: 0, bytes_saved: entries.filter((e) => e.state === 'done').reduce((a, e) => a + e.bytes_before, 0), undoable, undo_until: now - daysAgo * DAY + undoDays * DAY });
   };
   m.occupied = new Set();
+  m.runs = [];
   mk(2, 'Plan · 3 steps', [{ opp: 'det:temp_files', title: 'Temporary files', n: 40, failed: 2, skipped: 3, refused: 2 }, { opp: 'det:old_logs', title: 'Old log files', n: 30, failed: 0, skipped: 0 }, { opp: 'det:app_caches', title: 'App caches & junk', n: 12, failed: 0, skipped: 1, action: 'quarantine' }], 30);
   mk(9, 'Plan · 1 step', [{ opp: 'det:exact_duplicates', title: 'Exact duplicates', n: 45, failed: 0, skipped: 0 }], 30);
   mk(41, 'Plan · 1 step', [{ opp: 'det:old_installers', title: 'Old installers', n: 20, failed: 0, skipped: 0 }], 30);

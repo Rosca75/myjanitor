@@ -126,6 +126,13 @@ export const copy = {
     synced: 'In a synced folder: removing it also removes it in the cloud',
     online_only: 'Not stored on this PC',
     keeper: 'The copy that is kept',
+    encrypted: 'Encrypted: skipped, MyJanitor cannot read it safely',
+    labelled: 'Has a sensitivity label: unchecked by default',
+    lossy: 'Making this smaller loses quality',
+    duplicate: 'Has identical copies',
+    hardlinked: 'Shares its data with another file name',
+    in_use: 'In use by another program right now',
+    rebuildable: 'Can be recreated by the tool that made it',
   },
 
   plan: {
