@@ -131,8 +131,18 @@ fn held(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
         .filter(|e| e.state == JournalState::Done)
         // Undo records copy their source's `retained_at`; they hold nothing.
         .filter(|e| e.undo_of.is_none())
-        .filter(|e| e.retained_at.as_deref().is_some_and(|r| is_within(quarantine_dir, r)))
+        // F-05: only the slot the quarantine itself assigned to this entry is held (and
+        // purged); anything else that happens to lie below the folder (a backup folder
+        // pointed there by mistake) is the user's and never purged.
+        .filter(|e| e.retained_at.as_deref().is_some_and(|r| is_own_slot(quarantine_dir, e, r)))
         .collect()
+}
+
+fn is_own_slot(quarantine_dir: &Path, e: &JournalEntry, retained: &Path) -> bool {
+    let Some(name) = e.original.file_name() else { return false };
+    is_within(quarantine_dir, retained)
+        && mj_core::pathutil::path_key(&slot(quarantine_dir, e.run_id, e.id, name))
+            == mj_core::pathutil::path_key(retained)
 }
 
 /// Purge expired items. Returns bytes freed.

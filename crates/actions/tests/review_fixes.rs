@@ -430,3 +430,98 @@ fn f04_archive_keeps_sources_that_changed_while_archiving() {
     assert!(dir.join("new.txt").exists() && dir.join("a.txt").exists(), "the sources were kept");
     assert!(!f.root().join("proj.zip").exists(), "the stale archive was removed");
 }
+
+struct Halve;
+
+impl mj_core::Optimiser for Halve {
+    fn info(&self) -> mj_core::OptimiserInfo {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.info()
+    }
+    fn availability(&self, _: &[ExternalTool]) -> mj_core::Availability {
+        mj_core::Availability::Available
+    }
+    fn applies_to(&self, _: &mj_core::FileEntry) -> bool {
+        true
+    }
+    fn estimate(&self, e: &mj_core::FileEntry, p: &mj_core::ParamValues) -> mj_core::Result<mj_core::Estimate> {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.estimate(e, p)
+    }
+    fn optimise(&self, job: &mj_core::OptimiseJob<'_>) -> mj_core::Result<mj_core::OptimiseOutput> {
+        let d = std::fs::read(job.src).unwrap();
+        std::fs::write(job.dst, &d[..d.len() / 2]).unwrap();
+        Ok(mj_core::OptimiseOutput { bytes_before: d.len() as u64, ..mj_core::OptimiseOutput::default() })
+    }
+    fn analyse(&self, _: &mj_core::DetectContext<'_>) -> mj_core::Result<mj_core::DetectorOutput> {
+        Ok(mj_core::DetectorOutput::default())
+    }
+}
+
+fn optimise_to(originals: OriginalsPolicy) -> Action {
+    Action::Optimise {
+        optimiser: mj_core::OptimiserId::PngLossless,
+        params: mj_core::ParamValues::default(),
+        output: mj_core::OutputMode::Replace,
+        originals,
+        keep_if_not_smaller: true,
+    }
+}
+
+#[test]
+fn f05_backup_folder_is_guarded_like_a_destination() {
+    let mut f = Fixture::new("f05");
+    let protected_dir = f.t.mkdir("protected").unwrap();
+    f.guard =
+        Guard::new(vec![f.root()], ProtectedPaths::empty().with_app_dirs(&[f.qdir.clone(), protected_dir.clone()]));
+    let file = f.write("photo.bin", &[b'p'; 4000]);
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(Halve)];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    std::fs::create_dir_all(f.t.join("elsewhere")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&protected_dir, f.t.join("elsewhere/link")).unwrap();
+    let mut bad =
+        vec![protected_dir.join("x"), f.qdir.join("backups"), f.tmp.join("b"), f.root().join("photo.bin/sub")];
+    if cfg!(unix) {
+        bad.push(f.t.join("elsewhere/link/x"));
+    }
+    for folder in bad {
+        let before = snapshot(&f.root());
+        let item = f.item(&file, optimise_to(OriginalsPolicy::BackupFolder { folder: folder.clone() }));
+        let run = f.new_run(RunKind::Apply);
+        let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &opts()).unwrap();
+        assert_eq!((out.succeeded, out.skipped), (0, 1), "{}: {out:?}", folder.display());
+        assert_eq!(snapshot(&f.root()), before);
+    }
+    assert_eq!(std::fs::read_dir(&protected_dir).unwrap().count(), 0, "nothing written into the protected folder");
+    // A plain folder elsewhere is fine.
+    let item = f.item(&file, optimise_to(OriginalsPolicy::BackupFolder { folder: f.t.join("backup") }));
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &opts()).unwrap();
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    assert!(f.t.join("backup/photo.bin").exists());
+}
+
+#[test]
+fn f05_purge_never_deletes_something_that_is_not_a_quarantine_slot() {
+    let f = Fixture::new("f05-purge");
+    let file = f.write("photo.bin", &[b'p'; 4000]);
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(Halve)];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    // An entry whose retained copy lies below the quarantine folder but is not its slot
+    // (as a backup folder inside the quarantine produced before this fix).
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(
+        &f.ctx(run, services),
+        &[f.item(&file, optimise_to(OriginalsPolicy::BackupFolder { folder: f.t.join("bk") }))],
+        &opts(),
+    )
+    .unwrap();
+    assert_eq!(out.succeeded, 1);
+    let mut e = f.journal.entries_of(run).pop().unwrap();
+    let foreign = f.t.write("q/backups/photo.bin", &[b'p'; 4000]).unwrap();
+    e.retained_at = Some(foreign.clone());
+    f.journal.append(&e).unwrap();
+    let freed =
+        mj_actions::quarantine::purge(&f.journal, &f.qdir, mj_core::Timestamp::now().add_days(400), 30).unwrap();
+    assert_eq!(freed, 0);
+    assert!(foreign.exists(), "the backup below the quarantine folder survived the purge");
+}

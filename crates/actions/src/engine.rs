@@ -516,6 +516,38 @@ fn act_retain(
     })
 }
 
+/// F-05: a backup folder for originals is a destination like any other: guarded (not
+/// protected, not one of MyJanitor's folders, not inside the item, also through links),
+/// and never inside the quarantine or the scratch folder, whose contents are purged.
+fn check_retain_plan(ctx: &ExecContext<'_>, item: &ActionItem, plan: &RetainPlan) -> Result<()> {
+    let RetainPlan::Backup { dest, .. } = plan else { return Ok(()) };
+    let parent = dest.parent().ok_or_else(|| Error::InvalidInput(format!("no folder: {}", dest.display())))?;
+    ctx.guard.check_destination(parent, &item.path)?;
+    for own in [ctx.quarantine_dir, ctx.temp_dir] {
+        if mj_core::pathutil::is_within(own, dest) {
+            return Err(Error::Protected(dest.clone()));
+        }
+        if let (Ok(a), Some(b)) = (std::fs::canonicalize(own), existing_canonical(parent)) {
+            if mj_core::pathutil::is_within(&a, &b) {
+                return Err(Error::Protected(dest.clone()));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The canonical form of `p`, resolved through its nearest existing ancestor.
+fn existing_canonical(p: &Path) -> Option<PathBuf> {
+    let mut cur = Some(p);
+    while let Some(c) = cur {
+        if let Ok(canon) = std::fs::canonicalize(c) {
+            return Some(canon.join(p.strip_prefix(c).unwrap_or(Path::new(""))));
+        }
+        cur = c.parent();
+    }
+    None
+}
+
 /// True for a folder item the scan saw empty.
 fn is_empty_folder_item(item: &ActionItem) -> bool {
     item.target == TargetKind::Folder && item.expected_tree.is_some_and(|t| t.entries == 0)
@@ -790,7 +822,9 @@ fn optimise(
     }
     let replace = matches!(output, OutputMode::Replace);
     let plan = if replace {
-        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root) {
+        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root)
+            .and_then(|p| check_retain_plan(ctx, item, &p).map(|_| p))
+        {
             Ok(p) => Some(p),
             Err(err) => return skip(ctx, e, err),
         }
@@ -974,7 +1008,9 @@ fn archive(
     let plan = if keep_sources {
         None
     } else {
-        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root) {
+        match retain::plan(originals, opts.trash_route, ctx.quarantine_dir, &e, &item.path, &item.root)
+            .and_then(|p| check_retain_plan(ctx, item, &p).map(|_| p))
+        {
             Ok(p) => Some(p),
             Err(err) => return skip(ctx, e, err),
         }
