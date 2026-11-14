@@ -610,6 +610,7 @@ fn f09_cross_volume_move_that_cannot_delete_all_of_its_source_keeps_the_copy_and
     assert!(locked.exists() && !src.join("a.txt").exists());
 }
 
+#[cfg(unix)]
 #[test]
 fn f09_failed_cross_volume_copy_leaves_the_source_untouched_and_no_partial_copy() {
     let f = Fixture::new("f09-copy");
@@ -859,4 +860,18 @@ fn f18_restore_refuses_an_item_whose_content_is_not_what_was_moved() {
     let undo = f.undo_run(run);
     assert_eq!(undo.failed, 1, "{undo:?}");
     assert!(!other.exists());
+}
+
+#[test]
+fn f20_dehydrate_that_freed_nothing_saves_nothing() {
+    let mut f = Fixture::new("f20");
+    let file = f.write("OneDrive/a.bin", &[1u8; 5000]);
+    let (_, out) = f.apply(&[f.item(&file, Action::Dehydrate)], &opts());
+    assert_eq!((out.succeeded, out.bytes_saved), (1, 5000), "freed: online-only afterwards");
+    f.platform.online.lock().unwrap().clear();
+    // A provider that accepted the request but kept the content local.
+    f.platform.ignore_dehydrate = true;
+    let (run, out) = f.apply(&[f.item(&file, Action::Dehydrate)], &opts());
+    assert_eq!(out.bytes_saved, 0, "{out:?}");
+    assert_eq!(f.journal.entries_of(run)[0].bytes_after, 5000, "never journalled as 0 bytes left");
 }

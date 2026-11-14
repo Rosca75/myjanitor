@@ -454,7 +454,7 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
         Action::Move { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, true, undo_until),
         Action::Copy { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, false, undo_until),
         Action::Hardlink | Action::Reflink => link_replace(ctx, item, e, undo_until),
-        Action::Dehydrate => simple_platform(ctx, item, e, undo_until, |p, path| p.dehydrate(path), 0),
+        Action::Dehydrate => dehydrate(ctx, item, e, undo_until),
         Action::FsCompress { algorithm } => fs_compress(ctx, item, e, *algorithm, undo_until),
         Action::FsDecompress => fs_decompress(ctx, item, e, undo_until),
         Action::Optimise { optimiser, params, output, originals, .. } => {
@@ -800,6 +800,24 @@ fn simple_platform(
         e.reversible = undo_until.is_some();
         e.undo_deadline = undo_until;
         e.bytes_after = bytes_after;
+        Ok(())
+    })
+}
+
+/// F-20: a dehydration frees space only once the content is really no longer local; the
+/// fresh attributes say so (the platform already refuses when nothing was freed).
+fn dehydrate(
+    ctx: &ExecContext<'_>,
+    item: &ActionItem,
+    e: JournalEntry,
+    undo_until: Option<Timestamp>,
+) -> Result<ItemOutcome> {
+    run_acted(ctx, item, e, |e| {
+        ctx.platform.dehydrate(&item.path)?;
+        let online = ctx.platform.metadata(&item.path).map(|m| m.is_online_only()).unwrap_or(false);
+        e.reversible = undo_until.is_some();
+        e.undo_deadline = undo_until;
+        e.bytes_after = if online { 0 } else { e.bytes_before };
         Ok(())
     })
 }

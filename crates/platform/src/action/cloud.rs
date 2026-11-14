@@ -81,6 +81,25 @@ pub fn hydrate_attributes(current: u32) -> u32 {
     current & ATTR_SETTABLE & !ATTR_UNPINNED
 }
 
+/// Attributes that mean the content is not on this disk (`OFFLINE`,
+/// `RECALL_ON_OPEN`, `RECALL_ON_DATA_ACCESS`).
+pub const ATTR_NOT_LOCAL: u32 = 0x1000 | 0x0004_0000 | 0x0040_0000;
+
+/// F-20: whether a dehydration really happened: `CfDehydratePlaceholder` succeeded
+/// (`hr >= 0`), or the attributes re-read afterwards say the content is no longer local
+/// (the sync engine acted on the unpinned attribute). Otherwise the item is reported as
+/// skipped (nothing freed yet) instead of `done` with 0 bytes left.
+pub fn dehydrate_verdict(path: &Path, hr: Option<i32>, attrs_after: Option<u32>) -> Result<()> {
+    if hr.is_some_and(|h| h >= 0) || attrs_after.is_some_and(|a| a & ATTR_NOT_LOCAL != 0) {
+        return Ok(());
+    }
+    let why = match hr {
+        Some(h) => format!("Windows refused (HRESULT 0x{:08X})", h as u32),
+        None => "the file could not be opened to free it".to_string(),
+    };
+    Err(Error::Conflict(format!("skipped: no space was freed for {}: {why}; nothing was changed", path.display())))
+}
+
 /// Inputs of sync-root detection, explicit so tests never read the real environment.
 #[derive(Debug, Clone, Default)]
 pub struct SyncEnv {
@@ -422,10 +441,16 @@ mod win {
         let attrs = require_placeholder(path)?;
         // The documented user-level mechanism: unpinned files are dehydrated by the sync engine.
         set_attrs(path, dehydrate_attributes(attrs))?;
-        if let Ok(h) = open_no_follow(path, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES) {
+        let hr = open_no_follow(path, FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES).ok().map(|h| {
             // SAFETY: valid handle; offset 0 and length -1 (to the end) as documented; synchronous.
-            let _hr = unsafe { CfDehydratePlaceholder(h.0, 0, -1, 0, std::ptr::null_mut()) };
-            // A failure here is not fatal: the unpinned attribute makes the provider dehydrate.
+            unsafe { CfDehydratePlaceholder(h.0, 0, -1, 0, std::ptr::null_mut()) }
+        });
+        // F-20: check the HRESULT and re-read the attributes; when nothing was freed, put
+        // the attributes back and report a skip (never `done` with a saving that is not real).
+        let after = tag_info(path).ok().map(|(a, _)| a);
+        if let Err(e) = super::dehydrate_verdict(path, hr, after) {
+            let _ = set_attrs(path, attrs & super::ATTR_SETTABLE);
+            return Err(e);
         }
         Ok(())
     }
@@ -592,6 +617,16 @@ mod win {
 mod tests {
     use super::*;
     use mj_core::testutil::TempDir;
+
+    #[test]
+    fn f20_dehydrate_reports_success_only_when_space_was_freed() {
+        let p = Path::new("x");
+        assert!(dehydrate_verdict(p, Some(0), None).is_ok());
+        assert!(dehydrate_verdict(p, Some(-2_147_024_891), Some(0x0040_0000)).is_ok(), "the provider freed it");
+        let e = dehydrate_verdict(p, Some(-2_147_024_891), Some(0x20)).unwrap_err();
+        assert!(e.to_string().contains("0x80070005"), "{e}");
+        assert!(dehydrate_verdict(p, None, None).is_err());
+    }
 
     #[test]
     fn attribute_maths() {

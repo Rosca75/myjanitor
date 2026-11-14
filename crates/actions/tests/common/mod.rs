@@ -31,6 +31,8 @@ pub struct TestPlatform {
     pub compressed: Mutex<BTreeSet<PathBuf>>,
     /// Simulate a copy-on-write filesystem (reflink = verified copy).
     pub fake_reflink: bool,
+    /// Simulate a sync provider that accepts "free up space" but frees nothing.
+    pub ignore_dehydrate: bool,
 }
 
 impl TestPlatform {
@@ -43,6 +45,7 @@ impl TestPlatform {
             online: Mutex::new(BTreeSet::new()),
             compressed: Mutex::new(BTreeSet::new()),
             fake_reflink: true,
+            ignore_dehydrate: false,
         }
     }
 }
@@ -94,6 +97,9 @@ impl ActionPlatform for TestPlatform {
         }
     }
     fn dehydrate(&self, path: &Path) -> Result<()> {
+        if self.ignore_dehydrate {
+            return Ok(());
+        }
         self.online.lock().unwrap().insert(path.to_path_buf());
         Ok(())
     }
