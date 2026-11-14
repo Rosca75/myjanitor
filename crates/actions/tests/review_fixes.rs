@@ -754,3 +754,84 @@ fn f15_automatic_purge_honours_each_steps_retention() {
     mj_actions::quarantine::purge_expired(&f.journal, &f.qdir, mj_core::Timestamp::now().add_days(91), 30).unwrap();
     assert_eq!(mj_actions::quarantine::summary(&f.journal, &f.qdir).items, 0);
 }
+
+/// Simulates the race of F-16: a file appears at the destination (a sync client, another
+/// instance) just before the archiver's `create_new`, which then fails.
+struct LosesTheRace;
+
+impl Archiver for LosesTheRace {
+    fn formats(&self, _: &[ExternalTool]) -> Vec<ArchiveFormat> {
+        vec![ArchiveFormat::Zip]
+    }
+    fn create(&self, job: &ArchiveJob<'_>) -> mj_core::Result<u64> {
+        std::fs::write(job.dst, b"someone else's file").unwrap();
+        Err(mj_core::Error::io(job.dst, std::io::Error::from(std::io::ErrorKind::AlreadyExists)))
+    }
+    fn verify(&self, _: &Path, _: &[PathBuf], _: &Path, _: &mj_core::CancelToken) -> mj_core::Result<()> {
+        Ok(())
+    }
+}
+
+/// The optimiser counterpart: the temp output name is taken just before it writes.
+struct TempTaken;
+
+impl mj_core::Optimiser for TempTaken {
+    fn info(&self) -> mj_core::OptimiserInfo {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.info()
+    }
+    fn availability(&self, _: &[ExternalTool]) -> mj_core::Availability {
+        mj_core::Availability::Available
+    }
+    fn applies_to(&self, _: &mj_core::FileEntry) -> bool {
+        true
+    }
+    fn estimate(&self, e: &mj_core::FileEntry, p: &mj_core::ParamValues) -> mj_core::Result<mj_core::Estimate> {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.estimate(e, p)
+    }
+    fn optimise(&self, job: &mj_core::OptimiseJob<'_>) -> mj_core::Result<mj_core::OptimiseOutput> {
+        std::fs::write(job.dst, b"someone else's file").unwrap();
+        Err(mj_core::Error::io(job.dst, std::io::Error::from(std::io::ErrorKind::AlreadyExists)))
+    }
+    fn analyse(&self, _: &mj_core::DetectContext<'_>) -> mj_core::Result<mj_core::DetectorOutput> {
+        Ok(mj_core::DetectorOutput::default())
+    }
+}
+
+#[test]
+fn f16_cleanup_never_deletes_a_destination_this_run_did_not_create() {
+    let f = Fixture::new("f16");
+    f.write("proj/a.txt", b"a");
+    let archiver = LosesTheRace;
+    let services = Services { optimisers: &[], archiver: Some(&archiver), tools: &[] };
+    let item = f.item(
+        &f.root().join("proj"),
+        Action::Archive {
+            format: ArchiveFormat::Zip,
+            level: 6,
+            dest: None,
+            originals: OriginalsPolicy::Quarantine,
+            keep_sources: false,
+        },
+    );
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &opts()).unwrap();
+    assert_eq!(out.succeeded, 0);
+    assert_eq!(std::fs::read(f.root().join("proj.zip")).unwrap(), b"someone else's file");
+    let file = f.write("doc.bin", &[1u8; 100]);
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(TempTaken)];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(
+        &f.ctx(run, services),
+        &[f.item(&file, optimise_to(OriginalsPolicy::Quarantine))],
+        &opts(),
+    )
+    .unwrap();
+    assert_eq!(out.succeeded, 0);
+    let foreign: Vec<_> = std::fs::read_dir(f.root())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".mj-"))
+        .collect();
+    assert_eq!(foreign.len(), 1, "the file that took the temp name is still there");
+}

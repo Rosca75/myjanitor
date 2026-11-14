@@ -893,6 +893,10 @@ fn optimise(
             cancel: ctx.cancel,
             progress: &NullProgress,
         };
+        // F-16: the temp name must still be free right before the optimiser runs.
+        if fsops::exists(&temp) {
+            return Err(Error::Conflict(format!("{} exists; nothing was overwritten", temp.display())));
+        }
         let res = opt.optimise(&job);
         drop(scratch);
         let cleanup = || {
@@ -900,6 +904,9 @@ fn optimise(
         };
         let out = match res {
             Ok(o) => o,
+            // A `create_new` / no-replace refusal means the temp name was taken by someone
+            // else between the check and the write: that file is not ours to delete.
+            Err(err @ (Error::Io { kind: "already_exists", .. } | Error::Conflict(_))) => return Err(err),
             Err(err) => {
                 cleanup();
                 return Err(err);
@@ -1086,9 +1093,13 @@ fn archive(
             cancel: ctx.cancel,
             progress: &NullProgress,
         };
+        // F-16: a failed `create` never wrote `dst` (the archiver builds elsewhere and moves
+        // in without replacing); if it failed because `dst` appeared meanwhile, that file is
+        // someone else's and is left alone. Only an archive this run created is removed.
+        let size = archiver.create(&job)?;
         let size = archiver
-            .create(&job)
-            .and_then(|s| archiver.verify(&dst, &sources, &base, ctx.cancel).map(|_| s))
+            .verify(&dst, &sources, &base, ctx.cancel)
+            .map(|_| size)
             // F-04: the sources go only if they still are what was scanned and archived.
             .and_then(|s| if plan.is_some() { recheck_tree(ctx, item).map(|_| s) } else { Ok(s) });
         let size = match size {
