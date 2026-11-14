@@ -24,6 +24,22 @@ use mj_platform::ScanPlatform;
 
 use crate::protected::ProtectedPaths;
 
+/// Depth limit of [`Guard::check_tree`] (hostile trees).
+const MAX_TREE_DEPTH: usize = 4096;
+
+/// What [`Guard::check_tree`] saw below a folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TreeWalk {
+    /// Entries below the folder (files, folders, links, others), the folder excluded.
+    pub entries: u64,
+    /// Total logical size of the regular files.
+    pub bytes: u64,
+    /// Newest modification time of the folder and everything below it.
+    pub newest_mtime: mj_core::Timestamp,
+    /// Online-only (cloud placeholder) files below the folder.
+    pub online_only: u64,
+}
+
 /// Decides whether a path may be changed.
 #[derive(Debug, Clone)]
 pub struct Guard {
@@ -187,6 +203,63 @@ impl Guard {
         Ok(())
     }
 
+    /// F-01: everything below a folder item, walked without following links. Refuses
+    /// (`protected`, naming the first hit) when a protected path lies below the item
+    /// (a protected folder or exact entry, a protected pattern such as `.git` or `.ssh`,
+    /// one of MyJanitor's own folders), and (`link_not_followed`) when another volume is
+    /// mounted inside it (removing the folder would empty that volume too). A walk that
+    /// cannot read part of the tree refuses as well: what was not seen cannot be vouched
+    /// for. `owned_tree` is set for regenerable artefact folders a detector owns as a whole
+    /// (`node_modules`, build output, caches): version-control metadata inside them may
+    /// go with them; every other rule still applies.
+    pub fn check_tree(&self, path: &Path, platform: &dyn ScanPlatform, owned_tree: bool) -> Result<TreeWalk> {
+        if self.protected.has_protected_below(path) {
+            return Err(Error::Protected(path.to_path_buf()));
+        }
+        let top = platform.metadata(path)?;
+        let volume = top.file_id.map(|f| f.volume);
+        let mut walk = TreeWalk { newest_mtime: top.modified.unwrap_or_default(), ..TreeWalk::default() };
+        let mut stack = vec![(path.to_path_buf(), 0usize)];
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > MAX_TREE_DEPTH {
+                return Err(Error::InvalidInput(format!("folder nesting too deep at {}", dir.display())));
+            }
+            for item in platform.read_dir(&dir)? {
+                let md = platform.metadata(&item.path)?;
+                let hit = if owned_tree {
+                    self.protected.is_protected_in_owned_tree(&item.path)
+                } else {
+                    self.protected.is_protected(&item.path)
+                };
+                if hit {
+                    return Err(Error::Protected(item.path.clone()));
+                }
+                walk.entries += 1;
+                if let Some(m) = md.modified {
+                    walk.newest_mtime = walk.newest_mtime.max(m);
+                }
+                match md.kind {
+                    EntryKind::File => {
+                        walk.bytes = walk.bytes.saturating_add(md.size);
+                        if md.is_online_only() {
+                            walk.online_only += 1;
+                        }
+                    }
+                    EntryKind::Dir => {
+                        if let (Some(v), Some(have)) = (volume, md.file_id.map(|f| f.volume)) {
+                            if v != have {
+                                return Err(Error::LinkNotFollowed(item.path.clone()));
+                            }
+                        }
+                        stack.push((item.path.clone(), depth + 1));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(walk)
+    }
+
     /// A destination folder for move / copy / backup: absolute, no `..`, not protected
     /// (lexically and in its canonical form, as far as it exists), and not inside the item.
     pub fn check_destination(&self, dest: &Path, item: &Path) -> Result<()> {
@@ -265,15 +338,8 @@ mod tests {
         assert_eq!(g.check(&f, &p, false).unwrap_err().code(), "protected");
         let f2 = t.write("in/b.txt", b"abc").unwrap();
         let md = p.metadata(&f2).unwrap();
-        let mut item = ActionItem {
-            path: f2.clone(),
-            target: TargetKind::File,
-            action: Action::Trash,
-            link_source: None,
-            root: t.join("in"),
-            expected: md.stamp(),
-            expected_id: md.file_id,
-        };
+        let mut item = ActionItem::new(f2.clone(), TargetKind::File, Action::Trash, t.join("in"), md.stamp());
+        item.expected_id = md.file_id;
         assert!(g.check_item(&item, &p, false).is_ok());
         std::fs::write(&f2, b"abcd").unwrap();
         assert_eq!(g.check_item(&item, &p, false).unwrap_err().code(), "changed");

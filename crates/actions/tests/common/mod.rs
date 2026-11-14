@@ -192,15 +192,13 @@ impl Fixture {
     pub fn item(&self, path: &Path, action: Action) -> ActionItem {
         let md = self.platform.metadata(path).unwrap();
         let target = if md.is_dir() { TargetKind::Folder } else { TargetKind::File };
-        ActionItem {
-            path: path.to_path_buf(),
+        ActionItem::new(
+            path.to_path_buf(),
             target,
             action,
-            link_source: None,
-            root: self.root(),
-            expected: if md.is_dir() { mj_core::FileStamp { size: 0, mtime: Timestamp(0) } } else { md.stamp() },
-            expected_id: None,
-        }
+            self.root(),
+            if md.is_dir() { mj_core::FileStamp { size: 0, mtime: Timestamp(0) } } else { md.stamp() },
+        )
     }
 
     /// Apply, then undo every undoable entry of the run as its own undo run.

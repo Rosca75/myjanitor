@@ -122,15 +122,13 @@ pub fn optimise_item(
     output: OutputMode,
     originals: OriginalsPolicy,
 ) -> ActionItem {
-    ActionItem {
-        path: path.to_path_buf(),
-        target: TargetKind::File,
-        action: Action::Optimise { optimiser, params, output, originals, keep_if_not_smaller: true },
-        link_source: None,
-        root: root.to_path_buf(),
+    ActionItem::new(
+        path.to_path_buf(),
+        TargetKind::File,
+        Action::Optimise { optimiser, params, output, originals, keep_if_not_smaller: true },
+        root.to_path_buf(),
         expected,
-        expected_id: None,
-    }
+    )
 }
 
 /// Light-copy output mode with the default suffix.

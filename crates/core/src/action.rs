@@ -222,6 +222,23 @@ pub struct ActionItem {
     /// with the same size and mtime is still detected as changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_id: Option<crate::entry::FileId>,
+    /// F-01: the folder is a regenerable artefact its detector owns as a whole
+    /// (`node_modules`, build output, a cache): version-control metadata inside it may go
+    /// with it. Every other protected path below a folder makes the action engine refuse it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub owned_tree: bool,
+}
+
+impl ActionItem {
+    /// An item with no link source, no scan file id and no optional checks; callers set
+    /// the optional fields they know.
+    pub fn new(path: PathBuf, target: TargetKind, action: Action, root: PathBuf, expected: FileStamp) -> Self {
+        ActionItem { path, target, action, link_source: None, root, expected, expected_id: None, owned_tree: false }
+    }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[cfg(test)]

@@ -154,19 +154,20 @@ impl Engine {
                 *warned.entry(w.clone()).or_default() += 1;
             }
             let entry = index.get(&c.path);
-            work.items.push(ActionItem {
-                path: c.path.clone(),
-                target: c.target,
-                action: item_action,
-                link_source,
-                root: root.clone(),
-                expected: if c.target == TargetKind::Folder {
-                    FileStamp { size: 0, mtime: Timestamp(0) }
-                } else {
-                    c.stamp
-                },
-                expected_id: entry.and_then(|e| e.file_id),
-            });
+            let mut item = ActionItem::new(
+                c.path.clone(),
+                c.target,
+                item_action,
+                root.clone(),
+                if c.target == TargetKind::Folder { FileStamp { size: 0, mtime: Timestamp(0) } } else { c.stamp },
+            );
+            item.link_source = link_source;
+            item.expected_id = entry.and_then(|e| e.file_id);
+            // F-01: only a regenerable artefact folder (dev artefacts, caches) owns the
+            // version-control metadata inside it.
+            item.owned_tree =
+                c.target == TargetKind::Folder && crate::results::candidate_safety(rec, c) == SafetyClass::Rebuildable;
+            work.items.push(item);
             work.sizes.push((
                 if c.badges.contains(Badges::ONLINE_ONLY) { 0 } else { c.size },
                 entry.and_then(|e| e.file_id.zip(e.links)),

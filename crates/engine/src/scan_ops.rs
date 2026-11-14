@@ -356,23 +356,27 @@ impl Engine {
             Ok(Err(e)) => return Ok(disabled_record(self, card, format!("The analysis failed: {e}"))),
             Err(_) => return Ok(disabled_record(self, card, "The analysis failed (internal error)".into())),
         };
-        let badges = self.badger(index, &output, cancel);
+        let owned = card.safety == mj_core::SafetyClass::Rebuildable;
+        let badges = self.badger(index, &output, owned, cancel);
         Ok(build_record(self, card, output, visible_params(&params), &|c| {
             badges.get(&c.path).copied().unwrap_or_default()
         }))
     }
 
-    /// Path and content badges for every candidate of an output.
+    /// Path and content badges for every candidate of an output. A folder candidate is
+    /// badged `protected` when the scanned tree below it holds a protected path (F-01);
+    /// `owned` (a regenerable artefact card) exempts version-control metadata only.
     pub(crate) fn badger(
         &self,
         index: &FileIndex,
         out: &DetectorOutput,
+        owned: bool,
         cancel: &CancelToken,
     ) -> HashMap<PathBuf, Badges> {
         let settings = lock(&self.settings).clone();
         let protected =
             mj_actions::ProtectedPaths::new(&settings.safety.protected_paths).with_app_dirs(&self.cfg.app_dirs());
-        let inspector = mj_actions::SafetyInspector::new(self.platform(), protected);
+        let inspector = mj_actions::SafetyInspector::new(self.platform(), protected.clone());
         let mut map: HashMap<PathBuf, Badges> = HashMap::new();
         let mut to_read = Vec::new();
         for c in &out.candidates {
@@ -382,6 +386,9 @@ impl Engine {
             };
             if inspector.sync_root_of(&c.path).is_some() {
                 b |= Badges::SYNCED;
+            }
+            if c.target == mj_core::TargetKind::Folder && folder_holds_protected(index, &protected, &c.path, owned) {
+                b |= Badges::PROTECTED;
             }
             let ext = mj_core::pathutil::extension_lower(&c.path);
             if c.target == mj_core::TargetKind::File
@@ -521,5 +528,63 @@ impl Engine {
     /// Current scan status.
     pub fn scan_status(&self) -> Result<ScanStatus> {
         Ok(lock(&self.scan).status.clone())
+    }
+}
+
+/// True when the scanned tree below folder `path` holds a protected entry (F-01). The
+/// action engine walks the real tree again before acting; this only badges the row.
+fn folder_holds_protected(
+    index: &FileIndex,
+    protected: &mj_actions::ProtectedPaths,
+    path: &std::path::Path,
+    owned: bool,
+) -> bool {
+    if protected.has_protected_below(path) {
+        return true;
+    }
+    let Some(i) = index.position(path) else { return false };
+    index.subtree(i).any(|j| {
+        let p = &index.entry(j).path;
+        if owned {
+            protected.is_protected_in_owned_tree(p)
+        } else {
+            protected.is_protected(p)
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::folder_holds_protected;
+    use mj_core::{EntryKind, FileEntry, FileIndex, ScanStats, Timestamp};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn f01_folder_badge_sees_protected_entries_below() {
+        let e = |p: &str, k| FileEntry::new(p, k, 1);
+        let ix = FileIndex::new(
+            vec![PathBuf::from("/r")],
+            vec![
+                e("/r", EntryKind::Dir),
+                e("/r/proj", EntryKind::Dir),
+                e("/r/proj/.git", EntryKind::Dir),
+                e("/r/proj/.git/config", EntryKind::File),
+                e("/r/proj/keep", EntryKind::Dir),
+                e("/r/proj/keep/a.pdf", EntryKind::File),
+                e("/r/plain", EntryKind::Dir),
+                e("/r/plain/a.txt", EntryKind::File),
+                e("/r/node_modules", EntryKind::Dir),
+                e("/r/node_modules/x/.git/HEAD", EntryKind::File),
+            ],
+            ScanStats::default(),
+            Timestamp(0),
+        );
+        let p = mj_actions::ProtectedPaths::new(&[]);
+        assert!(folder_holds_protected(&ix, &p, Path::new("/r/proj"), false), ".git below");
+        assert!(!folder_holds_protected(&ix, &p, Path::new("/r/plain"), false));
+        assert!(folder_holds_protected(&ix, &p, Path::new("/r/node_modules"), false));
+        assert!(!folder_holds_protected(&ix, &p, Path::new("/r/node_modules"), true), "owned artefact");
+        let user = mj_actions::ProtectedPaths::empty().with_user_folders(&[PathBuf::from("/r/plain/sub")]);
+        assert!(folder_holds_protected(&ix, &user, Path::new("/r/plain"), false), "lexical rule");
     }
 }

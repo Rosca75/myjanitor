@@ -271,6 +271,12 @@ fn preflight(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem) -> Re
     if matches!(item.action, Action::None) {
         return Err(Error::InvalidInput("this step has no action".into()));
     }
+    // F-01: a folder is acted on as a whole, so everything below it must be acceptable
+    // too (protected paths, `.git`, `.ssh`, MyJanitor's own folders, mounted volumes).
+    // A copy changes nothing at the source and is exempt.
+    if md.kind == EntryKind::Dir && !matches!(item.action, Action::Copy { .. }) {
+        ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
+    }
     if requires_confirmation(&item.action) && !opts.confirmed {
         return Err(Error::ConfirmationRequired(format!("{} needs confirmation", item.action.kind().label_text())));
     }
