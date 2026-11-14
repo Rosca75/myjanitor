@@ -404,10 +404,12 @@ mod tests {
             keep_sources: false,
         };
         assert!(err(archive_delete).to_string().contains("unattended"));
+        // F-07: a hard link needs confirmation, so it never runs unattended.
+        assert!(err(Action::Hardlink).to_string().contains("unattended"));
         for ok in [
             Action::Trash,
             Action::Quarantine { purge_after_days: 30 },
-            Action::Hardlink,
+            Action::Reflink,
             Action::Move { dest: abs("backup"), keep_structure: true },
         ] {
             assert!(save(&e, sched(&format!("ok {ok:?}"), vec![step("det:a", ok)])).is_ok());

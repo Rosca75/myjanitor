@@ -117,6 +117,8 @@ pub fn requires_confirmation(action: &Action) -> bool {
     matches!(
         action,
         Action::PermanentDelete
+            // F-07: a hard link shares content with its keeper from then on.
+            | Action::Hardlink
             | Action::Optimise { originals: OriginalsPolicy::Delete, output: OutputMode::Replace, .. }
             | Action::Archive { originals: OriginalsPolicy::Delete, keep_sources: false, .. }
     )
@@ -384,6 +386,7 @@ impl KindLabel for ActionKind {
             ActionKind::PermanentDelete => "Permanent delete",
             ActionKind::Optimise => "Deleting the originals of an optimisation",
             ActionKind::Archive => "Deleting the archived sources",
+            ActionKind::Hardlink => "Replacing duplicates with hard links",
             _ => "This action",
         }
     }

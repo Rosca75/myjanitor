@@ -319,7 +319,7 @@ impl Engine {
         let files = e.files;
         let permanent = step.safety == SafetyClass::Permanent
             || matches!(step.action, Action::PermanentDelete)
-            || (!step.lossy && !step.action.safety(false).is_undoable());
+            || (!step.lossy && !matches!(step.action, Action::Hardlink) && !step.action.safety(false).is_undoable());
         let roots = self.platform().sync_roots().ok();
         let mut synced_count = 0u64;
         let mut provider = String::new();
@@ -362,7 +362,19 @@ impl Engine {
             Vec::new()
         };
         let noun = if files == 1 { "file" } else { "files" };
-        let (title, body, ack, label) = if permanent {
+        let hardlink = matches!(step.action, Action::Hardlink);
+        let (title, body, ack, label) = if hardlink {
+            // F-07: why a hard link needs a confirmation, in the user's words.
+            (
+                format!("Replace {files} duplicate {noun} with hard links?"),
+                "Each duplicate becomes a second name of the copy that is kept: they share one content from now on. \
+                 Editing either one changes both, and the duplicate's own content cannot be brought back after that \
+                 (Restore refuses once they differ). The duplicate's owner and permissions become the kept copy's."
+                    .to_string(),
+                "I understand linked files share every later change".to_string(),
+                format!("Link {files} {noun}"),
+            )
+        } else if permanent {
             (
                 format!("Delete {files} {noun} permanently?"),
                 "This cannot be undone: the files do not go to the Recycle Bin or the quarantine.".to_string(),
@@ -390,7 +402,12 @@ impl Engine {
             default_originals: settings.general.default_originals.clone(),
             synced: (synced_count > 0).then_some(SyncedWarning { count: synced_count, provider, can_online_only }),
             acknowledge_text: ack,
-            undo_text: if permanent {
+            undo_text: if hardlink {
+                format!(
+                    "History → Restore separates the files again for {} days, as long as neither was edited.",
+                    settings.general.undo_days
+                )
+            } else if permanent {
                 "Every change is logged in History, but permanently deleted files cannot be restored.".into()
             } else {
                 format!(

@@ -184,7 +184,12 @@ impl Action {
             Action::Copy { .. } | Action::Dehydrate | Action::FsCompress { .. } | Action::FsDecompress => {
                 SafetyClass::Reversible
             }
-            Action::Hardlink | Action::Reflink => SafetyClass::Reversible,
+            // F-07: after linking, the duplicate and its keeper are one file: an in-place
+            // edit through either name changes both, and the duplicate's own content can then
+            // never be restored. That is an opt-in with confirmation, never unattended.
+            Action::Hardlink => SafetyClass::LossyOptIn,
+            // A reflink is a copy-on-write clone: an edit of either copy leaves the other.
+            Action::Reflink => SafetyClass::Reversible,
             Action::PermanentDelete => SafetyClass::Permanent,
             Action::Optimise { output: OutputMode::LightCopy { .. }, .. } => SafetyClass::LightCopy,
             Action::Optimise { originals, .. } | Action::Archive { originals, .. } => {

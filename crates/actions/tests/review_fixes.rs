@@ -554,3 +554,30 @@ fn f06_undo_never_discards_a_same_size_edit_of_the_output() {
         assert_eq!(std::fs::read(&file).unwrap(), vec![b'a'; 4000]);
     }
 }
+
+#[test]
+fn f07_hardlink_needs_confirmation_and_undo_after_an_edit_refuses_without_damage() {
+    assert_eq!(Action::Hardlink.safety(false), mj_core::SafetyClass::LossyOptIn);
+    assert_eq!(Action::Reflink.safety(false), mj_core::SafetyClass::Reversible);
+    let f = Fixture::new("f07");
+    let keeper = f.write("a/keep.txt", b"version 1 of the text");
+    let dup = f.write("b/copy.txt", b"version 1 of the text");
+    let mut item = f.item(&dup, Action::Hardlink);
+    item.link_source = Some(keeper.clone());
+    // Unconfirmed (a schedule, a caller that skipped the dialog): refused.
+    let (_, out) = f.apply(std::slice::from_ref(&item), &opts());
+    assert_eq!(out.skipped, 1);
+    assert_eq!(out.errors[0].error.as_ref().unwrap().code, "confirmation_required");
+    // Confirmed: linked; an untouched pair separates again on undo.
+    let (run, out) = f.apply(std::slice::from_ref(&item), &confirmed());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    // Documented behaviour: after an edit through either name both names change and the
+    // undo refuses (conflict) without touching either file.
+    std::fs::write(&keeper, b"version 2, edited later").unwrap();
+    assert_eq!(std::fs::read(&dup).unwrap(), b"version 2, edited later");
+    let undo = f.undo_run(run);
+    assert_eq!(undo.failed, 1);
+    assert_eq!(undo.errors[0].error.as_ref().unwrap().code, "conflict");
+    assert_eq!(std::fs::read(&keeper).unwrap(), b"version 2, edited later");
+    assert_eq!(std::fs::read(&dup).unwrap(), b"version 2, edited later");
+}

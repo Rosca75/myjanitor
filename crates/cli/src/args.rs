@@ -56,7 +56,8 @@ const JSON: Opt = flag("json", None, "Print the engine's JSON instead of text");
 const YES: Opt =
     flag("yes", Some('y'), "Do not ask for the typed confirmation (lossy and permanent steps still need their flags)");
 const ORIGINALS: Opt = val("originals", None, "POLICY", "What happens to originals: trash (default) or quarantine");
-const LOSSY: Opt = flag("confirm-lossy", None, "Confirm the plan's lossy steps (they re-encode files)");
+const LOSSY: Opt =
+    flag("confirm-lossy", None, "Confirm the plan's lossy steps (they re-encode files, or hard-link duplicates)");
 const PERM: Opt = flag("confirm-permanent", None, "Confirm the plan's permanent steps (they cannot be undone)");
 const EXCLUDE: Opt = multi("exclude", Some('e'), "GLOB", "Skip paths matching GLOB (repeatable)");
 const NOCACHE: Opt = flag("no-cache", None, "Do not use the scan cache for this scan");

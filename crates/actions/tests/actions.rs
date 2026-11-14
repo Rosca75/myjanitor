@@ -257,7 +257,8 @@ fn hardlink_and_reflink_round_trip() {
         let before = snapshot(&f.root());
         let mut item = f.item(&dup, action.clone());
         item.link_source = Some(keeper.clone());
-        let (run, out) = f.apply(&[item], &opts());
+        // Hard links need the user's confirmation (F-07); reflinks do not.
+        let (run, out) = f.apply(&[item], &if action == Action::Hardlink { confirmed() } else { opts() });
         assert_eq!(out.succeeded, 1, "{:?}", out.errors);
         assert_eq!(out.bytes_saved, 70_000);
         #[cfg(unix)]
@@ -287,13 +288,13 @@ fn hardlink_refuses_differing_content() {
     let before = snapshot(&f.root());
     let mut item = f.item(&dup, Action::Hardlink);
     item.link_source = Some(keeper);
-    let (run, out) = f.apply(&[item], &opts());
+    let (run, out) = f.apply(&[item], &confirmed());
     assert_eq!((out.succeeded, out.skipped), (0, 1));
     assert_eq!(out.errors[0].error.as_ref().unwrap().code, "changed");
     assert_eq!(snapshot(&f.root()), before);
     assert_eq!(f.journal.entries_of(run)[0].state, JournalState::Skipped);
     // No keeper: refused as well.
-    let (_, out) = f.apply(&[f.item(&f.root().join("dup.bin"), Action::Hardlink)], &opts());
+    let (_, out) = f.apply(&[f.item(&f.root().join("dup.bin"), Action::Hardlink)], &confirmed());
     assert_eq!(out.skipped, 1);
     // A real reflink on this filesystem is either done or reported as unsupported (skipped).
     let mut f2 = Fixture::new("reflink-native");
@@ -687,7 +688,8 @@ fn mixed_batch_with_a_failure_in_the_middle_undoes_exactly() {
         f.item(&f.root().join("sub/b.bin"), Action::Copy { dest: f.t.join("copies"), keep_structure: true }),
         link,
     ];
-    let (run, out) = f.apply(&items, &opts());
+    // Confirmed: the hard link needs it (F-07); nothing else in the batch does.
+    let (run, out) = f.apply(&items, &confirmed());
     assert_eq!((out.succeeded, out.failed), (4, 1), "{:?}", out.errors);
     assert!(f.root().join("sub/deep/c.txt").exists());
     assert!(f.journal.pending_intents().is_empty());
