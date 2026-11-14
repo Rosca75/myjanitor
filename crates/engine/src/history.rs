@@ -243,11 +243,18 @@ impl Engine {
     /// Permanently delete quarantined items older than the given age (queued job).
     pub fn quarantine_purge(self: &Arc<Self>, req: QuarantinePurgeRequest) -> Result<Job> {
         self.require_writable()?;
-        let days = req.older_than_days.unwrap_or(lock(&self.settings).general.quarantine_days);
+        let default_days = lock(&self.settings).general.quarantine_days;
+        let explicit = req.older_than_days;
         let info = self.quarantine_info()?;
         let job = self.new_job(JobKind::PurgeQuarantine, None, None, "Empty quarantine", info.items, info.bytes);
         let body: Work = Box::new(move |engine, _ctx| {
-            match mj_actions::quarantine::purge(&engine.journal, &engine.cfg.quarantine_dir, Timestamp::now(), days) {
+            // F-15: without an explicit age, each item keeps its own step's retention.
+            let (j, q, now) = (&engine.journal, &engine.cfg.quarantine_dir, Timestamp::now());
+            let res = match explicit {
+                Some(days) => mj_actions::quarantine::purge(j, q, now, days),
+                None => mj_actions::quarantine::purge_expired(j, q, now, default_days),
+            };
+            match res {
                 Ok(freed) => {
                     engine.emit(Event::HistoryChanged(HistoryChanged { run_id: None }));
                     JobResult {

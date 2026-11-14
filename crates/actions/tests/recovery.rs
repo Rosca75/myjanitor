@@ -37,6 +37,7 @@ fn intent(run: RunId, idx: u64, action: ActionKind, original: &Path, stamp: File
         original_mode: None,
         previous_compression: None,
         output_sha256: None,
+        retention_days: None,
         undo_of: None,
     }
 }

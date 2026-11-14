@@ -107,6 +107,10 @@ pub struct JournalEntry {
     /// that output only while it still has exactly this content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_sha256: Option<String>,
+    /// Days a quarantined item is held before the automatic purge (F-15: the step's own
+    /// `purge_after_days`; `None`: the global `quarantine_days`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retention_days: Option<u32>,
     /// In an undo run: the entry this record reverses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_of: Option<EntryId>,

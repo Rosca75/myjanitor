@@ -145,15 +145,30 @@ fn is_own_slot(quarantine_dir: &Path, e: &JournalEntry, retained: &Path) -> bool
             == mj_core::pathutil::path_key(retained)
 }
 
-/// Purge expired items. Returns bytes freed.
-///
-/// An item expires `days` after it was quarantined (its `done` record), compared with
-/// the caller's `now`. Each purged entry gets a `purged` record (no longer undoable).
-/// Items that cannot be removed stay held and are retried by the next purge.
+/// Purge items older than `days` (an explicit "empty the quarantine" with that age).
+/// Returns bytes freed. See [`purge_expired`] for the automatic purge.
 pub fn purge(journal: &Journal, quarantine_dir: &Path, now: Timestamp, days: u32) -> Result<u64> {
+    purge_by(journal, quarantine_dir, now, &|_| days)
+}
+
+/// The automatic purge (F-15): each item expires after its own retention (the
+/// `purge_after_days` of the step that quarantined it), else `default_days`.
+pub fn purge_expired(journal: &Journal, quarantine_dir: &Path, now: Timestamp, default_days: u32) -> Result<u64> {
+    purge_by(journal, quarantine_dir, now, &|e| e.retention_days.unwrap_or(default_days))
+}
+
+/// An item expires `days_of(entry)` after it was quarantined (its `done` record), compared
+/// with the caller's `now`. Each purged entry gets a `purged` record (no longer undoable).
+/// Items that cannot be removed stay held and are retried by the next purge.
+fn purge_by(
+    journal: &Journal,
+    quarantine_dir: &Path,
+    now: Timestamp,
+    days_of: &dyn Fn(&JournalEntry) -> u32,
+) -> Result<u64> {
     let mut freed = 0u64;
     for e in held(journal, quarantine_dir) {
-        if e.at.add_days(i64::from(days)) > now {
+        if e.at.add_days(i64::from(days_of(&e))) > now {
             continue;
         }
         let Some(retained) = e.retained_at.clone() else { continue };

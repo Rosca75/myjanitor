@@ -239,6 +239,7 @@ fn new_entry(ctx: &ExecContext<'_>, item: &ActionItem, id: EntryId, kind: Action
         original_mode: fsops::file_mode(&item.path),
         previous_compression: None,
         output_sha256: None,
+        retention_days: None,
         undo_of: None,
     }
 }
@@ -610,6 +611,8 @@ fn quarantine_item(
     kept: Option<&mj_core::FileEntry>,
 ) -> Result<ItemOutcome> {
     e.action = ActionKind::Quarantine;
+    // F-15: the purge honours this item's own retention.
+    e.retention_days = Some(days);
     let plan = match retain::plan(
         &OriginalsPolicy::Quarantine,
         TrashRoute::Quarantine,

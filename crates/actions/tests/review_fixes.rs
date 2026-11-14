@@ -732,3 +732,25 @@ fn f11_optimiser_and_archive_outputs_are_synced_before_the_original_goes() {
     assert_eq!(out.succeeded, 1);
     assert!(mj_actions::fsops::SYNCED_OUTPUTS.load(Ordering::SeqCst) > n, "the output was fsynced");
 }
+
+#[test]
+fn f15_automatic_purge_honours_each_steps_retention() {
+    let f = Fixture::new("f15");
+    let short = f.write("short.txt", b"short");
+    let long = f.write("long.txt", b"long");
+    let (_, out) = f.apply(
+        &[
+            f.item(&short, Action::Quarantine { purge_after_days: 5 }),
+            f.item(&long, Action::Quarantine { purge_after_days: 90 }),
+        ],
+        &opts(),
+    );
+    assert_eq!(out.succeeded, 2);
+    let in40 = mj_core::Timestamp::now().add_days(40);
+    // The global setting says 30 days; the step asked for 90 (and 5).
+    mj_actions::quarantine::purge_expired(&f.journal, &f.qdir, in40, 30).unwrap();
+    let held = mj_actions::quarantine::summary(&f.journal, &f.qdir);
+    assert_eq!(held.items, 1, "the 90-day item is still held at day 40");
+    mj_actions::quarantine::purge_expired(&f.journal, &f.qdir, mj_core::Timestamp::now().add_days(91), 30).unwrap();
+    assert_eq!(mj_actions::quarantine::summary(&f.journal, &f.qdir).items, 0);
+}
