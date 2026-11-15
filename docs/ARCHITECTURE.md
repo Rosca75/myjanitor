@@ -158,6 +158,14 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
   async command then awaits the dialog's future. Neither the main thread nor the
   async runtime is blocked while the dialog is open, and at most one dialog is
   open at a time (a second request fails with `conflict`).
+- **GUI start-up** (W6-A): the shell builds the engine on a start-up thread
+  (`src-tauri/src/startup.rs`), never in the main thread's `setup`: opening the
+  journal, loading the scan cache and probing the external tools no longer keep
+  the window blank. Commands that arrive first wait for the engine on the
+  blocking pool. Expired quarantine items are purged by an ordinary queued job
+  (`Engine::quarantine_purge_if_due`) once the engine is ready. When another
+  process holds the data folder's lock (F-13), the window is hidden and a native
+  message box says so before the app exits; nothing relies on a console.
 - **Allocator**: system allocator for now; measure mimalloc on Windows in
   Wave 4 if profiles show allocator contention (lessons file rule 13; would
   need a DEPENDENCIES.md entry).

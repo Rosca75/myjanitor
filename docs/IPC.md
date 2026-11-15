@@ -301,8 +301,10 @@ command itself does not fail.
 ### `search_run`
 `SearchRunRequest` → `Opportunity`. Evaluates the rule over the current index
 and creates (or replaces, same title) a `custom:<n>` opportunity that then
-behaves like any card (step review, plan). Fails with `invalid_input` before
-the first scan.
+behaves like any card (step review, plan). The rule is kept for the session:
+every later scan runs it again on its new index, so the card, the rows the user
+ticked or unticked and its plan step survive a rescan. Files applied since the
+last scan are not listed. Fails with `invalid_input` before the first scan.
 
 ```json SearchRunRequest
 {"rule":{"all":[{"cond":{"field":"extension","values":["mp4"]}},{"cond":{"field":"size","cmp":"gt","bytes":1073741824}}]},"title":"Big videos","topmost_only":false,"action":{"kind":"trash"}}
@@ -413,7 +415,8 @@ never removed; with `synced_online_only` removals of synced items become
 No request → `Job[]`. Running and queued jobs plus the jobs finished this session.
 
 ### `job_pause`
-`JobRequest` → `Job`. Takes effect between items.
+`JobRequest` → `Job`. Takes effect between items (a `schedule` job pauses its
+scan and does not queue its apply jobs until resumed).
 
 ```json JobRequest
 {"job_id":31}
@@ -424,7 +427,9 @@ No request → `Job[]`. Running and queued jobs plus the jobs finished this sess
 
 ### `job_cancel`
 `JobRequest` → `Job`. Queued jobs become `cancelled` at once; running ones go
-through `cancelling`. Items already applied stay applied (and undoable).
+through `cancelling`. Items already applied stay applied (and undoable). A job
+that had already done all its work when the cancel reached it ends as
+`completed` (or `completed_with_errors`), not `cancelled`.
 
 ### `jobs_reorder`
 `JobsReorderRequest` → `Job[]`. Reorders queued jobs only.
@@ -478,7 +483,11 @@ No request → `QuarantineInfo`.
 `QuarantinePurgeRequest` → `Job`. *Spawns.* Permanently deletes quarantined
 items older than `older_than_days`; omitted, each item expires after its own
 step's `purge_after_days` (else the setting); needs no extra
-confirmation from the engine, so the UI asks first (it is irreversible).
+confirmation from the engine, so the UI asks first (it is irreversible). Pause
+and cancel act between items: a cancelled purge ends `cancelled` with the items
+deleted so far in its outcome; the rest stay in the quarantine. The desktop app
+queues this job itself (no `older_than_days`) right after start-up when at least
+one item has expired, instead of purging before the window opens.
 
 ```json QuarantinePurgeRequest
 {"older_than_days":30}
@@ -553,7 +562,8 @@ No request → `Schedule[]`.
 ### `schedule_save`
 `ScheduleSaveRequest` → `Schedule[]`. Insert or replace by id (empty id = new).
 Steps whose action needs confirmation are rejected (`invalid_input`):
-lossy and permanent steps never run unattended (SAF-11).
+lossy and permanent steps never run unattended (SAF-11). Custom-search steps
+(`custom:<n>`) are rejected too: their rule is not stored with a schedule.
 
 ### `schedule_delete`
 `IdRequest` → `Schedule[]`.
@@ -573,6 +583,11 @@ schedule, a plan in progress or a running scan are refused immediately). The job
 scans the schedule's scope, then queues its steps (default selections) as `apply`
 jobs of one run and finishes; `job://done` carries any error (`nothing to do…`
 when no step found anything). The job's `run_id` is set once the run exists.
+The schedule's scope becomes the session scope and its scan replaces the session
+results (the UI re-reads `scope_get` on `scan://done`, so the scope chips name
+the folders the results describe). Only the steps the run added are applied: a
+step the user added to the plan while it scanned stays in the plan, untouched;
+on failure the run takes its own steps out again.
 
 ### `tools_list`
 No request → `ExternalTool[]`.

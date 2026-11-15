@@ -541,3 +541,125 @@ nothing changed for it. Every other finding was reproduced by a failing test fir
   first error, so one failing region cannot leave the others stale.
 - **Not done:** debouncing the filter. With the element kept, a keystroke costs one view
   rebuild per answer, and the generation counters already drop stale answers.
+
+## D-6A32 The engine is built off the main thread; the start-up purge is a job (IPC-2)
+
+- **Context:** `Engine::new` ran inside Tauri's `setup`, on the main thread, before the
+  event loop: journal replay, scan-cache load, tool probe (up to 3 s) and the automatic
+  quarantine purge (one fsync per expired item). On Windows every default removal is a
+  quarantine item, so a start 30 days after a large clean-up showed a blank, "Not
+  responding" window for as long as the purge took.
+- **Choice:** `setup` only manages the state and starts an `mj-start` thread that builds
+  the engine with `purge_at_start = false`. `AppState` holds an `EngineSlot`; the single
+  command helper (`commands::run`) waits for it on the blocking pool, so a command sent
+  while the engine is being built is answered once it is ready, and none runs on the main
+  thread. Once the engine is ready, `Engine::quarantine_purge_if_due` queues the ordinary
+  `purge_quarantine` job (each item's own retention, the same rule as before) only when an
+  item has expired: it runs in queue order with applies and undos (no race), reports
+  through `job://` events, and a normal start shows no empty job.
+- **Rejected:** moving only the purge to a thread. The other start-up work (tool probe,
+  journal replay on a large journal) also blocks the window; moving the whole constructor
+  costs one wait per command and nothing else. Purging inside the engine on a private
+  thread was rejected too: it could race an apply or an undo the user starts at once.
+- **Unchanged:** the CLI already built its engine without the start-up purge and purges
+  at the start of acting commands.
+
+## D-6A33 A second start says why it does not open (IPC-6, XC-2)
+
+- **Context:** with the data folder held by another MyJanitor (the open app, a CLI
+  command, a scheduled run), the GUI printed to stderr and exited. A Windows GUI process
+  has no console, so a double-click or an Explorer "Find duplicates here" did nothing
+  visible.
+- **Choice:** a visible message, not focusing the running window. The shell hides the
+  window and shows a native warning box (`rfd`, already a dependency for the file
+  dialogs, built on the main thread like them) naming who holds the folder and, for a
+  context-menu launch, which request was not carried out; the app exits when the box is
+  closed. An engine that cannot be built at all (an app folder cannot be created) is
+  reported the same way instead of a panic in `setup`. The decision is a pure function
+  (`startup::decide`) with unit tests.
+- **Why not focus the running instance:** the lock is held as often by a CLI command or a
+  scheduled run as by the window, and those have no window to focus; a single-instance
+  channel (`tauri-plugin-single-instance` or a hand-written named pipe / socket) would be
+  a new dependency or new platform code, would only cover the GUI-holds-it case, and
+  forwarding a context-menu request into a running session that may hold a plan in
+  progress needs its own design (what happens to the current scope and results). A clear
+  message covers every holder now; forwarding stays an open item.
+- **Why not a read-only second window (XC-2's suggestion):** two GUIs on one data folder
+  would both write `settings.json`, presets and schedules; the engine guards only file
+  changes, not its own state files.
+- **CLI (same finding):** a command that changes files (`apply`, `clean --apply`, `undo`,
+  `run-profile`, `quarantine purge`) now refuses in `Ctx::open`, before it rescans,
+  measures or asks for the typed confirmation, instead of failing at the very end.
+
+## D-6A34 Pause and cancel are real for scheduled runs and purges (ENG-10)
+
+- **Choice:**
+  - A paused `schedule` job pauses its scan and blocks before queuing the apply until it
+    is resumed; a cancel stops the scan. The job also checks its token after the scan, so
+    a pause or cancel that arrives as the scan ends still holds the apply.
+  - The purge job passes its token to `mj_actions::quarantine::purge_with` (new, additive:
+    `purge` and `purge_expired` keep their signatures), which checks it between items. A
+    stopped purge ends `cancelled` with the items deleted so far in its outcome
+    (`succeeded`, `bytes_saved`); the rest stay held.
+  - `JobResult::complete`: a job whose token was cancelled after it had done all its work
+    (every item processed, or the body finished) ends as `completed` /
+    `completed_with_errors`, not `cancelled`. Apply and undo bodies count processed items
+    against their item list; the dry run keeps the old rule.
+- The actions change is the smallest that lets the engine stop between items without
+  copying the guarded purge loop into the engine.
+
+## D-6A35 A scheduled run applies only its own steps (ENG-8)
+
+- **Context:** the run checked once that the plan was empty, scanned for minutes, then
+  added its steps and applied the whole session plan, including a step the user added in
+  the meantime; on failure it cleared the plan, user steps included.
+- **Choice:** the run remembers the steps it added and applies only those
+  (`apply_plan_steps` with an id filter; `plan_apply` is the unfiltered form). A user step
+  stays in the plan, untouched. On any failure the run removes only its own steps.
+- **Rejected:** refusing the run when the plan changed during the scan. The schedule's
+  steps are safe by construction (SAF-11) and the user did not ask for the run to be
+  dropped; their own step is simply left for them.
+
+## D-6A36 The scope follows the scheduled run's scan (IPC-7)
+
+- **Context:** "Run now" set the session scope to the schedule's and replaced the
+  results; the UI never re-read the scope, so the chips showed one folder and the cards
+  another.
+- **Choice:** keep the engine behaviour (the session scope is the scope of the results)
+  and make the UI follow it: `scan://done` re-reads `scope_get` and replaces the chips
+  when they differ. The chips, the cards and the Scan button then all describe the same
+  folders.
+- **Rejected:** restoring the user's previous scope after the run's scan (the reviewers'
+  proposal). The results on screen would then belong to the schedule's folders while the
+  chips named others, and the next "Scan" would silently replace them: a file cleaner
+  should never show results for folders other than the ones it names. Re-adding a folder
+  is one click; a mismatch between what is shown and what is acted on is not visible at
+  all. The mock does the same as the engine.
+
+## D-6A37 Applied items stay gone until the next scan (ENG-11)
+
+- **Choice:** after each applied step, the rows done leave every card (as before) and a
+  duplicate/pair group that loses members and is left with fewer than two leaves its card
+  with its last row; kept badges and keepers follow the selection again (`sync_keepers`).
+  The paths of done items that are no longer at their place (checked on disk: trashed,
+  quarantined, deleted, moved, converted under another name; an in-place optimisation is
+  still there) are remembered in `Results::removed` (path keys, ancestor lookup), and a
+  re-analysis (`step_params_set`) or a search on the unchanged index leaves them out. A
+  scan clears the set.
+- **Not done:** the disk-usage and breakdown views still count the old index until the
+  next scan (`disk.rs` belongs to the other lane this wave); no "stale" flag was added to
+  `opportunities_list`.
+
+## D-6A38 Custom-search cards survive a rescan; schedules refuse them (ENG-12)
+
+- **Choice:** `search_run` keeps its request per `custom:<n>` id (`Results::custom_rules`,
+  session only). A scan runs each rule again on its new index before publishing, so the
+  card keeps its id and title, the rows the user ticked or unticked are carried like any
+  card's (G-04), and its plan step is no longer dropped by `plan_after_rescan`. A rule
+  that no longer evaluates loses its card (and so its step), as an opportunity that
+  disappeared does.
+- **Schedules:** a schedule stores step templates, not rules, so a custom-search step
+  could never run. `schedule_save` and `schedule_from_plan` now refuse `custom:` steps
+  with a message instead of saving a schedule that reports "nothing to do" forever.
+  Storing the rule in `ScheduledStep` would change the core type and the schedules file
+  format; left as an open item.
