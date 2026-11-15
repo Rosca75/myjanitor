@@ -809,7 +809,9 @@ it undoable) and, in undo runs, `undo_of` (the entry id this record reverses). O
 `output_sha256`: SHA-256 of the output an optimisation or archive wrote; undo discards that
 output only while it still has this content (otherwise `conflict`, nothing changed). Optional
 `retention_days`: how long a quarantined item is held before the automatic purge (the
-step's `purge_after_days`).
+step's `purge_after_days`). Optional `original_link` (`true` only): the original was a link
+removed as itself; a restore then puts back only a link, and a file entry only a regular
+file with the recorded content.
 
 ```json JournalEntry
 {"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}

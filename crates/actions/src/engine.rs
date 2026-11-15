@@ -240,6 +240,7 @@ fn new_entry(ctx: &ExecContext<'_>, item: &ActionItem, id: EntryId, kind: Action
         previous_compression: None,
         output_sha256: None,
         retention_days: None,
+        original_link: std::fs::symlink_metadata(&item.path).is_ok_and(|m| m.file_type().is_symlink()),
         undo_of: None,
     }
 }

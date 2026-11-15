@@ -27,7 +27,7 @@ fn g01_protected_entry_below_a_folder_is_seen_through_a_symlinked_root() {
     for protect in [real.join("proj/contracts"), f.root().join("proj/contracts")] {
         f.guard = Guard::new(
             vec![f.root()],
-            ProtectedPaths::empty().with_app_dirs(&[f.t.join("q")]).with_user_folders(&[protect.clone()]),
+            ProtectedPaths::empty().with_app_dirs(&[f.t.join("q")]).with_user_folders(std::slice::from_ref(&protect)),
         );
         for action in [Action::PermanentDelete, Action::Trash, Action::Quarantine { purge_after_days: 30 }] {
             let item = f.item(&f.root().join("proj"), action.clone());
@@ -107,4 +107,50 @@ fn g02_source_changed_before_deletion_is_refused_whole_and_untouched() {
         assert!(!dst.exists(), "{case}: our copy was removed again");
         assert!(src.exists(), "{case}");
     }
+}
+
+/// G-07: a link or a folder put where a moved file was is never moved back by Restore.
+#[cfg(unix)]
+#[test]
+fn g07_restore_refuses_a_link_or_folder_found_where_a_moved_file_was() {
+    for replace_with in ["link", "folder"] {
+        let f = Fixture::new("g07");
+        let file = f.write("report.txt", b"the original report");
+        let dest = f.t.join("archive-folder");
+        let (run, out) = f.apply(&[f.item(&file, Action::Move { dest: dest.clone(), keep_structure: false })], &opts());
+        assert_eq!(out.succeeded, 1);
+        let moved = dest.join("report.txt");
+        std::fs::remove_file(&moved).unwrap();
+        if replace_with == "link" {
+            f.t.write("elsewhere/secret.txt", b"secret").unwrap();
+            std::os::unix::fs::symlink(f.t.join("elsewhere/secret.txt"), &moved).unwrap();
+        } else {
+            std::fs::create_dir(&moved).unwrap();
+        }
+        let undo = f.undo_run(run);
+        assert_eq!(undo.failed, 1, "{replace_with}: {undo:?}");
+        assert_eq!(undo.errors[0].error.as_ref().unwrap().code, "conflict");
+        assert!(std::fs::symlink_metadata(&file).is_err(), "{replace_with}: moved back");
+    }
+}
+
+/// G-07: a link removed as itself (a broken link) is still restored as a link.
+#[cfg(unix)]
+#[test]
+fn g07_a_trashed_link_is_restored_as_a_link() {
+    let f = Fixture::new("g07-link");
+    let link = f.root().join("broken");
+    std::os::unix::fs::symlink(f.t.join("nowhere"), &link).unwrap();
+    let mut item = f.item(&f.root(), Action::Trash);
+    item.path = link.clone();
+    item.target = mj_core::TargetKind::File;
+    item.expected_tree = None;
+    let md = std::fs::symlink_metadata(&link).unwrap();
+    item.expected = mj_core::FileStamp { size: 0, mtime: mj_core::Timestamp::from_system_time(md.modified().unwrap()) };
+    let (run, out) = f.apply(&[item], &opts());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    assert!(f.journal.entries_of(run).iter().any(|e| e.original_link));
+    let undo = f.undo_run(run);
+    assert_eq!(undo.succeeded, 1, "{undo:?}");
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
 }
