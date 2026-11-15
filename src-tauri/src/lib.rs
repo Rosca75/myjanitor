@@ -9,11 +9,14 @@ pub mod commands;
 pub mod dialogs;
 pub mod events;
 pub mod launch;
+pub mod startup;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{AppHandle, Manager};
 
 /// How long shutdown waits for a running scan or job to stop between items.
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(5);
@@ -36,17 +39,18 @@ pub fn run() {
         .setup(move |app| {
             let mut cfg = mj_engine::EngineConfig::new(data_dir, cache_dir);
             cfg.portable = portable;
-            cfg.launch = intent;
+            cfg.launch = intent.clone();
             cfg.events = Arc::new(events::TauriSink::new(app.handle().clone()));
-            let engine = mj_engine::Engine::new(cfg).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)?;
-            // F-13: the engine holds the data folder's lock (shared with the CLI and
-            // scheduled runs); a second window on the same folder does not open.
-            if let Some(msg) = engine.instance_conflict() {
-                eprintln!("MyJanitor is already running: {msg}");
-                std::process::exit(1);
-            }
-            app.manage(commands::AppState { engine });
+            // IPC-2: expired quarantine items are purged by a queued job once the engine
+            // is ready, not while the window waits.
+            cfg.purge_at_start = false;
+            let slot = Arc::new(startup::EngineSlot::default());
+            app.manage(commands::AppState { engine: Arc::clone(&slot) });
             app.manage(dialogs::DialogGate::default());
+            let handle = app.handle().clone();
+            // IPC-2: the engine (journal, scan cache, tool probe) is built off the main
+            // thread; commands wait for it on the blocking pool.
+            mj_core::pool::spawn_large("mj-start", move || start_engine(handle, cfg, intent, &slot))?;
             Ok(())
         })
         .invoke_handler(mj_handlers!())
@@ -56,11 +60,70 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             // Graceful shutdown: stop work between items, save the scan cache. The
             // journal is synced after every record already.
-            if let Some(state) = handle.try_state::<commands::AppState>() {
-                state.engine.shutdown(SHUTDOWN_WAIT);
+            if let Some(engine) = handle.try_state::<commands::AppState>().and_then(|s| s.engine.get()) {
+                engine.shutdown(SHUTDOWN_WAIT);
             }
         }
     });
+}
+
+/// Body of the start-up thread: build the engine, then open normally or refuse with a
+/// visible message (F-13, IPC-6).
+fn start_engine(
+    handle: AppHandle,
+    cfg: mj_engine::EngineConfig,
+    intent: Option<mj_engine::api::LaunchIntent>,
+    slot: &startup::EngineSlot,
+) {
+    let decision = match mj_engine::Engine::new(cfg) {
+        Ok(engine) => {
+            // F-13: the engine holds the data folder's lock (shared with the CLI and
+            // scheduled runs); a second window on the same folder does not open.
+            let decision = startup::decide(engine.instance_conflict(), intent.as_ref());
+            if decision == startup::Startup::Start {
+                slot.set(Ok(Arc::clone(&engine)));
+                // CLN-ACT-04: expired items go through the job queue (the error, for
+                // example a journal that cannot be written, is already in app_info).
+                let _ = engine.quarantine_purge_if_due();
+            }
+            decision
+        }
+        Err(e) => startup::failed(&e),
+    };
+    if let startup::Startup::Refuse { title, message } = decision {
+        slot.set(Err(startup::refused_info(&message)));
+        refuse(&handle, &title, &message);
+    }
+}
+
+/// The answer of the refusal message box.
+type Shown = Pin<Box<dyn Future<Output = rfd::MessageDialogResult> + Send>>;
+
+/// Hide the window, show `message` in a native message box and exit once it is closed.
+/// Runs on the start-up thread; the box is built on the main thread (GTK requires it).
+fn refuse(handle: &AppHandle, title: &str, message: &str) {
+    // Terminals still get it (the CLI user who started the GUI from one).
+    eprintln!("{title}: {message}");
+    if let Some(w) = handle.get_webview_window("main") {
+        let _ = w.hide();
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<Shown>();
+    let (title, message) = (title.to_string(), message.to_string());
+    let posted = handle.run_on_main_thread(move || {
+        let shown = rfd::AsyncMessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title(&title)
+            .set_description(&message)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+        let _ = tx.send(Box::pin(shown));
+    });
+    if posted.is_ok() {
+        if let Ok(shown) = rx.recv() {
+            tauri::async_runtime::block_on(shown);
+        }
+    }
+    handle.exit(1);
 }
 
 #[cfg(test)]

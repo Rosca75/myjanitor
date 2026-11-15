@@ -15,9 +15,9 @@ use mj_engine::api::*;
 use mj_engine::Engine;
 use tauri::State;
 
-/// Managed state: the one engine.
+/// Managed state: the one engine, built off the main thread at start-up (IPC-2).
 pub struct AppState {
-    pub engine: Arc<Engine>,
+    pub engine: Arc<crate::startup::EngineSlot>,
 }
 
 async fn run<T, F>(state: State<'_, AppState>, f: F) -> Result<T, ErrorInfo>
@@ -25,9 +25,11 @@ where
     T: Send + 'static,
     F: FnOnce(Arc<Engine>) -> mj_core::Result<T> + Send + 'static,
 {
-    let engine = Arc::clone(&state.engine);
-    match tauri::async_runtime::spawn_blocking(move || f(engine)).await {
-        Ok(r) => r.map_err(|e| e.info()),
+    let slot = Arc::clone(&state.engine);
+    // A command that arrives while the engine is still being built waits for it here,
+    // on the blocking pool (never on the main thread).
+    match tauri::async_runtime::spawn_blocking(move || f(slot.wait()?).map_err(|e| e.info())).await {
+        Ok(r) => r,
         Err(e) => Err(mj_core::Error::Internal(format!("command worker failed: {e}")).info()),
     }
 }
