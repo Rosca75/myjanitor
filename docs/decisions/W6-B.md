@@ -394,3 +394,14 @@ saying so instead of claiming the system language silently. Rejected: sending
 `navigator.language` from the UI into the setting; it would rewrite a user setting and
 the UI files belong to the other lane. Not verified on Windows here (the Windows clippy
 target compiles the call).
+
+## D-B29 Content search rejects a binary file from its sample (RF-10, part)
+
+`content::search_file` read up to `max_bytes` (8 MiB) of every file and only then looked at
+the first 8 KiB to decide it was binary. It now reads the 8 KiB sample first, returns
+`Binary` when the sample says so (the same `decode_text` decision as before, which only ever
+looked at that sample), and reads on to the limit only for text. A `content:` search over
+a photo and video library costs 8 KiB per file instead of 8 MiB. Not done: making
+`search_run` a cancellable job with progress. It is a synchronous IPC command today; a job
+needs a contract change in `docs/IPC.md` and `ui/js/api.js` plus the search view, which
+belong to the other lane in this wave. Left as an open item.
