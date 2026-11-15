@@ -365,3 +365,18 @@ written ten minutes ago passed the 24 h gate and was pre-selected whole. A match
 now passes only when it and every entry below it (files and subfolders) are older than the
 cutoff; an unknown time counts as recent, as before. The subtree is read only for aged
 rules that matched a folder.
+
+## D-B27 A link to an offline drive is not broken (RF-6)
+
+Broken links are pre-selected, so the "maybe offline" guard decides between a real
+dangling link and a junction to an unplugged drive. It recognised only Unix mount parents
+and only checked that the target's parent existed. `links::target_may_be_offline` (pure,
+with the existence checks injected so the Windows rules run in the Linux tests) now skips:
+any network target (`\\server\share`, `\\?\UNC\…`, `//server/share`); a drive-letter
+target (also behind `\\?\` or the NT `\??\` prefix of junctions) whose drive root is
+absent; and a target below `/mnt`, `/media/<user>`, `/run/media/<user>`, `/Volumes`,
+`/net` or `/misc` unless its mount directory exists and is not empty (an empty folder there
+is usually an unmounted mount point). A live share with a really missing target is now
+skipped too: under-reporting a broken link is the safe direction for a pre-selected row.
+Not verified: the Windows error mapping and `read_link` spelling of a junction to a missing
+drive (CI's Windows runner has no second drive to unplug).

@@ -1,8 +1,9 @@
 //! Invalid symlinks and broken Windows shortcuts (CLN-DET-09).
 //!
 //! * A symlink or junction is broken when its target does not exist (`NotFound`; any other error
-//!   leaves it alone). Targets under removable or network mount points are skipped unless their
-//!   parent folder is present, so an unplugged drive never makes every link on it "broken".
+//!   leaves it alone). Targets that may simply be offline are skipped: a network path, a drive
+//!   letter whose root is absent, or a Unix mount point that is missing or empty, so an
+//!   unplugged drive never makes every link on it "broken" (RF-6).
 //! * A `.lnk` shortcut is parsed in-house (`lnk`) and evaluated only on Windows, only for local
 //!   absolute targets, and only when the drive itself exists.
 //!
@@ -135,20 +136,57 @@ fn check_symlink(link: &Path) -> std::result::Result<Option<String>, &'static st
     match std::fs::metadata(link) {
         Ok(_) => Ok(None),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if on_removable_mount(&target) {
+            let t = target.to_string_lossy();
+            let drive_present = |root: &str| Path::new(root).try_exists().ok() == Some(true);
+            let populated = |dir: &str| std::fs::read_dir(dir).is_ok_and(|mut d| d.next().is_some());
+            if target_may_be_offline(&t, &drive_present, &populated) {
                 return Err("target_on_removable_or_network_mount");
             }
-            Ok(Some(target.to_string_lossy().into_owned()))
+            Ok(Some(t.into_owned()))
         }
         Err(_) => Err("link_target_unknown"),
     }
 }
 
-/// Absolute target below a mount parent whose own parent folder is missing (mount absent).
-fn on_removable_mount(target: &Path) -> bool {
-    let t = target.to_string_lossy();
-    let under_mount = MOUNT_PARENTS.iter().any(|m| t.starts_with(&format!("{m}/")));
-    under_mount && !target.parent().is_some_and(|p| p.exists())
+/// RF-6: true when a missing link target may simply be offline, so the link is not called
+/// broken. `drive_present("E:\\")` says whether a drive root exists; `populated(dir)` says
+/// whether a mount directory exists and has something in it. Both are injected so the
+/// Windows rules are tested on every platform.
+///
+/// * A network target (`\\server\share`, `\\?\UNC\…`, `//server/share`) may be offline.
+/// * A target on a drive letter may be offline when that drive's root is absent (a
+///   junction to `E:\Videos` with the USB disk unplugged reports "not found").
+/// * Below a Unix mount parent (`/mnt`, `/media`, `/run/media`, `/Volumes`, `/net`,
+///   `/misc`), the target may be offline unless its mount directory (`/mnt/<x>`,
+///   `/media/<user>/<x>`, `/run/media/<user>/<x>`) exists and is not empty: an empty
+///   folder there is usually an unmounted mount point.
+fn target_may_be_offline(target: &str, drive_present: &dyn Fn(&str) -> bool, populated: &dyn Fn(&str) -> bool) -> bool {
+    let t = target.replace('/', "\\");
+    // Verbatim (`\\?\`) and NT (`\??\`, junction targets) prefixes: `UNC\` means network.
+    let t = match t.strip_prefix("\\\\?\\").or_else(|| t.strip_prefix("\\??\\")) {
+        Some(r) => match r.get(..4) {
+            Some(unc) if unc.eq_ignore_ascii_case("UNC\\") => return true,
+            _ => r.to_string(),
+        },
+        None => t,
+    };
+    if t.starts_with("\\\\") {
+        return true;
+    }
+    let b = t.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        return !drive_present(&format!("{}:\\", b[0] as char));
+    }
+    // Unix spellings below a mount parent.
+    let Some(parent) = MOUNT_PARENTS.iter().find(|m| target.starts_with(&format!("{m}/"))) else {
+        return false;
+    };
+    let rest: Vec<&str> = target[parent.len() + 1..].split('/').filter(|c| !c.is_empty()).collect();
+    let depth = if matches!(*parent, "/media" | "/run/media") { 2 } else { 1 };
+    if rest.len() < depth {
+        return true;
+    }
+    !populated(&format!("{parent}/{}", rest[..depth].join("/")))
 }
 
 #[cfg(test)]
@@ -179,6 +217,30 @@ mod tests {
         assert_eq!(out.diagnostics.skipped["target_on_removable_or_network_mount"], 1);
         // The detector is read-only.
         assert!(t.join("dangling").symlink_metadata().is_ok());
+    }
+
+    /// RF-6: a link to an unplugged drive, a network share or an unmounted mount point is
+    /// not "broken"; one to a missing file on a present drive is.
+    #[test]
+    fn rf6_offline_targets_are_not_broken() {
+        let drives = |root: &str| root == "C:\\";
+        let mounts = |dir: &str| dir == "/mnt/nas" || dir == "/media/me/USB";
+        let off = |t: &str| target_may_be_offline(t, &drives, &mounts);
+        assert!(off("E:\\Videos\\a.mp4"));
+        assert!(off("\\\\?\\E:\\Videos"));
+        assert!(off("\\??\\E:\\Videos"));
+        assert!(!off("C:\\Users\\me\\gone.txt"));
+        assert!(!off("\\\\?\\C:\\gone"));
+        assert!(off("\\\\srv\\share\\x"));
+        assert!(off("\\\\?\\UNC\\srv\\share\\x"));
+        assert!(off("//srv/share/x"));
+        assert!(off("/mnt/backup/file"), "missing or empty mount directory");
+        assert!(!off("/mnt/nas/file"), "mounted: the target is really gone");
+        assert!(off("/media/me/OTHER/a"));
+        assert!(!off("/media/me/USB/a"));
+        assert!(off("/media/me"));
+        assert!(!off("/home/me/gone.txt"));
+        assert!(!off("relative-gone"));
     }
 
     #[test]
