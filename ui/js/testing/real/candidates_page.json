@@ -63,7 +63,7 @@
       "default_selected": false,
       "group": 7,
       "id": 10,
-      "modified": 1793040983549577163,
+      "modified": 1793046292747741138,
       "path": "/fixture/tree/contracts/signed.pdf",
       "reason": "Copy kept (keep rule)",
       "selected": false,
@@ -73,7 +73,7 @@
         "detector": "exact_duplicates"
       },
       "stamp": {
-        "mtime": 1793040983549577163,
+        "mtime": 1793046292747741138,
         "size": 2087
       },
       "target": "file"
@@ -92,7 +92,7 @@
       "default_selected": false,
       "group": 7,
       "id": 11,
-      "modified": 1794596183549575570,
+      "modified": 1794601492747739131,
       "path": "/fixture/tree/downloads/signed.pdf",
       "reason": "Same content as 1 other file",
       "selected": false,
@@ -102,7 +102,7 @@
         "detector": "exact_duplicates"
       },
       "stamp": {
-        "mtime": 1794596183549575570,
+        "mtime": 1794601492747739131,
         "size": 2087
       },
       "target": "file"
@@ -120,7 +120,7 @@
       "default_selected": false,
       "group": 6,
       "id": 9,
-      "modified": 1793904983548716091,
+      "modified": 1793910292746895926,
       "path": "/fixture/tree/photos/a.bin",
       "reason": "Copy kept (keep rule)",
       "selected": false,
@@ -130,7 +130,7 @@
         "detector": "exact_duplicates"
       },
       "stamp": {
-        "mtime": 1793904983548716091,
+        "mtime": 1793910292746895926,
         "size": 300000
       },
       "target": "file"
@@ -147,7 +147,7 @@
       "default_selected": true,
       "group": 6,
       "id": 8,
-      "modified": 1794509783548706977,
+      "modified": 1794515092746888399,
       "path": "/fixture/tree/downloads/a.bin",
       "reason": "Same content as 1 other file",
       "selected": true,
@@ -157,7 +157,7 @@
         "detector": "exact_duplicates"
       },
       "stamp": {
-        "mtime": 1794509783548706977,
+        "mtime": 1794515092746888399,
         "size": 300000
       },
       "target": "file"

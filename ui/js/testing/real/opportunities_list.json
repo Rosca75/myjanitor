@@ -1,8 +1,8 @@
 {
   "cached": false,
   "counts": {
-    "all": 10,
-    "archive": 2,
+    "all": 8,
+    "archive": 0,
     "clean": 5,
     "optimise": 3,
     "review_only": 0
@@ -18,6 +18,7 @@
         "quarantine",
         "permanent_delete",
         "move",
+        "copy",
         "hardlink",
         "reflink"
       ],
@@ -41,6 +42,7 @@
       ],
       "id": "det:exact_duplicates",
       "in_plan": true,
+      "overlap": 0,
       "params": {
         "keep_rule": "oldest",
         "preferred_folder": ""
@@ -102,6 +104,8 @@
       },
       "sub_groups": [],
       "title": "Exact duplicates",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "files"
     },
     {
@@ -112,6 +116,7 @@
         "trash",
         "quarantine",
         "move",
+        "copy",
         "permanent_delete"
       ],
       "badges": [],
@@ -128,6 +133,7 @@
       ],
       "id": "det:old_installers",
       "in_plan": false,
+      "overlap": 0,
       "params": {
         "folders": "",
         "min_age_days": 180.0
@@ -171,6 +177,8 @@
       },
       "sub_groups": [],
       "title": "Old installers",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "files"
     },
     {
@@ -198,6 +206,7 @@
       ],
       "id": "det:dev_artefacts",
       "in_plan": false,
+      "overlap": 0,
       "params": {},
       "presets": [],
       "rank": 24576.0,
@@ -217,6 +226,8 @@
         }
       ],
       "title": "Developer artefacts",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "folders"
     },
     {
@@ -241,6 +252,7 @@
       ],
       "id": "det:empty_folders",
       "in_plan": false,
+      "overlap": 0,
       "params": {},
       "presets": [],
       "rank": 0.0,
@@ -254,52 +266,8 @@
       },
       "sub_groups": [],
       "title": "Empty folders",
-      "unit": "folders"
-    },
-    {
-      "availability": {
-        "reason": "Not implemented yet: Archive cold folders analysis (W3-B)",
-        "state": "disabled"
-      },
-      "available_actions": [
-        "archive"
-      ],
-      "badges": [],
-      "candidates": 0,
-      "category": "archive",
-      "confidence": "exact",
-      "count": 0,
-      "default_action": {
-        "format": "zip",
-        "keep_sources": false,
-        "kind": "archive",
-        "level": 9,
-        "originals": {
-          "policy": "recycle_bin"
-        }
-      },
-      "description": "Folders not used for months, packed into one archive",
-      "feature_ids": [
-        "OPT-ARC-01",
-        "OPT-ARC-02",
-        "OPT-ARC-04",
-        "OPT-ARC-05"
-      ],
-      "id": "opt:archive_folders",
-      "in_plan": false,
-      "params": {},
-      "presets": [],
-      "rank": 0.0,
-      "safety": "reversible",
-      "saving": 0,
-      "selected": 0,
-      "settings": [],
-      "size_before": 0,
-      "source": {
-        "optimiser": "archive_folders"
-      },
-      "sub_groups": [],
-      "title": "Archive cold folders",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "folders"
     },
     {
@@ -326,6 +294,7 @@
       ],
       "id": "det:office_leftovers",
       "in_plan": false,
+      "overlap": 0,
       "params": {},
       "presets": [],
       "rank": 0.0,
@@ -339,6 +308,8 @@
       },
       "sub_groups": [],
       "title": "Office leftovers",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "files"
     },
     {
@@ -374,6 +345,7 @@
       ],
       "id": "opt:pdf_lossy",
       "in_plan": false,
+      "overlap": 0,
       "params": {
         "dpi": "150",
         "preset": "ebook",
@@ -455,6 +427,8 @@
       },
       "sub_groups": [],
       "title": "PDF images",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "files"
     },
     {
@@ -490,6 +464,7 @@
       ],
       "id": "opt:image_lossy",
       "in_plan": false,
+      "overlap": 0,
       "params": {
         "edge": "long",
         "format": "webp",
@@ -640,53 +615,9 @@
       },
       "sub_groups": [],
       "title": "Photos (lossy)",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "images"
-    },
-    {
-      "availability": {
-        "reason": "Not implemented yet: Recompress archives analysis (W3-B)",
-        "state": "disabled"
-      },
-      "available_actions": [
-        "optimise"
-      ],
-      "badges": [],
-      "candidates": 0,
-      "category": "archive",
-      "confidence": "exact",
-      "count": 0,
-      "default_action": {
-        "keep_if_not_smaller": true,
-        "kind": "optimise",
-        "optimiser": "archive_recompress",
-        "originals": {
-          "policy": "recycle_bin"
-        },
-        "output": {
-          "mode": "replace"
-        },
-        "params": {}
-      },
-      "description": "Existing archives repacked with a stronger setting",
-      "feature_ids": [
-        "OPT-ARC-03"
-      ],
-      "id": "opt:archive_recompress",
-      "in_plan": false,
-      "params": {},
-      "presets": [],
-      "rank": 0.0,
-      "safety": "reversible",
-      "saving": 0,
-      "selected": 0,
-      "settings": [],
-      "size_before": 0,
-      "source": {
-        "optimiser": "archive_recompress"
-      },
-      "sub_groups": [],
-      "title": "Recompress archives",
-      "unit": "files"
     },
     {
       "availability": {
@@ -716,6 +647,7 @@
       ],
       "id": "opt:fs_compression",
       "in_plan": false,
+      "overlap": 0,
       "params": {
         "algorithm": "btrfs_zstd",
         "min_age_days": 90.0,
@@ -803,16 +735,21 @@
       },
       "sub_groups": [],
       "title": "Transparent compression",
+      "to_review": 0,
+      "to_review_count": 0,
       "unit": "files"
     }
   ],
-  "scanned_at": 1794663949506376681,
+  "scanned_at": 1794774292861504960,
   "summary": {
     "opportunities": 4,
     "opt_in": 0,
+    "overlap": 0,
     "reclaimed": 63499,
     "reversible": 368640,
     "review_only": 0,
+    "review_opportunities": 0,
+    "to_review": 0,
     "total": 368640
   }
 }

@@ -1,6 +1,6 @@
 [
   {
-    "available": 4849491968,
+    "available": 13484081152,
     "features": {
       "btrfs_compression": false,
       "hardlinks": true,
@@ -9,8 +9,8 @@
       "trash": true,
       "wof": false
     },
-    "free": 234119131136,
-    "free_after_plan": 234119434240,
+    "free": 242753720320,
+    "free_after_plan": 242754023424,
     "fs_type": "ext4",
     "id": "/",
     "label": "",

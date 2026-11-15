@@ -4,17 +4,17 @@
       "bytes_saved": 60307,
       "done": 2,
       "failed": 0,
-      "finished": 1794663949644742726,
+      "finished": 1794774292953681276,
       "items": 2,
       "kind": "apply",
-      "run_id": 1794663949600,
-      "started": 1794663949600636716,
+      "run_id": 1794774292922,
+      "started": 1794774292922742515,
       "steps": [
         "Temporary files",
         "PNG images"
       ],
       "title": "Plan · 2 steps",
-      "undo_until": 1797255949608469771,
+      "undo_until": 1797366292927134833,
       "undoable": true,
       "undone": 0
     }

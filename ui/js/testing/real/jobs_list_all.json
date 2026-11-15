@@ -1,7 +1,7 @@
 [
   {
-    "created": 1794663949559191682,
-    "finished": 1794663949589864959,
+    "created": 1794774292891931849,
+    "finished": 1794774292914643559,
     "id": 15,
     "kind": "dry_run",
     "progress": {
@@ -12,14 +12,14 @@
       "total": 1
     },
     "run_id": null,
-    "started": 1794663949559372726,
+    "started": 1794774292892026030,
     "state": "completed",
     "step_id": null,
     "title": "Dry run"
   },
   {
-    "created": 1794663949602623661,
-    "finished": 1794663949608367645,
+    "created": 1794774292923804062,
+    "finished": 1794774292926928280,
     "id": 16,
     "kind": "apply",
     "outcome": {
@@ -36,15 +36,15 @@
       "saved": 5000,
       "total": 1
     },
-    "run_id": 1794663949600,
-    "started": 1794663949602812377,
+    "run_id": 1794774292922,
+    "started": 1794774292923876925,
     "state": "completed",
     "step_id": 13,
     "title": "Temporary files"
   },
   {
-    "created": 1794663949602630788,
-    "finished": 1794663949645262315,
+    "created": 1794774292923806391,
+    "finished": 1794774292954071372,
     "id": 17,
     "kind": "apply",
     "outcome": {
@@ -61,8 +61,8 @@
       "saved": 55307,
       "total": 1
     },
-    "run_id": 1794663949600,
-    "started": 1794663949608385436,
+    "run_id": 1794774292922,
+    "started": 1794774292926937402,
     "state": "completed",
     "step_id": 14,
     "title": "PNG images"
