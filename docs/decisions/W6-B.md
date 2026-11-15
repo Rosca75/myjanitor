@@ -315,3 +315,17 @@ every user's fingerprints; those few files are hashed again once. Sibling fixed:
 an empty piece now marks the next entry as escaped (no entry is ever empty), so the list
 format and the engine side stay as they are. Not added: an engine-level test that acts on a
 non-Unicode temp file; the guard's `root_of` is `is_within`, which the core test covers.
+
+## D-B23 A drive that goes away mid-scan is not a finished scan (SCAN-4)
+
+A listing or stat that fails with "not found" was skipped silently (right for one temp
+file deleted during the scan), so an unplugged USB disk or a dropped share produced a
+"done" index with a fraction of the files, `unreadable = 0`, and a cache prune that threw
+away the fingerprints of everything not reached. Now a folder that vanished between being
+listed and being read becomes a hole (the cache keeps the records below it), and whenever
+anything vanished, `walker::run` stats every walked root again after the walk: a root that
+is gone now is reported unreadable (its state becomes `Unreadable`, so the cache does not
+prune under it), and the scan fails with that error when no walked root remains. A folder
+really deleted is pruned at the next scan, when it is no longer listed at all. Chosen over
+counting every vanished entry as unreadable, which would make ordinary temp-file churn
+show up as errors.

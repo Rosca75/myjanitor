@@ -377,3 +377,33 @@ fn non_utf8_names_count_in_every_ancestor() {
     assert!(mj_core::pathutil::is_within(t.path(), &bad_file));
     assert_eq!(ix.parent(pos(&bad_dir.join("c.txt"))), Some(pos(&bad_dir)));
 }
+
+/// SCAN-4: a drive that disappears mid-scan does not produce a complete-looking index, and
+/// the cache keeps the fingerprints of what the walk could no longer reach.
+#[test]
+fn a_volume_that_vanishes_mid_scan_is_not_a_complete_scan() {
+    let t = TempDir::new("it-gone").unwrap();
+    let data = TempDir::new("it-gone-cache").unwrap();
+    for i in 0..30 {
+        write_old(&t, &format!("d{i:02}/sub/f.bin"), &[i as u8; 64]);
+    }
+    let s = scope(&[t.path()]);
+    let cancel = CancelToken::new();
+    let cache = ScanCache::open(&data.join("scan-cache.bin"));
+    let native = NativePlatform::new();
+    let req = ScanRequest { scope: &s, exclusions: &[], platform: &native, cancel: &cancel, progress: &NullProgress };
+    let full = scan_with_cache(&req, &cache).unwrap();
+    assert_eq!(full.stats.files, 30);
+    assert_eq!(cache.prune(&full), 0);
+    let before = cache.len();
+    let gone = TestPlatform { gone_after: Some(1), ..Default::default() };
+    let req = ScanRequest { scope: &s, exclusions: &[], platform: &gone, cancel: &cancel, progress: &NullProgress };
+    match scan_with_cache(&req, &cache) {
+        Err(e) => assert_eq!(e.code(), "not_found", "{e}"),
+        Ok(ix) => {
+            assert!(ix.stats.unreadable >= 1, "{:?}", ix.stats);
+            assert_eq!(cache.prune(&ix), 0, "nothing the walk could not reach is pruned");
+        }
+    }
+    assert_eq!(cache.len(), before);
+}
