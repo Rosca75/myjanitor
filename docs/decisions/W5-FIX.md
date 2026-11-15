@@ -62,3 +62,37 @@ data folder; its pid text is for people only.
 
 Storing links would change the archive format contract and the verification of three
 formats; a refusal with a way out ("keep the originals") is contained and loses nothing.
+
+## Part B: T1 gap closure
+
+| Item | Feature | Result | Commit | Tests |
+|---|---|---|---|---|
+| 1 | CLN-ACT-04 | done: expired quarantine items purged (guarded `purge_expired`, each item's own retention) at GUI engine start, at the start of acting CLI commands (`apply`, `clean --apply`, `undo`, `run-profile`, `quarantine purge`) and after each applied step; CLI `quarantine list [--json]` and `quarantine purge [--older-than DAYS --yes]`; UI copy says so | `b2590b5` | `t1_gaps::cln_act_04_*`, cli `quarantine_list_and_purge` |
+| 2 | CLN-ACT-05 | done: Copy offered wherever Move is; step panel Copy… with the in-app folder browser and "Keep folder structure" (default on) for Move and Copy; CLI `--action move\|copy --to DIR [--flat]`; destinations refused at plan time when relative, protected or inside a scanned location, and checked by the guard per item | `edaeb5d` | `t1_gaps::cln_act_05_*`, `wiring.test.js` |
+| 3 | CLN-ACT-02 | done: setting `general.windows_recycle_bin` (default off, help says restore is best effort); `app_info.trash_route` (`quarantine`/`recycle_bin`/`trash`) drives the step tile and the dialog label | `a51b369` | `t1_gaps::cln_act_02_*`, `step.test.js` |
+| 4 | CLN-ACT-11 | done: `mj_formats::pdf::table` text-only PDF (Helvetica/WinAnsi, escaped, `?` replacement counted and noted), `ExportFormat::Pdf` for report and results exports, UI buttons, CLI `report --format pdf`, `show ID --format csv\|html\|pdf --out FILE` | `bb39fa0` | `pdf::table::tests` (re-parsed), `t1_gaps::cln_act_11_*`, `w3.test.js` |
+| 5 | CLN-ACT-06 | done: duplicates step offers hard links (explanation, F-07 confirmation) and reflinks, each disabled with its reason without the capability | `5d70430` | `wiring.test.js` |
+| 6 | AUT-05/06/07 | done: `temp_dir` used for every apply/dry-run scratch folder, refused inside a scanned or protected location; `threads` drive the scan walk/hash pool (detector pools already followed it); `low_memory`, `parallel_jobs`, `cpu_priority` shown disabled with the reason | `ba3d777` | `t1_gaps::aut_07_*`, `settings.test.js` |
+| 7 | CLN-DET-08 | done: WAV/RIFF size, FLAC STREAMINFO, MP3 frame sync after ID3v2, Ogg page magic, then the media prober | `8130cbd` | `broken::tests::cln_det_08_*` |
+| 8 | CLN-FLT-06 | partial: Linux names from `/etc/passwd` (cached) match `owner:` filters; Windows owner SID not collected (the FFI was judged not contained enough to add unexercised) | `30871a7` | `users::tests`, `eval_tests` |
+| 9 | CLN-CNT-01 | done (best effort): PDF, DOCX, XLSX, PPTX extractors | `5d7185d` | `extract::tests`, `t1_gaps::cln_cnt_01_*` |
+
+### D-F9 Settings that do nothing are disabled, not removed
+
+`low_memory`, `parallel_jobs` and `cpu_priority` stay in the settings file (older files keep
+loading) but the Settings view shows them off and disabled with "Not available in this
+version: …". Implementing `parallel_jobs` would run plan steps concurrently, which breaks
+the ordering the G-03 kept-copy rule and the journal reasoning rely on. `lossless_only`
+(OPT-ENG-01, T2) and `preserve_ads` have no control in the UI and remain inactive: lossy
+work is already opt-in per step with a confirmation, and new files never carry ADS.
+
+### D-F10 The Windows Recycle Bin setting never overrides a fixed route
+
+The setting applies only when the engine runs with the OS default route on Windows. A
+caller (tests, a portable build) that fixed the route keeps it, so no test can reach a real
+Recycle Bin.
+
+### D-F11 The CLI purges only before acting
+
+A read-only CLI command (`scan`, `list`, `history`) never deletes anything, even expired
+quarantine items; the GUI purges at start-up because opening it is how a user resumes work.
