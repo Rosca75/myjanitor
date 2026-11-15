@@ -229,6 +229,8 @@ fn scan_list_apply_undo_pipeline() {
     assert_eq!(report.code, 0, "{}", report.err);
     let undo = cli(&data, &home, &["undo", "--last"]);
     assert_eq!(undo.code, 0, "{}{}", undo.out, undo.err);
+    assert!(!undo.out.contains("Run 0") && !undo.out.contains("undo --run"), "IPC-12: {}", undo.out);
+    assert!(undo.out.contains("Restored 1 item(s)."), "{}", undo.out);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before, "undo restores the tree");
     assert_eq!(cli(&data, &home, &["undo", "--last"]).code, 1, "nothing left to undo");
 

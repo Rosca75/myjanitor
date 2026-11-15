@@ -4,7 +4,7 @@ use mj_core::{ExportFormat, Report, RunId};
 use mj_engine::api::{PageRequest, ReportExportKind, ReportExportRequest, RunRequest};
 
 use crate::args::Parsed;
-use crate::cmd_plan::finish;
+use crate::cmd_plan::finish_undo;
 use crate::ctx::{Ctx, Fail, Res};
 use crate::out::{bytes, json, table, when};
 
@@ -58,7 +58,7 @@ pub fn undo(a: &Parsed) -> Res {
     if !ctx.json {
         println!("Restored {ok} item(s).");
     }
-    finish(&ctx, job.run_id.map(|r| r.0).unwrap_or(0), &jobs)
+    finish_undo(&ctx, &jobs)
 }
 
 fn text_report(r: &Report) -> String {
