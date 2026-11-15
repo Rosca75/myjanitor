@@ -33,6 +33,7 @@ export const COMMANDS = Object.freeze([
   'selection_reset',
   'step_params_set',
   'candidate_preview',
+  'candidate_thumbnails',
   'search_parse',
   'search_suggest',
   'search_run',
@@ -230,6 +231,8 @@ export const api = Object.freeze({
   stepParamsSet: (req) => call('step_params_set', req),
   /** Preview for one row (thumbnail, text head, waveform). @param {object} req CandidatePreviewRequest @returns {Promise<any>} Preview */
   candidatePreview: (req) => call('candidate_preview', req),
+  /** Row thumbnails of the visible page (W6-A). @param {object} req CandidateThumbnailsRequest @returns {Promise<any>} CandidateThumbnails */
+  candidateThumbnails: (req) => call('candidate_thumbnails', req),
   /** Parse a quick query into a rule tree, with error positions. @param {object} req SearchParseRequest @returns {Promise<any>} SearchParseResponse */
   searchParse: (req) => call('search_parse', req),
   /** Autocomplete for the search box. @param {object} req SearchSuggestRequest @returns {Promise<any>} Vec<Suggestion> */

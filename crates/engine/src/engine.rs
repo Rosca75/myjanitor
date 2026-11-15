@@ -127,6 +127,10 @@ pub struct Engine {
     #[allow(dead_code)]
     instance: Option<crate::instance::InstanceLock>,
     pub(crate) instance_error: Option<String>,
+    /// Last step-table order (W6-A: paging re-uses it).
+    pub(crate) review_order: Mutex<crate::review_order::OrderCache>,
+    /// Review thumbnails (W6-A): byte-capped LRU and the large-decode gate.
+    pub(crate) thumbs: crate::thumbs::ThumbCache,
     next_id: AtomicU64,
 }
 
@@ -183,6 +187,8 @@ impl Engine {
             journal_error,
             instance,
             instance_error,
+            review_order: Mutex::new(Default::default()),
+            thumbs: Default::default(),
             next_id: AtomicU64::new(1),
             cfg,
         };

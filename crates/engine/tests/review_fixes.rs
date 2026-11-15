@@ -26,6 +26,8 @@ fn rows(e: &mj_engine::Engine, id: &str) -> Vec<CandidateRow> {
         sort: CandidateSortKey::Path,
         descending: false,
         filter: None,
+        min_size: None,
+        keep_groups: false,
     })
     .unwrap()
     .rows

@@ -106,6 +106,8 @@ fn large_tree_scan_detect_page_and_dry_run() {
                     sort,
                     descending: false,
                     filter: None,
+                    min_size: None,
+                    keep_groups: false,
                 })
                 .unwrap()
             });
@@ -119,6 +121,8 @@ fn large_tree_scan_detect_page_and_dry_run() {
                 sort: CandidateSortKey::Saving,
                 descending: true,
                 filter: Some("p01".into()),
+                min_size: None,
+                keep_groups: false,
             })
             .unwrap()
         });

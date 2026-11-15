@@ -24,6 +24,7 @@ mod plan;
 mod presets;
 mod reports;
 mod results;
+mod review_order;
 mod scan_ops;
 pub mod schedules;
 mod scope;
@@ -31,6 +32,7 @@ mod search;
 pub mod settings;
 mod steps;
 mod store;
+mod thumbs;
 mod tools;
 
 pub use engine::{Engine, EngineConfig};

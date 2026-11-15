@@ -125,6 +125,8 @@ pub fn print_candidates(ctx: &Ctx, id: &OpportunityId, limit: u32) -> Res {
         sort: Default::default(),
         descending: false,
         filter: None,
+        min_size: None,
+        keep_groups: false,
     })?;
     if ctx.json {
         println!("{}", json(&page));

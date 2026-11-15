@@ -17,6 +17,8 @@ fn paths(e: &mj_engine::Engine, id: &str) -> Vec<std::path::PathBuf> {
         sort: CandidateSortKey::Path,
         descending: false,
         filter: None,
+        min_size: None,
+        keep_groups: false,
     })
     .map(|p| p.rows.into_iter().map(|r| r.candidate.path).collect())
     .unwrap_or_default()

@@ -152,6 +152,16 @@ pub async fn candidate_preview(state: State<'_, AppState>, req: CandidatePreview
     run(state, move |e| e.candidate_preview(req)).await
 }
 
+/// Row thumbnails of the visible page of a duplicates-type step (decoded off the UI
+/// thread, on the blocking pool like every command).
+#[tauri::command]
+pub async fn candidate_thumbnails(
+    state: State<'_, AppState>,
+    req: CandidateThumbnailsRequest,
+) -> Result<CandidateThumbnails, ErrorInfo> {
+    run(state, move |e| e.candidate_thumbnails(req)).await
+}
+
 /// Parse a quick query into a rule tree, with error positions.
 #[tauri::command]
 pub async fn search_parse(
@@ -473,6 +483,7 @@ pub const REGISTERED: &[&str] = &[
     "selection_reset",
     "step_params_set",
     "candidate_preview",
+    "candidate_thumbnails",
     "search_parse",
     "search_suggest",
     "search_run",
@@ -547,6 +558,7 @@ macro_rules! mj_handlers {
             $crate::commands::selection_reset,
             $crate::commands::step_params_set,
             $crate::commands::candidate_preview,
+            $crate::commands::candidate_thumbnails,
             $crate::commands::search_parse,
             $crate::commands::search_suggest,
             $crate::commands::search_run,

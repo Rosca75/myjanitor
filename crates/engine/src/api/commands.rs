@@ -133,6 +133,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         spawns: false,
     },
     CommandSpec {
+        name: "candidate_thumbnails",
+        request: Some("CandidateThumbnailsRequest"),
+        response: "CandidateThumbnails",
+        module: "thumbs",
+        spawns: false,
+    },
+    CommandSpec {
         name: "search_parse",
         request: Some("SearchParseRequest"),
         response: "SearchParseResponse",

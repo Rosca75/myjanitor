@@ -4,18 +4,18 @@
 //! Every change recomputes the card, updates the plan step when the opportunity is in
 //! the plan (`plan://changed`) and emits `opportunities://changed`.
 
-use std::cmp::Ordering;
 use std::io::Read;
 
 use mj_core::{lock, Badges, Error, ParamValue, Result, SafetyClass};
 
 use crate::api::{
-    CandidatePreviewRequest, CandidateRow, CandidateSortKey, CandidatesPage, CandidatesPageRequest, Event,
-    OpportunitiesChanged, OpportunityRequest, Preview, SelectionKeepRuleRequest, SelectionSetRequest, StepDetail,
-    StepParamsRequest, StepParamsResponse, StepSummary,
+    CandidatePreviewRequest, CandidateRow, CandidatesPage, CandidatesPageRequest, Event, OpportunitiesChanged,
+    OpportunityRequest, Preview, SelectionKeepRuleRequest, SelectionSetRequest, StepDetail, StepParamsRequest,
+    StepParamsResponse, StepSummary,
 };
 use crate::opportunities::recompute;
 use crate::results::{blocked_reason, is_selected, skip_badges, unknown, OpportunityRecord};
+use crate::review_order::{fingerprint, order, OrderKey, Query};
 use crate::Engine;
 
 fn summary_of(rec: &OpportunityRecord) -> StepSummary {
@@ -46,27 +46,9 @@ pub(crate) fn params_lossy(rec: &OpportunityRecord, params: &mj_core::ParamValue
     setting || preset
 }
 
-/// Minimal standard base64 (no external crate).
-fn base64(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
-        out.push(T[(n >> 18) as usize & 63] as char);
-        out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
-
 fn none(reason: &str) -> Preview {
     Preview { kind: "none".into(), mime: None, data: None, text: None, waveform: None, reason: Some(reason.into()) }
 }
-
-/// Image previews are the file itself, only for small web-displayable images.
-const PREVIEW_IMAGE_MAX: u64 = 4 << 20;
 
 impl Engine {
     fn after_selection_change(&self, opportunity: &mj_core::OpportunityId) {
@@ -107,47 +89,46 @@ impl Engine {
         })
     }
 
-    /// One page of candidates.
+    /// One page of candidates, flat or with groups kept together (W6-A, see
+    /// `review_order`). The order of a request shape is cached across pages.
     pub fn candidates_page(&self, req: CandidatesPageRequest) -> Result<CandidatesPage> {
         let skip = skip_badges(&lock(&self.settings));
         let results = self.results.read().unwrap_or_else(|e| e.into_inner());
         let rec = results.get(&req.opportunity_id).ok_or_else(|| unknown(&req.opportunity_id))?;
-        let filter = req.filter.as_ref().map(|f| f.to_lowercase()).filter(|f| !f.is_empty());
-        let mut rows: Vec<&mj_core::Candidate> = rec
-            .candidates
-            .iter()
-            .filter(|c| req.sub_group.is_none() || c.sub_group == req.sub_group)
-            .filter(|c| filter.as_ref().is_none_or(|f| c.path.to_string_lossy().to_lowercase().contains(f)))
-            .collect();
-        // Ascending order with the path as a total tie-breaker; `saving`/`size` default to
-        // biggest first, like the overview ("descending" reverses the default).
-        let by_path = |a: &&mj_core::Candidate, b: &&mj_core::Candidate| a.path.cmp(&b.path);
-        let cmp = |a: &&mj_core::Candidate, b: &&mj_core::Candidate| -> Ordering {
-            match req.sort {
-                CandidateSortKey::Saving => b.saving().cmp(&a.saving()).then_with(|| by_path(a, b)),
-                CandidateSortKey::Size => b.size.cmp(&a.size).then_with(|| by_path(a, b)),
-                CandidateSortKey::Name => {
-                    let n = |c: &mj_core::Candidate| c.path.file_name().map(|n| n.to_string_lossy().to_lowercase());
-                    n(a).cmp(&n(b)).then_with(|| by_path(a, b))
-                }
-                CandidateSortKey::Path => by_path(a, b),
-                CandidateSortKey::Modified => a.modified.cmp(&b.modified).then_with(|| by_path(a, b)),
-                CandidateSortKey::Group => (a.group, !a.badges.contains(Badges::KEEPER))
-                    .cmp(&(b.group, !b.badges.contains(Badges::KEEPER)))
-                    .then_with(|| by_path(a, b)),
+        let has_groups = !rec.groups.is_empty();
+        let limit = req.limit.clamp(1, 500) as usize;
+        let query = Query {
+            sub_group: req.sub_group.clone(),
+            filter: req.filter.as_ref().map(|f| f.to_lowercase()).filter(|f| !f.is_empty()),
+            min_size: req.min_size.filter(|&m| m > 0),
+            sort: req.sort,
+            descending: req.descending,
+            keep_groups: req.keep_groups && has_groups,
+            // The flat order does not depend on the page size.
+            limit: if req.keep_groups && has_groups { limit } else { 0 },
+        };
+        let key = OrderKey {
+            opportunity: req.opportunity_id.clone(),
+            generation: results.generation,
+            fingerprint: fingerprint(&rec.candidates),
+            query,
+        };
+        let cached = lock(&self.review_order).get(&key);
+        let order = match cached {
+            Some(o) => o,
+            None => {
+                let o = std::sync::Arc::new(order(&rec.candidates, &key.query));
+                lock(&self.review_order).put(key.clone(), std::sync::Arc::clone(&o));
+                o
             }
         };
-        rows.sort_by(cmp);
-        if req.descending {
-            rows.reverse();
-        }
-        let total = rows.len() as u64;
-        let limit = req.limit.clamp(1, 500) as usize;
-        let page: Vec<CandidateRow> = rows
-            .into_iter()
-            .skip(usize::try_from(req.offset).unwrap_or(usize::MAX))
-            .take(limit)
-            .map(|c| {
+        let span = order.span(req.offset, limit);
+        let total = order.total();
+        let (start, end) = (span.start.min(total) as usize, span.end.min(total) as usize);
+        let page: Vec<CandidateRow> = order.rows[start..end]
+            .iter()
+            .map(|&i| {
+                let c = &rec.candidates[i as usize];
                 let blocked = blocked_reason(c, skip);
                 CandidateRow {
                     candidate: c.clone(),
@@ -157,9 +138,25 @@ impl Engine {
                 }
             })
             .collect();
-        let groups =
-            rec.groups.iter().filter(|g| page.iter().any(|r| r.candidate.group == Some(g.id))).cloned().collect();
-        Ok(CandidatesPage { opportunity_id: req.opportunity_id, total, offset: req.offset, rows: page, groups })
+        let on_page: std::collections::HashSet<mj_core::GroupId> =
+            page.iter().filter_map(|r| r.candidate.group).collect();
+        let groups: Vec<mj_core::CandidateGroup> =
+            rec.groups.iter().filter(|g| on_page.contains(&g.id)).cloned().collect();
+        let group_stats = groups.iter().filter_map(|g| order.stats.get(&g.id).copied()).collect();
+        Ok(CandidatesPage {
+            opportunity_id: req.opportunity_id,
+            total,
+            offset: span.start,
+            rows: page,
+            groups,
+            group_stats,
+            has_groups,
+            keep_groups: key.query.keep_groups,
+            page: span.page,
+            pages: span.pages,
+            next_offset: span.next,
+            prev_offset: span.prev,
+        })
     }
 
     /// Check / uncheck rows. Locked rows never become selected.
@@ -314,7 +311,7 @@ impl Engine {
         Ok(StepParamsResponse { params, summary, lossy, safety })
     }
 
-    /// Preview of one candidate (SAF-02): small images as-is, the first 4 KiB of text.
+    /// Preview of one candidate (SAF-02): a bounded image thumbnail, the first 4 KiB of text.
     /// Online-only files are never read (reading would download them).
     pub fn candidate_preview(&self, req: CandidatePreviewRequest) -> Result<Preview> {
         let (path, badges, target) = {
@@ -335,26 +332,18 @@ impl Engine {
         if !md.is_file() {
             return Ok(none("Not a regular file"));
         }
-        let mime = match ext.as_str() {
-            "jpg" | "jpeg" => Some("image/jpeg"),
-            "png" => Some("image/png"),
-            "gif" => Some("image/gif"),
-            "webp" => Some("image/webp"),
-            "bmp" => Some("image/bmp"),
-            _ => None,
-        };
-        if let Some(mime) = mime {
-            if md.len() > PREVIEW_IMAGE_MAX {
-                return Ok(none("Image too large for a quick preview"));
-            }
-            let data = std::fs::read(&path).map_err(|e| Error::io(&path, e))?;
-            return Ok(Preview {
-                kind: "image".into(),
-                mime: Some(mime.into()),
-                data: Some(base64(&data)),
-                text: None,
-                waveform: None,
-                reason: None,
+        if crate::thumbs::is_image(&path) {
+            // A real bounded thumbnail (at most 512 px; IPC-9), never the whole file.
+            return Ok(match self.thumbnail_of(&path, badges, target, crate::thumbs::PREVIEW_SIDE) {
+                Ok(img) => Preview {
+                    kind: "image".into(),
+                    mime: Some(img.mime.into()),
+                    data: Some(img.base64.clone()),
+                    text: None,
+                    waveform: None,
+                    reason: None,
+                },
+                Err(why) => none(why.sentence()),
             });
         }
         if matches!(ext.as_str(), "mp3" | "wav" | "m4a" | "flac" | "ogg" | "opus" | "aac" | "wma") {
@@ -385,16 +374,5 @@ impl Engine {
             waveform: None,
             reason: None,
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn base64_matches_rfc4648() {
-        assert_eq!(super::base64(b""), "");
-        assert_eq!(super::base64(b"f"), "Zg==");
-        assert_eq!(super::base64(b"fo"), "Zm8=");
-        assert_eq!(super::base64(b"foobar"), "Zm9vYmFy");
     }
 }

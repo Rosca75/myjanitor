@@ -12,7 +12,17 @@ fn oid(s: &str) -> OpportunityId {
 }
 
 fn page_req(id: &str, offset: u64, limit: u32, sort: CandidateSortKey, descending: bool) -> CandidatesPageRequest {
-    CandidatesPageRequest { opportunity_id: oid(id), sub_group: None, offset, limit, sort, descending, filter: None }
+    CandidatesPageRequest {
+        opportunity_id: oid(id),
+        sub_group: None,
+        offset,
+        limit,
+        sort,
+        descending,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
+    }
 }
 
 /// 12 groups of 3 identical files of different sizes.

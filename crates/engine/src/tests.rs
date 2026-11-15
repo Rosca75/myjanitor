@@ -187,6 +187,8 @@ fn check(ty: &str, body: &str) {
         StepParamsResponse,
         CandidatePreviewRequest,
         Preview,
+        CandidateThumbnailsRequest,
+        CandidateThumbnails,
         SearchParseRequest,
         SearchParseResponse,
         SearchSuggestRequest,
@@ -246,4 +248,45 @@ fn check(ty: &str, body: &str) {
         Candidate,
     );
     panic!("IPC.md example names unknown type `{ty}`");
+}
+
+/// W6-A: an online-only member is never read; its exact group's thumbnail comes from a
+/// member on this disk.
+#[test]
+fn thumbnails_never_read_online_only_files_and_reuse_the_group() {
+    let t = TempDir::new("engine-thumb-online").unwrap();
+    let img = mj_formats::png::build::rgb_png(300, 200, &[], 1);
+    t.write("a/p.png", &img).unwrap();
+    t.write("b/p.png", &img).unwrap();
+    let e = engine(Arc::new(CollectSink::default()));
+    e.scope_add_root(ScopePathRequest { path: t.path().to_path_buf() }).unwrap();
+    e.scan_start(ScanStartRequest::default()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while e.scan_status().unwrap().state != ScanRunState::Done {
+        assert!(Instant::now() < deadline, "scan did not finish");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let opp = mj_core::OpportunityId("det:exact_duplicates".into());
+    let ids: Vec<mj_core::CandidateId> = {
+        let mut r = e.results.write().unwrap();
+        let rec = r.opportunities.iter_mut().find(|o| o.opportunity.id == opp).expect("duplicates found");
+        let c = rec.candidates.iter_mut().find(|c| c.path.ends_with("a/p.png")).unwrap();
+        c.badges |= mj_core::Badges::ONLINE_ONLY;
+        // Point it at a file that does not exist: any read attempt would say "unreadable".
+        c.path = t.path().join("a/missing.png");
+        rec.candidates.iter().map(|c| c.id).collect()
+    };
+    assert_eq!(ids.len(), 2);
+    let th = e.candidate_thumbnails(CandidateThumbnailsRequest { opportunity_id: opp, candidate_ids: ids }).unwrap();
+    assert!(th
+        .thumbnails
+        .iter()
+        .all(|x| x.data_url.as_deref().is_some_and(|u| u.starts_with("data:image/png;base64,"))));
+    let alone = e.thumbnail_of(
+        &t.path().join("a/missing.png"),
+        mj_core::Badges::ONLINE_ONLY,
+        mj_core::TargetKind::File,
+        crate::thumbs::ROW_SIDE,
+    );
+    assert_eq!(alone.err(), Some(crate::thumbs::NoThumb::OnlineOnly));
 }

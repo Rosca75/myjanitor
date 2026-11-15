@@ -41,6 +41,8 @@ const OPTIONAL: &[&str] = &[
     "CandidatesPage.rows[].sub_group",
     "CandidatesPage.rows[].blocked_reason",
     "CandidatesPage.rows[].columns",
+    "CandidateThumbnails.thumbnails[].data_url",
+    "CandidateThumbnails.thumbnails[].reason",
     "Job.outcome",
     "Job.error",
     "Job.started",
@@ -224,9 +226,17 @@ fn session() -> (Fixture, Vec<(&'static str, &'static str, Value)>) {
             sort: CandidateSortKey::Size,
             descending: true,
             filter: None,
+            min_size: None,
+            keep_groups: true,
         })
         .unwrap();
     let cid = first_candidate.rows[0].candidate.id;
+    let thumbnails = e
+        .candidate_thumbnails(CandidateThumbnailsRequest {
+            opportunity_id: dup.clone(),
+            candidate_ids: first_candidate.rows.iter().map(|r| r.candidate.id).collect(),
+        })
+        .unwrap();
     macro_rules! v {
         ($e:expr) => {
             serde_json::to_value($e).unwrap()
@@ -251,6 +261,7 @@ fn session() -> (Fixture, Vec<(&'static str, &'static str, Value)>) {
             "Preview",
             v!(e.candidate_preview(CandidatePreviewRequest { candidate_id: cid }).unwrap()),
         ),
+        ("candidate_thumbnails", "CandidateThumbnails", v!(thumbnails)),
         ("plan_confirmation_info", "ConfirmationInfo", v!(confirmation)),
         ("history_list", "HistoryList", v!(e.history_list(PageRequest::default()).unwrap())),
         (

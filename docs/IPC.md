@@ -77,7 +77,7 @@ CLI does not have them; the mock backend answers them with a stand-in (§7).
 | Empty state | `dialog_pick_folder`, `scope_add_root`, `scan_start` | |
 | Scanning | `scan_pause`, `scan_resume`, `scan_stop`, `scan_status` | `scan://progress`, `scan://detector`, `scan://done` |
 | B1 Overview | `opportunities_list`, `drives_list`, `plan_add_step`, `plan_remove_step`, `plan_reorder`, `plan_dry_run`, `schedule_from_plan` | `opportunities://changed`, `plan://changed`, `plan://dry_run` |
-| B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `results_export`, `dialog_pick_folder` (move/copy destination, preferred folder), `dialog_save_file` | |
+| B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `candidate_thumbnails`, `results_export`, `dialog_pick_folder` (move/copy destination, preferred folder), `dialog_save_file` | |
 | Confirmation dialog | `plan_confirmation_info`, `plan_apply` | |
 | Action running | `jobs_list`, `job_pause`, `job_resume`, `job_cancel`, `jobs_reorder` | `job://progress`, `job://state`, `job://done` |
 | Completed | `report_last`, `report_get`, `report_export`, `dialog_save_file`, `undo_last` | `history://changed` |
@@ -182,10 +182,28 @@ runs applied this session freed.
 ### `candidates_page`
 `CandidatesPageRequest` → `CandidatesPage`. One page (`limit` 1-500, default 100)
 of the step's table. `sort` defaults to `saving`; `descending` reverses the
-ascending order. `groups` contains the groups referenced by the page's rows.
+ascending order. `filter` is a case-insensitive path substring, `min_size` a
+minimum size in bytes. `groups` contains the groups referenced by the page's rows,
+`group_stats` their totals (members shown, largest and smallest size, bytes
+reclaimable while one copy is kept), `has_groups` says whether the step has groups.
+
+"Keep groups together" (`keep_groups: true`, W6-A; ignored when `has_groups` is
+false, the response's `keep_groups` says whether it applied): the sort orders whole
+groups by an aggregate of the column (`size`: the group's largest file; `saving`:
+the bytes the group frees; `name` / `path`: the group's kept copy, else its first
+path; `modified`: its most recently modified member; `group`: the group id), and
+`descending` reverses the group order. Inside a group the kept copy comes first,
+then the column's natural order. Filters keep or drop whole groups: a group is
+shown, with all its members, when any member matches `filter` and its largest
+member is at least `min_size`. Pages are packed by groups: a page never starts
+inside a group that fits on one page (a larger group is split), so the response's
+`offset` is the start of the page holding the requested offset and pages hold up
+to `limit` rows; page with `next_offset` / `prev_offset` (`null` at the ends),
+`page` / `pages` are 1-based. Without `keep_groups` the rows are sorted on their
+own, `offset` is used as given and `next_offset = offset + limit`.
 
 ```json CandidatesPageRequest
-{"opportunity_id":"det:exact_duplicates","sub_group":null,"offset":0,"limit":100,"sort":"group","descending":false,"filter":"photos"}
+{"opportunity_id":"det:exact_duplicates","sub_group":null,"offset":0,"limit":100,"sort":"size","descending":false,"filter":"photos","min_size":1048576,"keep_groups":true}
 ```
 
 ### `selection_set`
@@ -224,12 +242,31 @@ in the plan the plan step is updated too (`plan://changed`).
 ```
 
 ### `candidate_preview`
-`CandidatePreviewRequest` → `Preview`. Thumbnail (base64, ≤ 512 px), first 4 KiB
+`CandidatePreviewRequest` → `Preview`. Image thumbnail (base64), first 4 KiB
 of text, or a waveform with the silences the current settings would remove.
-`kind: "none"` with a `reason` when not available.
+`kind: "none"` with a `reason` when not available. JPEG and PNG are decoded and
+downscaled to at most 512 px on the long side (EXIF orientation applied) and sent
+as PNG; GIF, WebP and BMP are sent unchanged only when the file is at most 1 MiB
+(the webview scales them). Online-only files are never read; JPEG/PNG over 64 MiB
+or 48 MP have no preview.
 
 ```json CandidatePreviewRequest
 {"candidate_id":1041}
+```
+
+### `candidate_thumbnails`
+`CandidateThumbnailsRequest` → `CandidateThumbnails`. W6-A: row thumbnails of the
+visible page of a duplicates-type step, at most 100 ids per call, answered in
+request order. `data_url` is a `data:image/...;base64,` URL: JPEG and PNG
+downscaled to at most 128 px (the EXIF embedded thumbnail when it matches the
+image, else the decoded image), GIF / WebP / BMP unchanged when at most 256 KiB.
+Otherwise `reason` is one of `not_image`, `online_only`, `too_large`,
+`unreadable`, `undecodable`, `unknown` (a stale id), and the UI shows the file-type
+icon. Rows of one exact-duplicate group share one thumbnail (any member on this
+disk serves the group); results are cached by path, size and modification time.
+
+```json CandidateThumbnailsRequest
+{"opportunity_id":"det:exact_duplicates","candidate_ids":[7,8]}
 ```
 
 ### `search_parse`
@@ -725,13 +762,19 @@ carry a `blocked_reason` and can never be selected.
 #### CandidatesPage
 
 ```json CandidatesPage
-{"opportunity_id":"det:exact_duplicates","total":214,"offset":0,"rows":[{"id":7,"path":"/home/me/Photos/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Kept: newest copy","badges":["duplicate","keeper"],"default_selected":false,"group":3,"modified":1700000000000000000,"stamp":{"size":4194304,"mtime":1700000000000000000},"selected":false,"actionable":true},{"id":8,"path":"/home/me/Downloads/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Same content as 1 other file","badges":["duplicate"],"default_selected":true,"group":3,"modified":1690000000000000000,"stamp":{"size":4194304,"mtime":1690000000000000000},"selected":true,"actionable":true}],"groups":[{"id":3,"kind":"exact","label":"2 copies of IMG_0001.JPG","confidence":100.0,"keeper":"/home/me/Photos/IMG_0001.JPG","members":["/home/me/Photos/IMG_0001.JPG","/home/me/Downloads/IMG_0001.JPG"]}]}
+{"opportunity_id":"det:exact_duplicates","total":214,"offset":0,"rows":[{"id":7,"path":"/home/me/Photos/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Kept: newest copy","badges":["duplicate","keeper"],"default_selected":false,"group":3,"modified":1700000000000000000,"stamp":{"size":4194304,"mtime":1700000000000000000},"selected":false,"actionable":true},{"id":8,"path":"/home/me/Downloads/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Same content as 1 other file","badges":["duplicate"],"default_selected":true,"group":3,"modified":1690000000000000000,"stamp":{"size":4194304,"mtime":1690000000000000000},"selected":true,"actionable":true}],"groups":[{"id":3,"kind":"exact","label":"2 copies of IMG_0001.JPG","confidence":100.0,"keeper":"/home/me/Photos/IMG_0001.JPG","members":["/home/me/Photos/IMG_0001.JPG","/home/me/Downloads/IMG_0001.JPG"]}],"group_stats":[{"id":3,"files":2,"largest":4194304,"smallest":4194304,"reclaimable":4194304}],"has_groups":true,"keep_groups":true,"page":1,"pages":5,"next_offset":98,"prev_offset":null}
 ```
 
 #### StepParamsResponse
 
 ```json StepParamsResponse
 {"params":{"codec":"opus","bitrate_kbps":24,"downmix_mono":true,"remove_silences":true,"max_pause_s":2},"summary":{"candidates":25,"selected":23,"size_before":5153960755,"size_after":644245094,"saving":4509715661,"confidence":"estimated"},"lossy":true,"safety":"lossy_opt_in"}
+```
+
+#### CandidateThumbnails
+
+```json CandidateThumbnails
+{"thumbnails":[{"candidate_id":7,"data_url":"data:image/png;base64,iVBORw0KGgo="},{"candidate_id":8,"reason":"online_only"}]}
 ```
 
 #### Preview

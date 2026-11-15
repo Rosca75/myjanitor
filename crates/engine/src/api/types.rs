@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use mj_core::index::ScanStats;
 use mj_core::{
     Action, Cadence, Candidate, CandidateGroup, CandidateId, Confidence, Diagnostics, ErrorInfo, Estimate,
-    ExportFormat, ItemOutcome, Job, JobId, JobProgress, JournalEntry, KeepRule, Opportunity, OpportunityId,
+    ExportFormat, GroupId, ItemOutcome, Job, JobId, JobProgress, JournalEntry, KeepRule, Opportunity, OpportunityId,
     OriginalsPolicy, ParamValues, Phase, Plan, Rule, RulePreset, RunId, RunKind, SafetyClass, SavingsSummary,
     ScanScope, Schedule, Settings, StepConfirmation, StepId, Timestamp,
 };
@@ -356,9 +356,18 @@ pub struct CandidatesPageRequest {
     pub sort: CandidateSortKey,
     #[serde(default)]
     pub descending: bool,
-    /// Case-insensitive substring of the path.
+    /// Case-insensitive substring of the path. With `keep_groups`, a group is shown
+    /// (whole) when any of its members matches.
     #[serde(default)]
     pub filter: Option<String>,
+    /// Only rows of at least this many bytes. With `keep_groups`, a group is shown
+    /// (whole) when its largest member is at least this size.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    /// "Keep groups together" (W6-A): sort, filter and page whole groups, each under its
+    /// header with the kept copy first. Ignored by steps without groups.
+    #[serde(default)]
+    pub keep_groups: bool,
 }
 
 fn default_limit() -> u32 {
@@ -382,12 +391,73 @@ pub struct CandidateRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidatesPage {
     pub opportunity_id: OpportunityId,
-    /// Rows matching sub-group + filter.
+    /// Rows matching sub-group + filters.
     pub total: u64,
+    /// First row of this page (with `keep_groups`, the start of the page holding the
+    /// requested offset: a page never starts inside a group that fits on one page).
     pub offset: u64,
     pub rows: Vec<CandidateRow>,
     /// Groups referenced by the rows of this page.
     pub groups: Vec<CandidateGroup>,
+    /// Totals of those groups over all their shown members (also the ones on other pages).
+    #[serde(default)]
+    pub group_stats: Vec<GroupStats>,
+    /// The step's candidates have groups (duplicates-type step).
+    #[serde(default)]
+    pub has_groups: bool,
+    /// Groups are kept together on this page (`keep_groups` asked and `has_groups`).
+    #[serde(default)]
+    pub keep_groups: bool,
+    /// 1-based page number and page count.
+    #[serde(default)]
+    pub page: u64,
+    #[serde(default)]
+    pub pages: u64,
+    /// Offset of the next / previous page, `null` at the ends.
+    #[serde(default)]
+    pub next_offset: Option<u64>,
+    #[serde(default)]
+    pub prev_offset: Option<u64>,
+}
+
+/// Totals of one group in the step table (the group header row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupStats {
+    pub id: GroupId,
+    /// Members shown (within the current sub-group).
+    pub files: u64,
+    /// Largest and smallest member size (equal for exact duplicates).
+    pub largest: u64,
+    pub smallest: u64,
+    /// Bytes freed by removing every member but the kept copy (one copy is always kept).
+    pub reclaimable: u64,
+}
+
+/// `candidate_thumbnails` request: the rows of the visible page (at most 100).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateThumbnailsRequest {
+    pub opportunity_id: OpportunityId,
+    pub candidate_ids: Vec<CandidateId>,
+}
+
+/// One row thumbnail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Thumbnail {
+    pub candidate_id: CandidateId,
+    /// `data:image/...;base64,...` (at most 128 px on the long side for JPEG and PNG).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_url: Option<String>,
+    /// Why there is none: `not_image`, `online_only`, `too_large`, `unreadable`,
+    /// `undecodable`, `unknown` (the UI shows the file-type icon instead).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `candidate_thumbnails` response, in request order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateThumbnails {
+    pub thumbnails: Vec<Thumbnail>,
 }
 
 /// `selection_set` request.
