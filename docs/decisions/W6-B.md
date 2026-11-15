@@ -434,3 +434,16 @@ it; `FILE`: files in a matching folder). CCleaner's own variables (`%CommonAppDa
 `ProgramData` and `USERPROFILE` when not set, so real rule files resolve instead of being
 skipped. Wildcards in `ExcludeKey` folders are taken as valid syntax from the format as
 commonly written; no published specification was checked.
+
+## D-B32 The MFT pass is for whole drives only (SCAN-9, part)
+
+`fast_enumerate` reads every MFT record of the volume whatever the root, then keeps what
+lies below it, with no progress until the end; a scope of Downloads, Documents, Desktop and
+Pictures paid four whole-volume passes. It now answers `Unsupported` (so the scan walks)
+unless the root is a whole drive (`C:\`, `\\?\C:\`, `mft::is_volume_root`): a folder is
+listed faster by the parallel walk, which also reports progress. Not done: sharing one
+enumeration between several drive roots on one volume (only one root can be a given
+drive's root, so it does not arise), and progress during the enumeration of a whole drive
+(needs the record loop in `imp::enumerate` to report, which cannot be run here). Not
+verified on Windows: the Windows clippy target compiles the change; CI's elevated runner
+used the fast path on a temp-folder root, which now walks.

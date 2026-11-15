@@ -277,7 +277,13 @@ impl Leaf {
     fn files_only(&self) -> bool {
         matches!(
             self,
-            Leaf::Ext(_) | Leaf::Size(..) | Leaf::ZeroByte | Leaf::Date { .. } | Leaf::Mismatch | Leaf::Content(_) | Leaf::Media(_)
+            Leaf::Ext(_)
+                | Leaf::Size(..)
+                | Leaf::ZeroByte
+                | Leaf::Date { .. }
+                | Leaf::Mismatch
+                | Leaf::Content(_)
+                | Leaf::Media(_)
         )
     }
 

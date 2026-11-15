@@ -292,7 +292,8 @@ fn anchor_path_wildcard(text: &str) -> String {
     }
     let p = segs.join("/");
     let b = p.as_bytes();
-    let anchored = p.starts_with('/') || p.starts_with("**") || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':');
+    let anchored =
+        p.starts_with('/') || p.starts_with("**") || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':');
     if anchored {
         p
     } else {

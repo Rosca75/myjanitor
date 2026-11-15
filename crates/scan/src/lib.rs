@@ -86,10 +86,8 @@ pub fn effective_roots_on(scope: &ScanScope, platform: &dyn mj_platform::ScanPla
     let all = roots.clone();
     let volume = |p: &Path| platform.metadata(p).ok().and_then(|e| e.file_id).map(|f| f.volume);
     roots.retain(|r| {
-        let nearest = all
-            .iter()
-            .filter(|o| *o != r && mj_core::pathutil::is_within(o, r))
-            .max_by_key(|o| o.components().count());
+        let nearest =
+            all.iter().filter(|o| *o != r && mj_core::pathutil::is_within(o, r)).max_by_key(|o| o.components().count());
         match nearest {
             None => true,
             Some(o) => scope.options.one_file_system && volume(r).is_some_and(|v| Some(v) != volume(o)),

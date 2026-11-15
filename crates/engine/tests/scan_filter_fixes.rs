@@ -34,9 +34,8 @@ fn days_ago(d: u64) -> SystemTime {
 }
 
 fn run(e: &std::sync::Arc<mj_engine::Engine>, rule: mj_core::Rule, title: &str) -> Vec<CandidateRow> {
-    let o = e
-        .search_run(SearchRunRequest { rule, title: Some(title.into()), topmost_only: false, action: None })
-        .unwrap();
+    let o =
+        e.search_run(SearchRunRequest { rule, title: Some(title.into()), topmost_only: false, action: None }).unwrap();
     rows(e, &o.id.0)
 }
 

@@ -398,7 +398,11 @@ fn file_conditions_never_select_a_folder() {
         not(cond(Condition::ContentContains { text: "x".into(), case_sensitive: false })),
         not(cond(Condition::TypeGroup { group: "video".into() })),
         Rule::All(vec![
-            cond(Condition::Path { mode: TextMode::Wildcard, pattern: "**/Downloads/**".into(), case_sensitive: false }),
+            cond(Condition::Path {
+                mode: TextMode::Wildcard,
+                pattern: "**/Downloads/**".into(),
+                case_sensitive: false,
+            }),
             date(DateField::Modified, Cmp::Lt, ago(90, SpanUnit::Days)),
         ]),
     ];
@@ -406,10 +410,7 @@ fn file_conditions_never_select_a_folder() {
         assert!(!matches(r, &dir), "{r:?} must not select a folder");
     }
     // Conditions that do describe a folder still select it.
-    let node = Rule::All(vec![
-        cond(Condition::Kind { kind: EntryKind::Dir }),
-        name(TextMode::Exact, "Taxes", false),
-    ]);
+    let node = Rule::All(vec![cond(Condition::Kind { kind: EntryKind::Dir }), name(TextMode::Exact, "Taxes", false)]);
     assert!(matches(&node, &dir));
     assert!(matches(&not(cond(Condition::Kind { kind: EntryKind::File })), &dir));
     // A file is unaffected.
