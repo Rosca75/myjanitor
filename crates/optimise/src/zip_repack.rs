@@ -9,6 +9,8 @@
 //! - EPUB / ODF: a first entry named `mimetype` stays first and stored (OCF / ODF);
 //! - OOXML packages are left to the Office optimisers (`[Content_Types].xml` order
 //!   is preserved there by the same writer);
+//! - JAR: every stored entry stays stored (a loader can require it: Spring Boot refuses a
+//!   nested jar that is not stored), only deflated entries are recompressed;
 //! - JAR: v1 signatures (`META-INF/*.SF|RSA|DSA|EC`) sign entry *content* digests
 //!   and the manifest bytes, which a recompression does not change, so signed JARs
 //!   are repacked; APKs are never repacked (v2+ signatures cover the whole file and
@@ -60,6 +62,9 @@ pub struct RepackPlan {
     pub remove: BTreeSet<String>,
     /// Entries always written stored.
     pub stored: BTreeSet<String>,
+    /// Every entry stored in the source stays stored (JARs, OPT-2): only deflated entries are
+    /// recompressed.
+    pub keep_stored: bool,
 }
 
 /// What [`repack_file`] wrote.
@@ -107,7 +112,8 @@ fn repack_inner(
         if e.method != METHOD_STORED && e.method != METHOD_DEFLATE {
             return Err(Error::unsupported("ZIP repack", format!("compression method {} in {}", e.method, e.name)));
         }
-        let rule = if plan.stored.contains(&e.name) { EntryRule::Stored } else { EntryRule::Best };
+        let keep = plan.keep_stored && e.method == METHOD_STORED;
+        let rule = if keep || plan.stored.contains(&e.name) { EntryRule::Stored } else { EntryRule::Best };
         let data = match plan.replace.get(&e.name) {
             Some(d) => d.clone(),
             None => s.read(i)?,
@@ -173,10 +179,23 @@ fn accepted_kind(kind: Option<FileKind>, ext: &str) -> bool {
     }
 }
 
+/// True for a Java archive. Its stored entries stay stored (OPT-2): a loader can require it (Spring
+/// Boot refuses a nested jar that is not stored) and nothing in the file says which entries matter,
+/// so the method the author chose is kept for every stored entry.
+fn is_jar(kind: Option<FileKind>, ext: &str, entries: &[ZipEntry]) -> bool {
+    matches!(kind, Some(FileKind::Jar))
+        || matches!(ext, "jar" | "war" | "ear")
+        || entries.iter().any(|e| e.name.eq_ignore_ascii_case("META-INF/MANIFEST.MF"))
+}
+
 /// Estimated stored size of one entry after a level-10 repack (a model, not a measurement).
-fn entry_estimate(e: &ZipEntry) -> u64 {
+fn entry_estimate(e: &ZipEntry, keep_stored: bool) -> u64 {
     let ext = e.name.rsplit_once('.').map(|(_, x)| x.to_ascii_lowercase()).unwrap_or_default();
-    if e.is_dir() || COMPRESSED_EXTS.contains(&ext.as_str()) || e.name == "mimetype" {
+    if e.is_dir()
+        || COMPRESSED_EXTS.contains(&ext.as_str())
+        || e.name == "mimetype"
+        || (keep_stored && e.method == METHOD_STORED)
+    {
         return e.compressed_size;
     }
     match e.method {
@@ -233,7 +252,10 @@ impl Optimiser for ZipRepack {
             est.skipped = 1;
             return Ok(est);
         }
-        let saving: u64 = z.entries().iter().map(|e| e.compressed_size.saturating_sub(entry_estimate(e))).sum();
+        let ext = mj_core::pathutil::extension_lower(&entry.path);
+        let keep_stored = is_jar(None, &ext, z.entries());
+        let saving: u64 =
+            z.entries().iter().map(|e| e.compressed_size.saturating_sub(entry_estimate(e, keep_stored))).sum();
         est.bytes_after = entry.size.saturating_sub(saving);
         if !MinGain::default().accepts(est.bytes_before, est.bytes_after) {
             est.bytes_after = est.bytes_before;
@@ -261,7 +283,7 @@ impl Optimiser for ZipRepack {
         if let Some(r) = refusal(job.src, z.entries(), info.apk_signing_block) {
             return Ok(skipped(before, r));
         }
-        let mut plan = RepackPlan::default();
+        let mut plan = RepackPlan { keep_stored: is_jar(kind, &ext, z.entries()), ..RepackPlan::default() };
         if mime_first(z.entries()) && matches!(kind, Some(FileKind::Epub | FileKind::Odf)) {
             plan.stored.insert("mimetype".into());
         }
@@ -380,7 +402,8 @@ mod tests {
             ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n", 1),
             ("META-INF/CERT.SF", b"sig", 1),
             ("META-INF/CERT.RSA", b"rsa", 0),
-            ("a/B.txt", &class, 0),
+            // OPT-2: a JAR's stored entries stay stored, so the gain here comes from re-deflating.
+            ("a/B.txt", &varied_text(), 1),
         ]);
         let src = t.write("lib.jar", &jar).unwrap();
         let o = run(&src, &t.join("o1.jar")).unwrap();
@@ -445,6 +468,46 @@ mod tests {
         let dst = t.join("o.epub");
         assert_eq!(repack_file(&src, &dst, &RepackPlan::default(), Caps::default(), &cancel), Err(Error::Cancelled));
         assert!(!dst.exists());
+    }
+
+    /// Text that level 1 deflates noticeably worse than the maximum level.
+    fn varied_text() -> Vec<u8> {
+        (0..20_000u32)
+            .map(|i| format!("line {i} value {} key {}\n", i * 7919 % 1000, i % 37))
+            .collect::<String>()
+            .into_bytes()
+    }
+
+    /// OPT-2: Spring Boot (and other loaders) need nested jars stored; a JAR's stored entries must
+    /// never come out deflated, while its deflated entries are still recompressed.
+    #[test]
+    fn stored_entries_of_a_jar_stay_stored() {
+        let t = TempDir::new("jar-stored").unwrap();
+        let nested = build(&[("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n", 0), ("x.txt", &xhtml(), 0)]);
+        let jar = build(&[
+            (
+                "META-INF/MANIFEST.MF",
+                b"Manifest-Version: 1.0\r\nMain-Class: org.springframework.boot.loader.JarLauncher\r\n",
+                1,
+            ),
+            ("BOOT-INF/classes/app.properties", &varied_text(), 1),
+            ("BOOT-INF/lib/a.jar", &nested, 0),
+            ("BOOT-INF/classpath.idx", &xhtml(), 0),
+        ]);
+        let src = t.write("app.jar", &jar).unwrap();
+        let dst = t.join("o.jar");
+        let o = run(&src, &dst).unwrap();
+        assert!(o.skipped.is_none(), "{o:?}");
+        let z = ZipArchive::new(std::io::Cursor::new(std::fs::read(&dst).unwrap())).unwrap();
+        let method = |n: &str| z.entries().iter().find(|e| e.name == n).unwrap().method;
+        assert_eq!(method("BOOT-INF/lib/a.jar"), METHOD_STORED);
+        assert_eq!(method("BOOT-INF/classpath.idx"), METHOD_STORED);
+        assert_eq!(method("BOOT-INF/classes/app.properties"), METHOD_DEFLATE);
+        // The estimate models the same rule: the stored entries promise nothing.
+        let only_stored =
+            t.write("s.jar", &build(&[("META-INF/MANIFEST.MF", b"M", 0), ("a.txt", &xhtml(), 0)])).unwrap();
+        let e = FileEntry::new(&only_stored, mj_core::EntryKind::File, std::fs::metadata(&only_stored).unwrap().len());
+        assert_eq!(ZipRepack.estimate(&e, &ParamValues::new()).unwrap().saving(), 0);
     }
 
     #[test]
