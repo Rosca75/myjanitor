@@ -316,8 +316,11 @@ No request → `Plan`.
 
 ### `plan_add_step`
 `PlanAddStepRequest` → `Plan`. "+ Add" on a card. `action` and `params` default
-to the opportunity's. Fails with `conflict` if already in the plan and
-`unsupported` for disabled opportunities. Emits `plan://changed`. A step's
+to the opportunity's. Fails with `conflict` if already in the plan,
+`unsupported` for disabled opportunities and `invalid_input` for a
+`quarantine` action whose `purge_after_days` is outside 1 to 3650 (the same
+check runs in `plan_update_step`; the action engine also holds a quarantined
+item at least one day). Emits `plan://changed`. A step's
 `params` are the single source of truth for an optimiser: values inside an
 `optimise` action, then `params`, are merged into the step and copied into the
 action, and `lossy` follows them (a lossy preset makes the step `lossy_opt_in`).
@@ -515,7 +518,10 @@ be turned off.
 No request → `ProtectedPathsInfo`. Built-ins are shown locked.
 
 ### `protected_paths_set`
-`ProtectedPathsSetRequest` → `ProtectedPathsInfo`. Absolute paths only.
+`ProtectedPathsSetRequest` → `ProtectedPathsInfo`. Absolute paths only. An
+entry is always the folder of that exact name, brackets included
+(`D:\Clients [2024]`); when it also holds `*` or `?` it is in addition a
+pattern whose brackets are literal.
 
 ```json ProtectedPathsSetRequest
 {"user":["/home/me/Clients/Archive"]}
@@ -638,7 +644,10 @@ Every example below is checked against the Rust types. Field order is free.
 
 `options` and its fields are optional (defaults shown). Includes and excludes
 are glob patterns (path mode: `*` stops at `/`, `**` crosses it) or absolute
-paths; global exclusions from settings are added by the engine.
+paths; global exclusions from settings are added by the engine. An absolute
+exclusion is always the folder of that exact name (`[` and `]` are part of it)
+and, with `*` or `?`, also a pattern with literal brackets; a trailing
+separator is ignored (`node_modules/` is `node_modules`).
 
 ```json ScanScope
 {"roots":["/home/me"],"include":[],"exclude":["/home/me/VMs"],"options":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false}}

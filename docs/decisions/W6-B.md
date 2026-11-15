@@ -128,3 +128,113 @@ plan total over the drives so the bars add up. It lists no file in two cards, so
 `overlap` is always 0 (the overlap wording is covered by the engine tests and the card
 rendering, not the mock). The wireframe totals (48.6 GB hero, 29.3 GB plan) are gone; the
 UI tests that pinned them were updated to the derived numbers, deliberately.
+
+# W6-B, second task: review round 1, action core
+
+Fixes of the round-1 findings on the code that removes users' files. Every fix has a test
+that failed before it (or, for the pure performance items, a test or measurement named
+below). Rule kept throughout: no fix widens what an action may remove; where a choice was
+open, the one that keeps more of the user's data won.
+
+## D-B8 A literal path with `[` is a folder, everywhere (RF-2, SCAN-2, SCAN-3)
+
+One classifier, `mj_core::glob::is_pattern_entry`, now serves the protected list
+(`ProtectedPaths::new`), the scan exclusions (`ScopeFilter::new`), the global exclusions
+(`Exclusions::from_entries`) and `DetectContext::is_protected`. `[` and `]` are legal in
+NTFS and ext4 names (`D:\Clients [2024]`), so in an **absolute** entry only `*` or `?` makes
+a pattern; a relative entry (`**/Clients/**`, `*.[ch]`) is a pattern when it holds any of
+`*`, `?`, `[`, as before. An absolute entry is always keyed as the folder of that exact name
+and, when it holds `*` or `?`, is in addition compiled as a glob whose brackets are literal
+(`entry_glob` rewrites `[` to the class `[[]`). Treating an entry as both can only protect
+(or exclude) more, never less, and a literal key for `/data/*` matches only a folder really
+named `*`. Rejected: keeping bracket classes in absolute entries for power users; nobody
+writes a class into an absolute protected path, while folder names with brackets are
+common (`Photos [raw]`, `Music [FLAC]`). Also from SCAN-3: a trailing separator on an
+exclusion (`node_modules/`, the gitignore spelling) is dropped, so it no longer matches
+nothing; a bare root (`/`, `C:\`) keeps its separator.
+
+## D-B9 A partly removed archive source keeps its archive (ACT-1)
+
+When removing the sources of a verified archive fails, the archive is deleted only while
+`recheck_tree` proves the source untouched (same subtree stamp, or same file stamp and
+id). Otherwise the archive is the only complete copy of what is already gone: it is kept,
+`created` still names it, and the item fails with a `conflict` that names it. The removal
+itself was not changed to an entry-by-entry delete: the user asked for a permanent delete,
+and the failure is now harmless.
+
+## D-B10 Undo of a file copy needs its original (ACT-4)
+
+Undoing a copy deletes the copy permanently, so a file copy is removed only while the
+original is still a regular file with the same content (SHA-256 of both read at undo
+time). Otherwise the undo fails with `conflict` and keeps the copy, which may be the last
+one. This is what the folder branch already did and what the module's table promised. The
+check is a separate function so crash recovery's "is the copy complete?" test is unchanged.
+
+## D-B11 Recovery judges an interrupted move by both sides (ACT-5)
+
+For a dangling Trash/Quarantine/Move intent whose original and copy both exist, recovery
+now compares them (`tree_digest` for folders, SHA-256 for files): a copy that holds every
+entry the source still has, and more, means the deletion of the source had started after
+the copy verified: the entry is settled `done`, reversible, with an F-09 style note naming
+the copy and how many entries remain at the source, so the quarantine lists, purges and
+restores it. Equal sides: still `failed`, now worded "a complete copy remains at ...;
+nothing was removed". Anything else keeps the "incomplete copy" wording. Recovery still
+deletes nothing (D-2E05). The existing recovery test asserted "incomplete copy" for a case
+whose copy is in fact complete; it now asserts the new wording (deliberate change).
+
+## D-B12 Read-only outputs (ACT-3)
+
+`fsops::set_mtime` and `fsops::sync_output` work only on MyJanitor's own new files (an
+optimiser output, a reflink, an undo's separated copy, an archive). When the read-only
+permissions copied from the original refuse a writable handle (Windows read-only attribute;
+Unix mode without the owner's write bit for a non-root user), the file is made
+owner-writable for the call and its permissions are put back. Chosen over reordering the
+three call sites so that any future caller is covered. Verified on Linux by running the
+test binary as an unprivileged user (`setpriv --reuid=65534`); as root (this sandbox, most
+CI containers) the test cannot fail, the Windows CI job checks it for real.
+
+## D-B13 Link replacement re-checks the kept copy (ACT-11)
+
+Right before the rename over the duplicate, the kept file's size, mtime and file id are
+compared with the values read before the byte comparison, and for a hard link the new name
+must be that same file. On a mismatch the temporary name is removed and the item is skipped
+("the kept copy changed; nothing was replaced").
+
+## D-B14 Zero-day quarantine (ACT-9)
+
+Both layers: the action engine holds a quarantined item at least one day
+(`days.max(1)`, the lower bound of the `quarantine_days` setting), and `plan_add_step` /
+`plan_update_step` refuse a retention outside 1..=3650 with `invalid_input`. Clamping in
+the engine was preferred over classing 0 days as a permanent delete because no screen
+offers 0 and a permanent delete has its own action. The CLN-ACT-04 engine test used 0 days
+to see the automatic purge; it now back-dates the journal record by two days and checks
+the start-up purge (deliberate test change).
+
+## D-B15 Torn journal records (ACT-12)
+
+The journal remembers, per file, that a write failed part-way; the next record written to
+that file first writes a newline, so it is not glued to the fragment and lost on replay.
+The fragment alone is ignored on replay, as a torn last line already was.
+
+## D-B16 Performance under the results lock (ENG-5, IPC-3, ACT-6, ACT-7)
+
+`after_apply_step` keys the removed paths once (before taking the write lock) into a
+`DoneSet` and tests each row's key and its ancestors' keys: O(depth) per row, same rule as
+`is_within`. Measured in a debug build: 200 000 rows against 50 000 removed paths in 0.3 s;
+the old loop did not finish in 90 s. Siblings fixed in the same files: `build_step` looks
+groups up by id, the dry run and `hardlink_not_freed` look skipped items up in a set. The
+keep rule (`select::apply_keep_rule`) buckets candidates by group in one pass (50 000
+groups of 3: 56 s before, 0.1 s after), and `selection_apply_keep_rule` indexes rows by id
+and finds keepers in one pass. That last hunk is in `crates/engine/src/steps.rs`, a file
+the other lane also edits; it is confined to `selection_apply_keep_rule`. Not done: the
+Name sort of `candidates_page` (same file, not part of this brief).
+
+## D-B17 One read per verified duplicate (ACT-8)
+
+`fsops::compare_files_hashed` returns the SHA-256 and xxh64 of the equal content in the
+same pass as the byte comparison; the audit hash and the quarantine manifest reuse it (the
+manifest only while the size still agrees; the act-time re-stat has just confirmed the
+file). A removed duplicate is read once instead of three times on the quarantine route
+(test: `fsops::content_reads_on_this_thread`, a per-thread counter). Not done: the kept copy
+is still read once per member of its group; caching its verified hash across a batch would
+need an identity check of its own and was left out of a safety-critical path.

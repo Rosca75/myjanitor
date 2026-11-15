@@ -191,9 +191,6 @@ fn act3_read_only_files_can_be_optimised_and_unlinked() {
     assert_eq!(std::fs::read(&dup).unwrap(), b"same text in both");
     assert!(std::fs::metadata(&dup).unwrap().permissions().readonly(), "mode restored");
     // Separate again: an edit of the keeper no longer shows through the duplicate.
-    let mut perm = std::fs::metadata(&keeper).unwrap().permissions();
-    perm.set_readonly(false);
-    let _ = std::fs::set_permissions(&keeper, perm);
     std::fs::write(&keeper, b"edited").unwrap();
     assert_eq!(std::fs::read(&dup).unwrap(), b"same text in both");
 }
