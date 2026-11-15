@@ -90,7 +90,7 @@ function pageNav(st) {
 /** Arrow keys move between rows, Page Up and Page Down change page. @param {any} e @param {any} st @param {any} ops */
 function onTableKey(e, st, ops) {
   const nav = pageNav(st);
-  const buttons = e.currentTarget.querySelectorAll('.cell__file');
+  const buttons = Array.from(e.currentTarget.querySelectorAll('.cell__file')); // a NodeList has no indexOf (UI-3)
   const i = buttons.indexOf(document.activeElement);
   const go = (j) => { if (buttons[j]) { e.preventDefault(); buttons[j].focus(); } };
   if (e.key === 'ArrowDown' && i >= 0) go(i + 1);

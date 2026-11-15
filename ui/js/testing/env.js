@@ -45,10 +45,10 @@ export async function makeEnv(opts = {}) {
       }
     },
     $: (sel, from = root) => from.querySelector(sel),
-    $$: (sel, from = root) => from.querySelectorAll(sel),
+    $$: (sel, from = root) => Array.from(from.querySelectorAll(sel)),
     /** First element whose own tag matches and whose text includes `text`. */
     byText(tag, text, from = root) {
-      return from.querySelectorAll(tag).find((e) => e.textContent.includes(text)) ?? null;
+      return Array.from(from.querySelectorAll(tag)).find((e) => e.textContent.includes(text)) ?? null;
     },
     /** Click an element and let the effects settle. @param {any} el */
     async click(el) {

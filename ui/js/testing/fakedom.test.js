@@ -68,3 +68,19 @@ test('replaceChildren detaches old nodes and textContent replaces children', () 
   box.textContent = 'plain';
   assert.equal(box.children.length, 0);
 });
+
+test('querySelectorAll returns a NodeList, not an Array (UI-3)', () => {
+  const document = installFakeDom();
+  const root = h('div', {}, h('p', {}, 'a'), h('p', {}, 'b'));
+  document.body.appendChild(root);
+  const list = document.body.querySelectorAll('p');
+  for (const m of ['filter', 'map', 'find', 'some', 'indexOf', 'includes', 'reduce', 'slice']) assert.equal(typeof list[m], 'undefined', m);
+  assert.equal(list.length, 2);
+  assert.equal(list.item(1).textContent, 'b');
+  assert.equal(list.item(5), null);
+  assert.deepEqual([...list].map((p) => p.textContent), ['a', 'b']);
+  const seen = [];
+  list.forEach((p, i) => seen.push(`${i}${p.textContent}`));
+  assert.deepEqual(seen, ['0a', '1b']);
+  assert.ok(Object.isFrozen(list));
+});

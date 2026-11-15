@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeEnv } from './testing/env.js';
 
-const texts = (els) => els.map((e) => e.textContent);
+const texts = (els) => Array.from(els, (e) => e.textContent);
 
 test('empty state: scope picker and one primary Scan button', async () => {
   const env = await makeEnv({ scenario: 'empty' });
@@ -81,7 +81,7 @@ test('results: review only tab shows the three review cards without an Add butto
   assert.equal(cards.length, 3);
   for (const c of cards) {
     assert.equal(c.querySelector('.badge--safety').textContent, 'Review only');
-    assert.equal(c.querySelectorAll('.btn').some((b) => b.textContent === '+ Add'), false);
+    assert.equal(Array.from(c.querySelectorAll('.btn')).some((b) => b.textContent === '+ Add'), false);
   }
 });
 

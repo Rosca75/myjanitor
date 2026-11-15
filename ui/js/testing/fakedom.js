@@ -97,6 +97,29 @@ function matchParts(el, parts, i) {
   return false;
 }
 
+/**
+ * What a real `querySelectorAll` returns: a static NodeList. It has `length`, indexed access,
+ * `item`, `forEach`, `entries`, `keys`, `values` and iteration, and none of the Array methods
+ * (`filter`, `map`, `indexOf`, `find`...), so production code that treats it as an Array fails
+ * here as it would in the WebView (UI-3).
+ */
+export class FakeNodeList {
+  /** @param {any[]} nodes */
+  constructor(nodes) {
+    nodes.forEach((n, i) => { this[i] = n; });
+    Object.defineProperty(this, 'length', { value: nodes.length });
+    Object.freeze(this);
+  }
+  /** @param {number} i */
+  item(i) { return this[i] ?? null; }
+  /** @param {(n: any, i: number, list: FakeNodeList) => void} fn @param {any} [self] */
+  forEach(fn, self) { for (let i = 0; i < this.length; i++) fn.call(self, this[i], i, this); }
+  *values() { for (let i = 0; i < this.length; i++) yield this[i]; }
+  *keys() { for (let i = 0; i < this.length; i++) yield i; }
+  *entries() { for (let i = 0; i < this.length; i++) yield [i, this[i]]; }
+  [Symbol.iterator]() { return this.values(); }
+}
+
 export class FakeElement {
   /** @param {string} tag @param {any} doc @param {string|null} [ns] */
   constructor(tag, doc, ns = null) {
@@ -161,7 +184,7 @@ export class FakeElement {
     const out = [];
     const walk = (n) => { for (const c of n.childNodes) if (isEl(c)) { if (c.matches(sel)) out.push(c); walk(c); } };
     walk(this);
-    return out;
+    return new FakeNodeList(out);
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] ?? null; }
   addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }

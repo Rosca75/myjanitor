@@ -232,7 +232,7 @@ test('the dialog traps Tab: last control wraps to the first and Shift+Tab the ot
   env.$('[data-fk="dlg-ack"]').click(); // enables the acting button
   await env.settle();
   const dlg = env.$('[role="dialog"]');
-  const focusable = dlg.querySelectorAll('button, input, select').filter((e) => !e.disabled);
+  const focusable = Array.from(dlg.querySelectorAll('button, input, select')).filter((e) => !e.disabled);
   focusable.at(-1).focus();
   const ev = { shiftKey: false };
   dlg.key('Tab', ev);

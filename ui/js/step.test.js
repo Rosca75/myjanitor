@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { makeEnv } from './testing/env.js';
 import { actionLabel } from './views/step/clean-panel.js';
 
-const texts = (els) => els.map((e) => e.textContent);
+const texts = (els) => Array.from(els, (e) => e.textContent);
 
 async function openAudio(opts) {
   const env = await makeEnv(opts);
@@ -87,14 +87,14 @@ test('how to shrink them: presets first, then toggles, waveform, estimate, liste
   const env = await openAudio();
   const panel = env.$('.shrink');
   assert.equal(panel.querySelector('.panel__title').textContent, 'How to shrink them');
-  const tiles = panel.querySelectorAll('.tile');
+  const tiles = Array.from(panel.querySelectorAll('.tile'));
   assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['Speech', 'Transcription-safe', 'Lossless']);
   assert.equal(tiles[0].getAttribute('aria-checked'), 'true');
   assert.equal(tiles[1].getAttribute('aria-checked'), 'false');
   const order = [...panel.children].map((c) => c.className.split(' ')[0]);
   assert.ok(order.indexOf('tiles') < order.indexOf('settings'), 'presets come before toggles');
   assert.deepEqual(texts(panel.querySelectorAll('.setting__label')), ['Downmix to mono', 'Remove long silences', 'Strip cover art', 'Transcribe on this PC, then archive audio']);
-  assert.equal(panel.querySelectorAll('[role="switch"]').filter((x) => x.checked).length, 3);
+  assert.equal(Array.from(panel.querySelectorAll('[role="switch"]')).filter((x) => x.checked).length, 3);
   assert.equal(panel.querySelector('.number').value, '2');
   assert.equal(panel.querySelector('.number-unit').textContent, 's max');
   assert.equal(panel.querySelector('.setting__help').textContent, 'Keeps a searchable text file next to each meeting');
@@ -134,7 +134,7 @@ test('what happens to them: the default route is named from app_info, keep rule,
   await env.settle();
   const panel = env.$('.clean');
   assert.equal(panel.querySelector('.panel__title').textContent, 'What happens to them');
-  const tiles = panel.querySelectorAll('.tile').filter((t) => !['act-hardlink', 'act-reflink'].includes(t.getAttribute('data-fk')));
+  const tiles = Array.from(panel.querySelectorAll('.tile')).filter((t) => !['act-hardlink', 'act-reflink'].includes(t.getAttribute('data-fk')));
   // CLN-ACT-02: the mock is Windows with the default route (MyJanitor quarantine).
   assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['MyJanitor quarantine', 'Quarantine', 'Move…', 'Copy…']);
   assert.equal(tiles[0].getAttribute('aria-checked'), 'true');
@@ -144,7 +144,7 @@ test('what happens to them: the default route is named from app_info, keep rule,
   assert.equal(actionLabel('quarantine', { trash_route: 'recycle_bin' }).label, 'Quarantine');
   const keep = panel.querySelector('select');
   assert.equal(keep.getAttribute('aria-label'), 'Keep the');
-  assert.deepEqual(keep.querySelectorAll('option').map((o) => o.textContent), ['Newest copy', 'Oldest copy', 'Shortest path', 'Highest resolution', 'Preferred folder…']);
+  assert.deepEqual(Array.from(keep.querySelectorAll('option')).map((o) => o.textContent), ['Newest copy', 'Oldest copy', 'Shortest path', 'Highest resolution', 'Preferred folder…']);
   assert.equal(panel.querySelector('.disclosure').getAttribute('aria-expanded'), 'false');
   assert.equal(panel.querySelectorAll('.tile--selected').length, 1);
 });
@@ -168,12 +168,12 @@ test('lossy confirmation dialog: what happens, tiles, originals, synced warning,
   assert.equal(dlg.getAttribute('aria-modal'), 'true');
   assert.equal(env.$(`#${dlg.getAttribute('aria-labelledby')}`).textContent, 'Compress 23 recordings?');
   assert.equal(dlg.querySelector('.modal__body').textContent, 'This is lossy. The new files sound fine for speech but cannot be turned back into the originals.');
-  const stats = Object.fromEntries(dlg.querySelectorAll('.stat').map((s) => [s.getAttribute('data-stat'), s.querySelector('.stat__value').textContent]));
+  const stats = Object.fromEntries(Array.from(dlg.querySelectorAll('.stat')).map((s) => [s.getAttribute('data-stat'), s.querySelector('.stat__value').textContent]));
   assert.deepEqual(stats, { Files: '23', Now: '4.8 GB', After: '~0.6 GB', Saving: '4.2 GB' });
   const sel = dlg.querySelector('select');
   assert.equal(sel.getAttribute('aria-label'), 'Originals');
   assert.equal(sel.querySelectorAll('option')[0].textContent, 'Move to Recycle Bin (default)');
-  assert.equal(sel.querySelectorAll('option').find((o) => o.selected).textContent, 'Move to Recycle Bin (default)');
+  assert.equal(Array.from(sel.querySelectorAll('option')).find((o) => o.selected).textContent, 'Move to Recycle Bin (default)');
   assert.equal(dlg.querySelector('.callout__title').textContent, '6 files are in OneDrive – Acme');
   assert.match(dlg.querySelector('.callout__body').textContent, /also removes them in the cloud/);
   assert.ok(env.byText('button', 'Make them online-only instead', dlg));

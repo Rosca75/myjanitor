@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { makeEnv, HOSTILE, HOSTILE_FILE } from './testing/env.js';
 
 const last = (env, cmd) => env.sent(cmd).at(-1)?.req;
-const texts = (els) => els.map((e) => e.textContent);
+const texts = (els) => Array.from(els, (e) => e.textContent);
 const go = async (env, name, params) => { env.actions.navigate(name, params); await env.settle(); };
 const rich = (opts = {}) => makeEnv({ scenario: 'rich', ...opts });
 
@@ -691,7 +691,7 @@ test('not_implemented renders the control disabled with the hint', async () => {
   env.backend.disable('restore_entries');
   await go(env, 'history');
   await env.click(env.$('.run .run__toggle'));
-  const row = env.$$('.entry').find((e) => e.querySelectorAll('button').some((b) => !b.disabled) && /Done/.test(e.textContent));
+  const row = env.$$('.entry').find((e) => Array.from(e.querySelectorAll('button')).some((b) => !b.disabled) && /Done/.test(e.textContent));
   await env.click(row.querySelector('button'));
   assert.ok(env.state().unavail.restore_entries);
   assert.ok(env.$$('.entry button').every((b) => b.disabled));

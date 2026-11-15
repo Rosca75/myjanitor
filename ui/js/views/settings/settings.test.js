@@ -54,14 +54,14 @@ async function setup(o = {}) {
 
 test('renders every section, the offline line, the portable indicator and locked built-ins', async () => {
   const t = await setup();
-  const ids = t.root.querySelectorAll('[data-section]').map((e) => e.getAttribute('data-section'));
+  const ids = Array.from(t.root.querySelectorAll('[data-section]')).map((e) => e.getAttribute('data-section'));
   assert.deepEqual(ids, ['general', 'scan', 'protected', 'exclusions', 'safety', 'performance', 'engines', 'automation']);
   assert.match(t.$('[data-role="offline"]').textContent, /no telemetry/);
   assert.match(t.$('[data-role="mode"]').textContent, /Installed mode/);
   const builtin = t.$('[data-role="builtin"]');
   assert.match(builtin.textContent, /C:\\Windows/);
   assert.ok(builtin.querySelectorAll('.badge').length >= 3, 'every built-in row carries the Locked badge');
-  assert.equal(builtin.querySelectorAll('button').filter((b) => /Remove/.test(b.textContent)).length, 0, 'built-ins cannot be removed');
+  assert.equal(Array.from(builtin.querySelectorAll('button')).filter((b) => /Remove/.test(b.textContent)).length, 0, 'built-ins cannot be removed');
   const p = await setup({ portable: true });
   assert.match(p.$('[data-role="mode"]').textContent, /Portable mode/);
 });

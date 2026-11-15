@@ -10,7 +10,8 @@ const FOCUSABLE = 'button, input, select, textarea, [tabindex]';
 
 /** @param {any} root */
 export function focusables(root) {
-  return root.querySelectorAll(FOCUSABLE).filter((el) => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1' && el.getAttribute('type') !== 'hidden');
+  return Array.from(root.querySelectorAll(FOCUSABLE)).filter( // a NodeList has no filter (UI-3)
+    (el) => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1' && el.getAttribute('type') !== 'hidden');
 }
 
 /**
