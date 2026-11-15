@@ -641,3 +641,12 @@ runners and wall-time budgets there would be flaky; they remain a manual pre-rel
 `c2d7505` (RF-9) made the engine supply the OS language (`crates/platform/src/locale.rs`,
 `SYSTEM_LANGUAGE` env param) and the detector add a diagnostics note when the language is
 unknown. Verified by reading `language.rs` and its tests; no change.
+
+## D-B48 Stale status claims corrected (XC-6)
+
+PLAN.md: W4-3 CI is "done (CI run green, see STATUS.md)", W4-4 Docs "done". FEATURE-STATUS
+CLN-ENG-05 now says 19 keys and lists them, matching `mj_filters::query::KEYS` (the
+quick-search autocomplete test pins the same count). Not changed: the "Owner: W3-D" source
+headers (they sit in files lane-a owns and are history, not a claim about behaviour) and
+`bundle.targets` in tauri.conf.json (src-tauri is lane-a's; CI always passes `--bundles`
+explicitly and the README documents the Windows installer command).

@@ -108,7 +108,7 @@ Notes starting with "Requires ffmpeg on PATH" describe the reason the card shows
 | CLN-ENG-02 | Saved presets / templates ("Downloads older than 90 days", "Dev junk", "Consulting cleanup") | T1 | Win+Linux | W2-C | done | 13 built-in presets plus user presets (save, apply, delete) in the Custom search view. |
 | CLN-ENG-03 | Global exclusions / whitelist (protected folders, types, system paths) | T1 | Win+Linux | W2-C | done | Built-in protected folders and patterns, user protected folders and exclusions edited in Settings. Protection also holds for entries below a folder that is removed (see SAF-01). An absolute entry is the folder of that exact name even when it contains `[` (W6-B, RF-2). |
 | CLN-ENG-04 | Topmost match only (report parent folder instead of every child) | T1 | Win+Linux | W2-C | done | Topmost-only option in custom search and in the folder detectors. |
-| CLN-ENG-05 | Quick search syntax (e.g. `ext:mp4 size:>1GB modified:<2024`) | T1 | Win+Linux | W2-C | done | Parser with offsets in errors, autocomplete and about 20 keys (`ext name path size modified older newer type attr is owner depth pathlen content regex top`); empty query is an error. |
+| CLN-ENG-05 | Quick search syntax (e.g. `ext:mp4 size:>1GB modified:<2024`) | T1 | Win+Linux | W2-C | done | Parser with offsets in errors, autocomplete and 19 keys (`ext name path size modified created accessed older newer type attr is kind owner depth pathlen content regex top`); empty query is an error. |
 
 ## Cleaning actions (`CLN-ACT`)
 
