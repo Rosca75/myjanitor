@@ -303,6 +303,36 @@ fn original_still_holds_the_copy(e: &JournalEntry, copy: &Path) -> Result<()> {
     Ok(())
 }
 
+/// How an interrupted move's copy compares with what is left at the source (ACT-5).
+enum CopyState {
+    /// Same content on both sides: the copy finished, the source was not touched.
+    Complete,
+    /// The copy holds every entry of the source and more: the source was being deleted;
+    /// the number of entries left there.
+    SourceLeft(usize),
+    /// Anything else (a copy cut short, unreadable sides, a source that changed).
+    Incomplete,
+}
+
+fn compare_with_copy(original: &Path, copy: &Path) -> CopyState {
+    let is_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+    if is_dir(original) && is_dir(copy) {
+        let (Ok(src), Ok(dst)) = (tree_digest(original), tree_digest(copy)) else { return CopyState::Incomplete };
+        if src == dst {
+            return CopyState::Complete;
+        }
+        let have: std::collections::HashSet<_> = dst.iter().collect();
+        if src.len() < dst.len() && src.iter().all(|e| have.contains(e)) {
+            return CopyState::SourceLeft(src.len());
+        }
+        return CopyState::Incomplete;
+    }
+    match (fsops::hash_file(original), fsops::hash_file(copy)) {
+        (Ok(a), Ok(b)) if a.sha256 == b.sha256 => CopyState::Complete,
+        _ => CopyState::Incomplete,
+    }
+}
+
 /// Sorted (relative path, kind, size, xxh64) of a tree, for comparisons.
 pub fn tree_digest(root: &Path) -> Result<Vec<(String, u8, u64, u64)>> {
     let mut out = Vec::new();
@@ -467,9 +497,30 @@ fn inspect_action(ctx: &ExecContext<'_>, e: &JournalEntry) -> (JournalState, Opt
             match (orig_exists, fsops::exists(r)) {
                 (true, false) => failed("nothing was moved"),
                 (false, true) => (JournalState::Done, Some("completed before the interruption".into()), true),
-                (true, true) => {
-                    failed(&format!("the item is still in place; an incomplete copy may remain at {}", r.display()))
-                }
+                (true, true) => match compare_with_copy(&e.original, r) {
+                    // ACT-5: a cross-volume move deletes the source only after the whole copy
+                    // verified, so a copy holding everything the source still has, and more,
+                    // means the deletion had started: the copy is the only complete one. Same
+                    // state as a live run that could not delete all of its source (F-09).
+                    CopyState::SourceLeft(left) => (
+                        JournalState::Done,
+                        Some(format!(
+                            "interrupted while the source was being removed: the complete copy is at {}, \
+                             but {left} item(s) remain at {}; remove them there by hand (Restore needs \
+                             that place to be free)",
+                            r.display(),
+                            e.original.display()
+                        )),
+                        true,
+                    ),
+                    CopyState::Complete => failed(&format!(
+                        "the item is still in place and a complete copy remains at {}; nothing was removed",
+                        r.display()
+                    )),
+                    CopyState::Incomplete => {
+                        failed(&format!("the item is still in place; an incomplete copy may remain at {}", r.display()))
+                    }
+                },
                 (false, false) => failed("the item was found at neither location"),
             }
         }
