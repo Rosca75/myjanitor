@@ -556,6 +556,16 @@ fn act_retain(
     run_acted(ctx, item, e, |e| {
         if let Some(k) = &pre.kept {
             restat_keep(ctx, item, k)?;
+            // The duplicate's hash comes from its byte comparison with the kept copy, made
+            // before the intent: a rewrite in place since then (same size, same mtime,
+            // same file) passes every re-stat. Read it again now, after the last re-stat:
+            // a duplicate that is no longer the kept copy's content is not removed, and
+            // the hash journalled for undo is the content actually moved.
+            if let Some(h) = known {
+                if fsops::hash_file(&item.path)?.sha256 != h.sha256 {
+                    return Err(Error::Changed(item.path.clone()));
+                }
+            }
         }
         recheck_tree(ctx, item)?;
         e.reversible = !matches!(plan, RetainPlan::Delete);

@@ -40,6 +40,10 @@ pub struct TestPlatform {
     pub partial_trash: bool,
     /// Simulate another program writing to the kept file the moment it is linked (ACT-11).
     pub write_keeper_on_link: bool,
+    /// Called with the path of every `metadata` call before it is answered: lets a test
+    /// change a file at an exact point of an action.
+    #[allow(clippy::type_complexity)]
+    pub on_metadata: Mutex<Option<Box<dyn FnMut(&Path) + Send>>>,
 }
 
 impl TestPlatform {
@@ -55,12 +59,16 @@ impl TestPlatform {
             ignore_dehydrate: false,
             partial_trash: false,
             write_keeper_on_link: false,
+            on_metadata: Mutex::new(None),
         }
     }
 }
 
 impl ScanPlatform for TestPlatform {
     fn metadata(&self, path: &Path) -> Result<FileEntry> {
+        if let Some(hook) = self.on_metadata.lock().unwrap().as_mut() {
+            hook(path);
+        }
         let mut e = self.native.metadata(path)?;
         if self.online.lock().unwrap().contains(path) {
             e.attrs |= Attributes::ONLINE_ONLY;

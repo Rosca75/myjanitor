@@ -229,11 +229,12 @@ fn act9_zero_retention_quarantine_is_held_at_least_a_day() {
     assert_eq!(f.journal.entries_of(run)[0].retention_days, Some(1));
 }
 
-/// ACT-8: removing a duplicate whose kept copy is verified reads the duplicate once (the
-/// byte comparison), not again for the audit hash and the quarantine manifest; the journal
+/// ACT-8: removing a duplicate whose kept copy is verified reads it for the byte comparison
+/// and once more right before acting (the content must still be the kept copy's after the
+/// last re-stat), never again for the audit hash or the quarantine manifest; the journal
 /// and the manifest still carry its SHA-256.
 #[test]
-fn act8_a_verified_duplicate_is_read_once() {
+fn act8_a_verified_duplicate_is_not_read_for_the_audit_hash_or_the_manifest() {
     let f = Fixture::new("act8");
     let content = b"the same bytes in both files".repeat(1000);
     let keeper = f.write("a/keep.bin", &content);
@@ -250,11 +251,56 @@ fn act8_a_verified_duplicate_is_read_once() {
     let (run, out) = f.apply(&[item], &opts());
     assert_eq!(out.succeeded, 1, "{out:?}");
     let reads = mj_actions::fsops::content_reads_on_this_thread() - before;
-    assert_eq!(reads, 2, "one byte comparison of the kept copy and the duplicate, nothing else");
+    assert_eq!(reads, 3, "the byte comparison (both files) and the act-time check of the duplicate, nothing else");
     let sha = mj_actions::fsops::hash_file(&keeper).unwrap().sha256;
     let e = f.journal.entries_of(run).pop().unwrap();
     assert_eq!(e.original_sha256.as_deref(), Some(sha.as_str()));
     let m = mj_actions::quarantine::read_manifest(&f.qdir, run, e.id).unwrap();
     assert_eq!(m.sha256.as_deref(), Some(sha.as_str()));
     assert!(m.xxh64.is_some());
+}
+
+/// Reviewer note on ACT-8: the hash a verified duplicate is journalled with comes from the
+/// byte comparison made before the action. A duplicate rewritten in place with other
+/// content of the same size and the same modification time after that comparison passes
+/// every re-stat; it must be skipped (it is no longer a copy of the file kept), never
+/// removed with a stale hash that undo would later refuse.
+#[test]
+fn a_duplicate_rewritten_after_the_comparison_is_not_removed() {
+    let f = Fixture::new("act8-stale");
+    let content = b"the same bytes in both files".repeat(1000);
+    let keeper = f.write("a/keep.bin", &content);
+    let dup = f.write("b/dup.bin", &content);
+    let mut item = f.item(&dup, Action::Quarantine { purge_after_days: 30 });
+    let md = mj_platform::ScanPlatform::metadata(&f.platform, &keeper).unwrap();
+    item.keep = Some(mj_core::KeepCopy {
+        path: keeper.clone(),
+        expected: md.stamp(),
+        expected_id: md.file_id,
+        identical: true,
+    });
+    let dup_md = mj_platform::ScanPlatform::metadata(&f.platform, &dup).unwrap();
+    let mtime = dup_md.modified.unwrap();
+    // The second look at the kept copy is the act-time re-stat, after the duplicate's own
+    // re-stat: rewrite the duplicate in place there (same size, same mtime, same file).
+    let (k, d) = (keeper.clone(), dup.clone());
+    let mut calls = 0;
+    *f.platform.on_metadata.lock().unwrap() = Some(Box::new(move |p: &Path| {
+        if p == k {
+            calls += 1;
+            if calls == 2 {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new().write(true).open(&d).unwrap();
+                file.write_all(&vec![b'x'; 28 * 1000]).unwrap();
+                drop(file);
+                mj_actions::fsops::set_mtime(&d, mtime).unwrap();
+            }
+        }
+    }));
+    let (_run, out) = f.apply(&[item], &opts());
+    *f.platform.on_metadata.lock().unwrap() = None;
+    assert_eq!(out.succeeded, 0, "{out:?}");
+    assert_eq!(out.skipped, 1, "{out:?}");
+    assert!(dup.exists(), "the rewritten file stays where it is");
+    assert_eq!(std::fs::read(&dup).unwrap(), vec![b'x'; 28 * 1000]);
 }
