@@ -118,10 +118,14 @@ pub fn report(a: &Parsed) -> Res {
     match format {
         "text" => print!("{}", text_report(&report)),
         "json" => println!("{}", json(&report)),
-        "csv" | "html" => {
+        "csv" | "html" | "pdf" => {
             let out = a.value("out").ok_or_else(|| Fail::Usage(format!("--format {format} needs --out <FILE>")))?;
             let dest = std::path::absolute(out).map_err(|e| Fail::Error(format!("{out}: {e}")))?;
-            let fmt = if format == "csv" { ExportFormat::Csv } else { ExportFormat::Html };
+            let fmt = match format {
+                "csv" => ExportFormat::Csv,
+                "pdf" => ExportFormat::Pdf,
+                _ => ExportFormat::Html,
+            };
             let r = ctx.engine.report_export(ReportExportRequest {
                 run_id: Some(report.run_id),
                 kind: ReportExportKind::Report,
@@ -130,7 +134,7 @@ pub fn report(a: &Parsed) -> Res {
             })?;
             println!("Wrote {} rows to {} ({}).", r.rows, r.path.display(), bytes(r.bytes));
         }
-        other => return Err(Fail::Usage(format!("unknown report format `{other}`; use text, csv or html"))),
+        other => return Err(Fail::Usage(format!("unknown report format `{other}`; use text, csv, html or pdf"))),
     }
     Ok(())
 }

@@ -274,10 +274,8 @@ fn check_audio(path: &Path, size: u64, kind: Kind) -> std::io::Result<Check> {
                 return broken("MP3 file has no audio frame where it should start; it is damaged");
             }
         }
-        Kind::Ogg => {
-            if head.len() < 27 || &head[..4] != b"OggS" {
-                return broken("Not a valid Ogg file: the OggS page signature is missing");
-            }
+        Kind::Ogg if head.len() < 27 || &head[..4] != b"OggS" => {
+            return broken("Not a valid Ogg file: the OggS page signature is missing");
         }
         _ => {}
     }

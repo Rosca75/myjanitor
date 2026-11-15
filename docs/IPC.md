@@ -443,7 +443,10 @@ No request → `Report` or `null`. "Last report" in the status strip.
 
 ### `report_export`
 `ReportExportRequest` → `ExportResult`. `kind: "report"` writes one run's
-report as CSV or HTML; `kind: "audit"` writes the audit CSV (SAF-12) of one run
+report as CSV, HTML or PDF (`format: "pdf"`, CLN-ACT-11: a text-only, paginated
+table of path, size, action and status in the standard Helvetica font;
+characters it cannot show are replaced by `?` and the count is noted on the last
+page); `kind: "audit"` writes the audit CSV (SAF-12) of one run
 or, without `run_id`, of the whole journal. Never overwrites: `name (1).csv`.
 Columns (CSV, UTF-8 with BOM): report — `step, path, status, bytes_before,
 bytes_after, saved, error`; audit — `time, run_id, entry_id, action, state,
@@ -455,7 +458,7 @@ path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
 
 ### `results_export`
 `ResultsExportRequest` → `ExportResult`. CLN-ACT-11: candidates of one or all
-opportunities. Columns: `opportunity, path, size, size_after, saving, reason,
+opportunities, as CSV, HTML or PDF (path, size, opportunity, selected). Columns: `opportunity, path, size, size_after, saving, reason,
 badges, selected, group, modified`.
 
 ```json ResultsExportRequest

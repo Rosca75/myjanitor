@@ -89,7 +89,21 @@ pub const COMMANDS: &[CmdSpec] = &[
         Some(0),
         &[val("category", Some('c'), "CATEGORY", "clean, optimise, archive or review"), JSON]
     ),
-    c!("show", None, "Show the files behind one opportunity", "<OPPORTUNITY-ID>", 1, Some(1), &[LIMIT, JSON]),
+    c!(
+        "show",
+        None,
+        "Show the files behind one opportunity, or export them with --format and --out",
+        "<OPPORTUNITY-ID>",
+        1,
+        Some(1),
+        &[
+            LIMIT,
+            val("format", Some('f'), "FORMAT", "Export as csv, html or pdf instead of printing"),
+            val("out", Some('o'), "FILE", "Export file (never overwritten: a free name is chosen)"),
+            flag("selected", None, "Export only the selected rows"),
+            JSON
+        ]
+    ),
     c!(
         "search",
         None,
@@ -175,8 +189,8 @@ pub const COMMANDS: &[CmdSpec] = &[
         &[
             flag("last", None, "The newest run (default)"),
             val("run", None, "ID", "A specific run"),
-            val("format", Some('f'), "FORMAT", "text (default), csv or html"),
-            val("out", Some('o'), "FILE", "Write csv/html to FILE"),
+            val("format", Some('f'), "FORMAT", "text (default), csv, html or pdf"),
+            val("out", Some('o'), "FILE", "Write csv/html/pdf to FILE"),
             JSON
         ]
     ),

@@ -25,6 +25,7 @@ pub mod fixture;
 pub mod lexer;
 pub mod object;
 pub mod structural;
+pub mod table;
 pub mod verify;
 pub mod writer;
 

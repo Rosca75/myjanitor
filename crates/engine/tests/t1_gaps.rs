@@ -101,3 +101,48 @@ fn cln_act_05_copy_keeps_the_structure_and_checks_the_destination() {
     let copied = ["a/x.bin", "b/deep/x.bin"].iter().filter(|p| exists(&out.join(p))).count();
     assert_eq!(copied, 1, "the selected copy landed under its relative path");
 }
+
+/// CLN-ACT-11: results and run reports export as a valid PDF the in-house reader parses.
+#[test]
+fn cln_act_11_results_and_reports_export_as_pdf() {
+    let t = TempDir::new("t1-pdf").unwrap();
+    let data = bytes(8, 20_000);
+    t.write("a/x (1).bin", &data).unwrap();
+    t.write("b/x.bin", &data).unwrap();
+    let out = TempDir::new("t1-pdf-out").unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let r = e
+        .results_export(ResultsExportRequest {
+            opportunity_id: Some(oid("det:exact_duplicates")),
+            selected_only: false,
+            format: mj_core::ExportFormat::Pdf,
+            dest: out.join("results.pdf"),
+        })
+        .unwrap();
+    assert_eq!(r.rows, 2);
+    let bytes = std::fs::read(&r.path).unwrap();
+    let doc = mj_formats::pdf::document::Document::load(&bytes).expect("valid PDF");
+    assert_eq!(doc.pages().unwrap().len(), 1);
+    assert!(mj_formats::pdf::document::contains(&bytes, b"x \\(1\\).bin"));
+    e.plan_add_step(PlanAddStepRequest {
+        opportunity_id: oid("det:exact_duplicates"),
+        action: Some(mj_core::Action::Trash),
+        params: None,
+    })
+    .unwrap();
+    let started = e.plan_apply(PlanApplyRequest::default()).unwrap();
+    wait_jobs(e);
+    let rep = e
+        .report_export(ReportExportRequest {
+            run_id: Some(started.run_id),
+            kind: ReportExportKind::Report,
+            format: mj_core::ExportFormat::Pdf,
+            dest: out.join("report.pdf"),
+        })
+        .unwrap();
+    let bytes = std::fs::read(&rep.path).unwrap();
+    assert!(mj_formats::pdf::document::Document::load(&bytes).is_ok());
+    assert!(mj_formats::pdf::document::contains(&bytes, b"MyJanitor report"));
+}

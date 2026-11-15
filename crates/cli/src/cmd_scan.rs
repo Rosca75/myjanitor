@@ -162,7 +162,27 @@ pub fn show(a: &Parsed) -> Res {
     let ctx = Ctx::open(a)?;
     let limit = a.number("limit")?.unwrap_or(50) as u32;
     ctx.ensure_scanned()?;
-    print_candidates(&ctx, &OpportunityId(a.positionals[0].clone()), limit)
+    let id = OpportunityId(a.positionals[0].clone());
+    // CLN-ACT-11: `show <ID> --format csv|html|pdf --out FILE` exports the rows instead.
+    if let Some(format) = a.value("format") {
+        let format = match format {
+            "csv" => mj_core::ExportFormat::Csv,
+            "html" => mj_core::ExportFormat::Html,
+            "pdf" => mj_core::ExportFormat::Pdf,
+            other => return Err(Fail::Usage(format!("unknown export format `{other}`; use csv, html or pdf"))),
+        };
+        let out = a.value("out").ok_or_else(|| Fail::Usage("--format needs --out <FILE>".into()))?;
+        let dest = std::path::absolute(out).map_err(|e| Fail::Usage(format!("{out}: {e}")))?;
+        let r = ctx.engine.results_export(mj_engine::api::ResultsExportRequest {
+            opportunity_id: Some(id),
+            selected_only: a.flag("selected"),
+            format,
+            dest,
+        })?;
+        println!("Wrote {} rows to {} ({}).", r.rows, r.path.display(), bytes(r.bytes));
+        return Ok(());
+    }
+    print_candidates(&ctx, &id, limit)
 }
 
 /// `search "<query>" <folders>`.

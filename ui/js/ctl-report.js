@@ -33,7 +33,7 @@ export function reportActions(c) {
     },
     /**
      * Start an export: choose the folder (and file name) in the in-app browser.
-     * @param {{ type: 'report'|'audit'|'results', format: 'csv'|'html', run_id?: number, opportunity_id?: string, selected_only?: boolean }} job
+     * @param {{ type: 'report'|'audit'|'results', format: 'csv'|'html'|'pdf', run_id?: number, opportunity_id?: string, selected_only?: boolean }} job
      */
     startExport: guard(async (job) => { await c.actions.openBrowser({ mode: 'export', exportJob: job, filename: exportName(job) }); }),
     /** @param {string} filename */
