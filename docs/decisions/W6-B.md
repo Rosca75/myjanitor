@@ -380,3 +380,17 @@ is usually an unmounted mount point). A live share with a really missing target 
 skipped too: under-reporting a broken link is the safe direction for a pre-selected row.
 Not verified: the Windows error mapping and `read_link` spelling of a junction to a missing
 drive (CI's Windows runner has no second drive to unplug).
+
+## D-B28 The system language comes from the OS (RF-9)
+
+With "Languages to keep" empty, the detector kept the language named by `LC_ALL`,
+`LC_MESSAGES` or `LANG`, none of which a Windows program started from Explorer inherits:
+a French Windows saw its own `fr.pak` files listed as unused. `mj_platform::system_language`
+asks the OS (Windows: one kernel32 call, `GetUserDefaultLocaleName`, declared in-house like
+the other FFI; elsewhere the environment, `C`/`POSIX` meaning none), the engine passes it
+to detectors as `env.system_language`, and `language::kept_languages_with` uses it when the
+setting is empty. When neither is known, only English is kept and the card carries a note
+saying so instead of claiming the system language silently. Rejected: sending
+`navigator.language` from the UI into the setting; it would rewrite a user setting and
+the UI files belong to the other lane. Not verified on Windows here (the Windows clippy
+target compiles the call).

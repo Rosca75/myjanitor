@@ -148,6 +148,8 @@ pub mod env {
     /// An absolute entry protects that path and everything below it; any other
     /// entry is a path-mode glob matched against the whole path.
     pub const PROTECTED: &str = "env.protected";
+    /// The user's interface language as a locale name (`fr-FR`), when the OS tells it.
+    pub const SYSTEM_LANGUAGE: &str = "env.system_language";
 
     /// Encode a list for one of the keys above: entries joined with NUL (empty entries are
     /// left out).
