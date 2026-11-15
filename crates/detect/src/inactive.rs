@@ -54,7 +54,7 @@ impl Detector for InactiveFolders {
             category: Category::Archive,
             safety: SafetyClass::Reversible,
             default_action: ActionKind::Archive,
-            available_actions: vec![ActionKind::Archive, ActionKind::Move, ActionKind::Trash],
+            available_actions: vec![ActionKind::Archive, ActionKind::Move, ActionKind::Copy, ActionKind::Trash],
             settings: vec![common::number_setting(
                 "months",
                 "Idle for",

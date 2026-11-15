@@ -113,7 +113,13 @@ pub const COMMANDS: &[CmdSpec] = &[
                 "ACTION",
                 "trash, quarantine, hardlink, reflink, move or copy (default: the opportunity's own)"
             ),
-            val("dest", None, "DIR", "Target folder for move and copy")
+            val("to", None, "DIR", "Destination folder for move and copy"),
+            val("dest", None, "DIR", "Same as --to"),
+            flag(
+                "flat",
+                None,
+                "Move or copy every item straight into the destination (default: keep the folder structure)"
+            )
         ]
     ),
     c!("plan", Some("remove"), "Remove an opportunity from the plan", "<OPPORTUNITY-ID>", 1, Some(1), &[]),

@@ -3,10 +3,11 @@
 import { h } from '../../dom.js';
 import { copy } from '../../copy.js';
 import { formatBytes } from '../../format.js';
-import { button, radioTile, select } from '../../components/controls.js';
+import { button, radioTile, select, toggle } from '../../components/controls.js';
 import { previewPane, compareButton } from './preview-pane.js';
 
-const BASIC = ['trash', 'quarantine', 'move'];
+const BASIC = ['trash', 'quarantine', 'move', 'copy'];
+const TO_FOLDER = ['move', 'copy'];
 
 /** Which action is in force: the plan step's, else the one picked before adding. @param {any} s */
 function currentAction(s) {
@@ -33,13 +34,18 @@ export function renderCleanPanel(s, actions) {
   const act = currentAction(s);
   const offered = opp.available_actions;
   const label = (kind) => actionLabel(kind, s.info);
-  const tile = (kind) => radioTile({ title: label(kind).label, sub: kind === 'move' && act.kind === 'move' && act.dest ? act.dest : label(kind).help, selected: act.kind === kind, fk: `act-${kind}`, onSelect: () => (kind === 'move' ? actions.openBrowser({ mode: 'move' }) : actions.setStepAction(kind)) });
+  // CLN-ACT-05: Move and Copy pick their destination in the in-app folder browser.
+  const tile = (kind) => radioTile({ title: label(kind).label, sub: TO_FOLDER.includes(kind) && act.kind === kind && act.dest ? act.dest : label(kind).help, selected: act.kind === kind, fk: `act-${kind}`, onSelect: () => (TO_FOLDER.includes(kind) ? actions.openBrowser({ mode: kind }) : actions.setStepAction(kind)) });
+  const structure = TO_FOLDER.includes(act.kind) && act.dest && h('div', { class: 'setting' },
+    h('label', { class: 'setting__text' }, h('span', { class: 'setting__label' }, copy.clean.keepStructure), h('span', { class: 'setting__help' }, copy.clean.keepStructureHelp)),
+    toggle({ label: copy.clean.keepStructure, checked: act.keep_structure !== false, fk: 'keep-structure', onChange: (on) => actions.setStepAction(act.kind, act.dest, on) }));
   const dup = opp.id === 'det:exact_duplicates';
   return h('div', { class: 'shrink clean' },
     h('h2', { class: 'panel__title' }, copy.clean.title),
     BASIC.some((k) => offered.includes(k))
       ? h('div', { class: 'tiles', role: 'radiogroup', 'aria-label': copy.clean.action }, BASIC.filter((k) => offered.includes(k)).map(tile))
       : h('p', { class: 'note' }, opp.description),
+    structure,
     dup && h('div', { class: 'setting' },
       h('label', { class: 'setting__text' }, h('span', { class: 'setting__label' }, copy.clean.keep), h('span', { class: 'setting__help' }, copy.clean.keepHelp)),
       select({ label: copy.clean.keep, value: keepValue(opp.params.keep_rule), fk: 'keep-rule', options: [...Object.entries(copy.clean.keepRules).map(([value, label]) => ({ value, label })), { value: 'preferred_folder', label: copy.step2.keepFolder }], onChange: (v) => (v === 'preferred_folder' ? actions.openBrowser({ mode: 'keep' }) : actions.applyKeepRule(v)) })),

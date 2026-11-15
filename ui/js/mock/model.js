@@ -92,6 +92,8 @@ export function createModel(opts) {
         return 'Deleted for good · cannot be undone';
       case 'move':
         return 'Moved to the folder you chose';
+      case 'copy':
+        return 'Copied to the folder you chose';
       default:
         return o.description;
     }

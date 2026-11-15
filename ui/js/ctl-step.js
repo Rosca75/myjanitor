@@ -14,7 +14,9 @@ const ACTIONS = {
   trash: () => ({ kind: 'trash' }),
   quarantine: () => ({ kind: 'quarantine', purge_after_days: 7 }),
   permanent_delete: () => ({ kind: 'permanent_delete' }),
-  move: (dest) => ({ kind: 'move', dest, keep_structure: false }),
+  // CLN-ACT-05: folder structure kept by default (the relative path below the scan root).
+  move: (dest, keep = true) => ({ kind: 'move', dest, keep_structure: keep }),
+  copy: (dest, keep = true) => ({ kind: 'copy', dest, keep_structure: keep }),
 };
 
 /** A fresh step state. @param {string} id */
@@ -127,9 +129,9 @@ export function stepActions(c) {
     setPreset: guard(async (presetId) => { await api.stepParamsSet({ opportunity_id: cur().id, preset_id: presetId }); await ops.reloadStep(); }),
     /** A toggle, number or choice of the options panel. @param {string} key @param {boolean|number|string} value */
     setParam: guard(async (key, value) => { await api.stepParamsSet({ opportunity_id: cur().id, params: { [key]: value } }); await ops.reloadStep(); }),
-    /** Action choice of a clean step (Recycle Bin / Quarantine / Move / permanent). @param {keyof typeof ACTIONS} kind @param {string} [dest] */
-    setStepAction: guard(async (kind, dest) => {
-      const action = ACTIONS[kind](dest);
+    /** Action choice of a clean step (Recycle Bin / Quarantine / Move / Copy / permanent). @param {keyof typeof ACTIONS} kind @param {string} [dest] @param {boolean} [keep] */
+    setStepAction: guard(async (kind, dest, keep) => {
+      const action = ACTIONS[kind](dest, keep);
       const step = get().plan.steps.find((x) => x.opportunity === cur().id);
       if (step) set({ plan: await api.planUpdateStep({ step_id: step.id, action }) });
       ops.patch({ pendingAction: action });

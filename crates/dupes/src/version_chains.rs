@@ -82,6 +82,7 @@ impl Detector for VersionChains {
                 ActionKind::Trash,
                 ActionKind::Quarantine,
                 ActionKind::Move,
+                ActionKind::Copy,
                 ActionKind::Archive,
             ],
             settings,

@@ -123,7 +123,7 @@ impl Detector for SimilarImages {
             category: Category::Clean,
             safety: SafetyClass::Reversible,
             default_action: ActionKind::Trash,
-            available_actions: vec![ActionKind::Trash, ActionKind::Quarantine, ActionKind::Move],
+            available_actions: vec![ActionKind::Trash, ActionKind::Quarantine, ActionKind::Move, ActionKind::Copy],
             settings,
             platform: PlatformSupport::Both,
             feature_ids: vec!["CLN-DET-02".into(), "CLN-ACT-01".into()],

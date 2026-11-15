@@ -323,6 +323,26 @@ test('Move opens the folder browser and sends the chosen destination', async () 
   const req = last(env, 'plan_add_step');
   assert.equal(req.action.kind, 'move');
   assert.equal(typeof req.action.dest, 'string');
+  assert.equal(req.action.keep_structure, true, 'CLN-ACT-05: folder structure kept by default');
+});
+
+test('Copy picks a destination, keeps the folder structure by default and can turn it off', async () => {
+  const env = await makeEnv();
+  await env.actions.openStep('det:old_installers');
+  await env.settle();
+  await env.click(env.$('[data-fk="act-copy"]'));
+  assert.equal(env.state().browser.mode, 'copy');
+  await env.click(env.$('[data-fk="browser-choose"]'));
+  const keep = env.$('[data-fk="keep-structure"]');
+  assert.ok(keep, 'the option shows once a destination is chosen');
+  assert.equal(keep.checked, true);
+  keep.setChecked(false);
+  await env.settle();
+  await env.click(env.$('[data-fk="step-add"]'));
+  const req = last(env, 'plan_add_step');
+  assert.equal(req.action.kind, 'copy');
+  assert.equal(typeof req.action.dest, 'string');
+  assert.equal(req.action.keep_structure, false);
 });
 
 test('Undo last action sends undo_last once a run exists', async () => {

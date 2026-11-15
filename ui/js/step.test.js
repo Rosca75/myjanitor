@@ -125,7 +125,7 @@ test('what happens to them: the default route is named from app_info, keep rule,
   assert.equal(panel.querySelector('.panel__title').textContent, 'What happens to them');
   const tiles = panel.querySelectorAll('.tile');
   // CLN-ACT-02: the mock is Windows with the default route (MyJanitor quarantine).
-  assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['MyJanitor quarantine', 'Quarantine', 'Move…']);
+  assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['MyJanitor quarantine', 'Quarantine', 'Move…', 'Copy…']);
   assert.equal(tiles[0].getAttribute('aria-checked'), 'true');
   for (const [route, label] of [['recycle_bin', 'Recycle Bin'], ['trash', 'Trash'], ['quarantine', 'MyJanitor quarantine']]) {
     assert.equal(actionLabel('trash', { trash_route: route }).label, label, route);

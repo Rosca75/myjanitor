@@ -66,3 +66,38 @@ fn aut_07_temp_dir_inside_a_scanned_location_is_refused() {
     e.settings_set(SettingsSetRequest { settings: s }).unwrap();
     assert_eq!(e.temp_dir(), outside.path());
 }
+
+/// CLN-ACT-05: Copy keeps the folder structure below the scan root by default, leaves the
+/// originals in place, and a destination inside the scanned location is refused at once.
+#[test]
+fn cln_act_05_copy_keeps_the_structure_and_checks_the_destination() {
+    let t = TempDir::new("t1-copy").unwrap();
+    let data = bytes(5, 30_000);
+    t.write("a/x.bin", &data).unwrap();
+    t.write("b/deep/x.bin", &data).unwrap();
+    let out = TempDir::new("t1-copy-out").unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let id = oid("det:exact_duplicates");
+    let inside = f.tree.join("a");
+    let err = e
+        .plan_add_step(PlanAddStepRequest {
+            opportunity_id: id.clone(),
+            action: Some(mj_core::Action::Copy { dest: inside, keep_structure: true }),
+            params: None,
+        })
+        .unwrap_err();
+    assert!(err.to_string().contains("inside the scanned location"), "{err}");
+    e.plan_add_step(PlanAddStepRequest {
+        opportunity_id: id,
+        action: Some(mj_core::Action::Copy { dest: out.path().to_path_buf(), keep_structure: true }),
+        params: None,
+    })
+    .unwrap();
+    e.plan_apply(PlanApplyRequest::default()).unwrap();
+    wait_jobs(e);
+    assert!(exists(&f.tree.join("a/x.bin")) && exists(&f.tree.join("b/deep/x.bin")), "originals stay");
+    let copied = ["a/x.bin", "b/deep/x.bin"].iter().filter(|p| exists(&out.join(p))).count();
+    assert_eq!(copied, 1, "the selected copy landed under its relative path");
+}

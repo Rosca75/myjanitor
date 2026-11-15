@@ -13,18 +13,21 @@ use crate::cmd_scan::scope;
 use crate::ctx::{confirm_typed, interactive, Ctx, Fail, Res, Session, Template};
 use crate::out::{bytes, json, table};
 
-/// Parse `--action` (and `--dest`) into an action.
+/// Parse `--action` (and `--to`/`--dest`, `--flat`) into an action.
 pub fn parse_action(ctx: &Ctx, a: &Parsed) -> Res<Option<Action>> {
     let Some(name) = a.value("action") else { return Ok(None) };
     let dest = || -> Res<std::path::PathBuf> {
-        let d = a.value("dest").ok_or_else(|| Fail::Usage(format!("--action {name} needs --dest <DIR>")))?;
-        let p = std::path::PathBuf::from(d);
-        if p.is_absolute() {
-            Ok(p)
-        } else {
-            Err(Fail::Usage(format!("--dest must be an absolute path: {d}")))
-        }
+        let d = a
+            .value("to")
+            .or_else(|| a.value("dest"))
+            .ok_or_else(|| Fail::Usage(format!("--action {name} needs --to <DIR>")))?;
+        // A relative folder is taken from the current directory; the engine's guard then
+        // checks the destination (not protected, not one of MyJanitor's folders, not
+        // inside the item) before anything is moved or copied.
+        std::path::absolute(d).map_err(|e| Fail::Usage(format!("--to {d}: {e}")))
     };
+    // CLN-ACT-05: the folder structure below the scan root is kept unless --flat.
+    let keep_structure = !a.flag("flat");
     Ok(Some(match name {
         "trash" => Action::Trash,
         "quarantine" => Action::Quarantine { purge_after_days: ctx.engine.settings_get()?.general.quarantine_days },
@@ -32,8 +35,8 @@ pub fn parse_action(ctx: &Ctx, a: &Parsed) -> Res<Option<Action>> {
         "hardlink" => Action::Hardlink,
         "reflink" => Action::Reflink,
         "dehydrate" => Action::Dehydrate,
-        "move" => Action::Move { dest: dest()?, keep_structure: false },
-        "copy" => Action::Copy { dest: dest()?, keep_structure: false },
+        "move" => Action::Move { dest: dest()?, keep_structure },
+        "copy" => Action::Copy { dest: dest()?, keep_structure },
         other => {
             return Err(Fail::Usage(format!(
             "unknown action `{other}`; use trash, quarantine, permanent, hardlink, reflink, dehydrate, move or copy"
