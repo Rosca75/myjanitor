@@ -5,10 +5,12 @@
 //! reported as unsupported (skipped for perceptual matching, still
 //! exact-matched). Alpha is ignored and CRCs are not verified (a corrupt
 //! stream fails inflate or the size checks). The IDAT stream is inflated one
-//! scanline at a time, unfiltered and fed straight into the grid accumulator, so
-//! memory is O(width): neither the raw image nor a grey buffer is ever kept. Hardened: chunk lengths are bounds-checked, the inflated size is
-//! limited to exactly what the header implies, and dimensions are checked
-//! against [`super::within_limits`] before inflating.
+//! scanline at a time and unfiltered against the previous one; the fingerprint
+//! feeds each row straight into the grid accumulator and the review thumbnail
+//! (`thumb::png`) into its box scaler, so memory is O(width): the raw image is
+//! never kept. Hardened: chunk lengths are bounds-checked, dimensions are
+//! checked against [`super::within_limits`] before inflating, and the zlib
+//! stream must hold exactly the scanlines the header implies and end there.
 
 use miniz_oxide::inflate::stream::{inflate, InflateState};
 use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
@@ -184,6 +186,34 @@ impl<'a> Prepared<'a> {
         }
         if y < h {
             return Err(DecodeError::Corrupt("image data truncated".into()));
+        }
+        // The stream must end right after the last row, with its checksum: a stream cut
+        // short, holding more than the header announces or followed by more data is a
+        // malformed file, never a fingerprint or a thumbnail.
+        let mut probe = [0u8; 1];
+        while !ended {
+            let r = inflate(&mut state, input, &mut probe, MZFlush::None);
+            input = &input[r.bytes_consumed..];
+            if r.bytes_written > 0 {
+                return Err(DecodeError::Corrupt("image data longer than the header".into()));
+            }
+            match r.status {
+                Ok(MZStatus::StreamEnd) => ended = true,
+                Ok(_) | Err(MZError::Buf) => {}
+                Err(e) => return Err(DecodeError::Corrupt(format!("inflate: {e:?}"))),
+            }
+            if !ended && r.bytes_consumed == 0 {
+                if !input.is_empty() {
+                    return Err(DecodeError::Corrupt("inflate made no progress".into()));
+                }
+                match chunks.next() {
+                    Some(c) => input = c,
+                    None => return Err(DecodeError::Corrupt("image data stream not terminated".into())),
+                }
+            }
+        }
+        if !input.is_empty() || chunks.any(|c| !c.is_empty()) {
+            return Err(DecodeError::Corrupt("data after the end of the image stream".into()));
         }
         Ok(())
     }
@@ -362,6 +392,47 @@ mod tests {
         }
         head.extend_from_slice(&tail);
         head
+    }
+
+    /// The image data must be exactly one zlib stream holding exactly the scanlines the
+    /// header announces: a stream that ends short of its end (cut after the last row, the
+    /// checksum missing) or that holds more rows than the header is malformed, never a
+    /// fingerprint (or a thumbnail) a similar-image group could pre-select.
+    #[test]
+    fn image_data_must_end_exactly_with_the_last_row() {
+        let (w, h) = (40usize, 30usize);
+        let g = scene(w, h);
+        let ok = encode(w as u32, h as u32, 1, &g, true);
+        assert!(decode(&ok).is_ok());
+        // Over-long: the header says one row less than the stream holds.
+        let mut long = ok.clone();
+        long[20..24].copy_from_slice(&(h as u32 - 1).to_be_bytes());
+        assert!(matches!(decode(&long), Err(DecodeError::Corrupt(_))), "{:?}", decode(&long));
+        // Truncated: every row is there but the stream stops before its end (no Adler-32).
+        let mut raw = Vec::new();
+        for row in g.chunks_exact(w) {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        let mut cut = ok[..33].to_vec();
+        let idat = &z[..z.len() - 4];
+        cut.extend_from_slice(&(idat.len() as u32).to_be_bytes());
+        cut.extend_from_slice(b"IDAT");
+        cut.extend_from_slice(idat);
+        cut.extend_from_slice(&[0; 4]);
+        cut.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0, 0, 0, 0]);
+        assert!(matches!(decode(&cut), Err(DecodeError::Corrupt(_))), "{:?}", decode(&cut));
+        // Trailing data after the end of the stream is not image data either.
+        let mut extra = ok[..33].to_vec();
+        let mut z2 = z.clone();
+        z2.extend_from_slice(&[0x55; 16]);
+        extra.extend_from_slice(&(z2.len() as u32).to_be_bytes());
+        extra.extend_from_slice(b"IDAT");
+        extra.extend_from_slice(&z2);
+        extra.extend_from_slice(&[0; 4]);
+        extra.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0, 0, 0, 0]);
+        assert!(matches!(decode(&extra), Err(DecodeError::Corrupt(_))), "{:?}", decode(&extra));
     }
 
     #[test]
