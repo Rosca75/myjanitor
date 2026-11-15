@@ -923,9 +923,11 @@ fn optimise(
         };
         let out = match res {
             Ok(o) => o,
-            // A `create_new` / no-replace refusal means the temp name was taken by someone
-            // else between the check and the write: that file is not ours to delete.
-            Err(err @ (Error::Io { kind: "already_exists", .. } | Error::Conflict(_))) => return Err(err),
+            // A `create_new` / no-replace refusal of the temp name itself means someone else
+            // took it between the check and the write: that file is not ours to delete. Any
+            // other failure (G-08: a `Conflict` for another reason included) leaves no
+            // output of ours beside the user's file.
+            Err(err) if err.is_destination_taken(&temp) => return Err(err),
             Err(err) => {
                 cleanup();
                 return Err(err);

@@ -890,3 +890,52 @@ fn sibling_f16_failed_copy_never_removes_an_existing_destination() {
     assert!(mj_actions::fsops::copy_item_verified(&f.root().join("dir"), &f.t.join("dest/dir")).is_err());
     assert!(existing.exists());
 }
+
+/// G-08 (review 2): an optimiser that wrote its output and then failed with a `Conflict`
+/// for another reason than the temp name being taken.
+struct ConflictAfterWrite;
+
+impl mj_core::Optimiser for ConflictAfterWrite {
+    fn info(&self) -> mj_core::OptimiserInfo {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.info()
+    }
+    fn availability(&self, _: &[ExternalTool]) -> mj_core::Availability {
+        mj_core::Availability::Available
+    }
+    fn applies_to(&self, _: &mj_core::FileEntry) -> bool {
+        true
+    }
+    fn estimate(&self, e: &mj_core::FileEntry, p: &mj_core::ParamValues) -> mj_core::Result<mj_core::Estimate> {
+        FixedScratch { barrier: std::sync::Barrier::new(1) }.estimate(e, p)
+    }
+    fn optimise(&self, job: &mj_core::OptimiseJob<'_>) -> mj_core::Result<mj_core::OptimiseOutput> {
+        std::fs::write(job.dst, b"half an output").unwrap();
+        Err(mj_core::Error::Conflict("the source changed while it was read".into()))
+    }
+    fn analyse(&self, _: &mj_core::DetectContext<'_>) -> mj_core::Result<mj_core::DetectorOutput> {
+        Ok(mj_core::DetectorOutput::default())
+    }
+}
+
+#[test]
+fn g08_an_optimiser_conflict_never_leaves_its_output_beside_the_users_file() {
+    let f = Fixture::new("g08");
+    let file = f.write("doc.bin", &[1u8; 100]);
+    let opt: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(ConflictAfterWrite)];
+    let services = Services { optimisers: &opt, archiver: None, tools: &[] };
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(
+        &f.ctx(run, services),
+        &[f.item(&file, optimise_to(OriginalsPolicy::Quarantine))],
+        &opts(),
+    )
+    .unwrap();
+    assert_eq!(out.succeeded, 0);
+    let left: Vec<_> = std::fs::read_dir(f.root())
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().contains(".mj-"))
+        .collect();
+    assert!(left.is_empty(), "temp output left behind: {left:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), vec![1u8; 100]);
+}
