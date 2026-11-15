@@ -56,14 +56,25 @@ test('step review: only a window of rows is built and paging moves the window', 
   const env = await makeEnv();
   await env.actions.openStep('det:exact_duplicates');
   await env.settle();
-  assert.equal(env.$$('.row').length, 50, 'never more than one page of rows');
-  assert.equal(env.$('.pager__range').textContent, '1 to 50 of 214  ·  Page 1 of 5');
+  // W6-A: groups are kept together by default, so a page ends at a group boundary
+  // (12 groups of 4 = 48 rows) and "Next" asks for the engine's next offset.
+  assert.equal(env.$$('.row').length, 48, 'never more than one page of rows, never half a group');
+  assert.equal(env.$('.pager__range').textContent, '1 to 48 of 214  ·  Page 1 of 5');
   assert.ok(env.$('[data-fk="page-prev"]').disabled);
   env.clearCalls();
   await env.click(env.$('[data-fk="page-next"]'));
-  assert.equal(env.$('.pager__range').textContent, '51 to 100 of 214  ·  Page 2 of 5');
-  assert.equal(env.sent('candidates_page')[0].req.offset, 50);
+  assert.equal(env.$('.pager__range').textContent, '49 to 96 of 214  ·  Page 2 of 5');
+  assert.equal(env.sent('candidates_page')[0].req.offset, 48);
   assert.equal(env.sent('candidates_page')[0].req.limit, 50);
+  assert.equal(env.sent('candidates_page')[0].req.keep_groups, true);
+  // Flat list: 50 rows a page as before.
+  await env.click(env.$('[data-fk="filter-keep-groups"]'));
+  assert.equal(env.$$('.row').length, 50);
+  assert.equal(env.$('.pager__range').textContent, '1 to 50 of 214  ·  Page 1 of 5');
+  env.clearCalls();
+  await env.click(env.$('[data-fk="page-next"]'));
+  assert.equal(env.sent('candidates_page')[0].req.offset, 50);
+  assert.equal(env.sent('candidates_page')[0].req.keep_groups, false);
 });
 
 test('step review has one scroll container: the table is not wrapped in its own', async () => {

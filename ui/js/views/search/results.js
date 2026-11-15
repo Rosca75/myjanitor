@@ -12,6 +12,7 @@ import { stepFor } from '../../state.js';
 export const customOps = (actions) => ({
   toggleRow: actions.custom_toggleRow, selectAll: actions.custom_selectAll, setSubGroup: actions.custom_setSubGroup, setPage: actions.custom_setPage,
   setStepSort: actions.custom_setStepSort, setFilter: actions.custom_setFilter, previewSample: actions.custom_previewSample, focusRow: actions.custom_focusRow,
+  setMinSize: actions.custom_setMinSize, setKeepGroups: actions.custom_setKeepGroups, thumbFor: actions.custom_thumbFor,
 });
 
 /** @param {any} s @param {any} actions */

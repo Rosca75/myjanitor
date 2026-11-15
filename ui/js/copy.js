@@ -655,6 +655,19 @@ export const copy = {
     blocked: (why) => `Cannot be selected: ${why}`,
   },
 
+  groups: {
+    keepTogether: 'Keep groups together',
+    keepTogetherHelp: 'Sorting orders whole groups (by size: their largest file) and filters keep or drop whole groups.',
+    minSize: 'At least',
+    minSizeAny: 'Any size',
+    stats: (files, size, reclaim, same) => `  ·  ${files} files  ·  ${same ? `${size} each` : `up to ${size}`}  ·  ${reclaim} reclaimable`,
+    colThumb: 'Preview',
+  },
+
+  thumbs: {
+    typeIcon: (kind) => ({ image: 'Image file', video: 'Video file', audio: 'Audio file', doc: 'Document', archive: 'Archive', folder: 'Folder' })[kind] ?? 'File',
+  },
+
   ask: { cancel: 'Cancel' },
 
   toast2: { retry: 'Try again' },

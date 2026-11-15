@@ -188,3 +188,13 @@ div.tile2 { cursor: default; }
 
 .badge--lock { gap: var(--space-1); }
 .badge__icon { display: inline-grid; }
+
+/* ---- W6-A: duplicate review (thumbnails, groups kept together) ---- */
+.groups-toggle { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); white-space: nowrap; cursor: pointer; }
+.cell--thumb { width: 64px; padding-right: 0; }
+.thumb { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; margin: var(--space-1) 0; border-radius: var(--radius-sm); background: var(--surface-sunken); color: var(--decor); position: relative; }
+.thumb__img { width: 48px; height: 48px; object-fit: contain; border-radius: var(--radius-sm); transform-origin: left center; transition: transform 120ms ease-out; }
+.row:hover .thumb__img, .row:focus-within .thumb__img { transform: scale(2); z-index: 2; position: relative; box-shadow: var(--shadow-raised); background: var(--surface); }
+.thumb__icon { display: inline-flex; }
+.group-head__stats { font-weight: var(--weight-regular); margin-left: var(--space-2); }
+@media (prefers-reduced-motion: reduce) { .thumb__img { transition: none; } }

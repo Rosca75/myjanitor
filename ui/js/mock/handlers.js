@@ -5,6 +5,8 @@
  */
 import { GB } from './fixtures.js';
 import { buildCandidates } from './candidates.js';
+import { orderPage } from './review-order.js';
+import { PNG_B64 } from './preview-data.js';
 
 /** @param {string} code @param {string} message @param {string} [hint] */
 export const fail = (code, message, hint = 'Check the request and try again.') => ({ code, message, hint });
@@ -161,16 +163,21 @@ export function createHandlers(m, sim, emit) {
     },
     candidates_page: (req) => {
       const o = needOpp(req.opportunity_id);
-      let list = [...(m.rows.get(o.id) ?? [])];
-      if (req.sub_group) list = list.filter((r) => r.sub_group === req.sub_group);
-      if (req.filter) list = list.filter((r) => lc(r.path).includes(lc(req.filter)));
-      const key = { saving: (r) => r.size - r.size_after, size: (r) => r.size, modified: (r) => r.modified, name: (r) => lc(r.path.split('\\').pop()), path: (r) => lc(r.path) }[req.sort ?? 'group'];
-      if (key) list.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0));
-      if (req.descending) list.reverse();
+      const groups = m.groups.get(o.id) ?? [];
       const limit = Math.min(500, Math.max(1, req.limit ?? 100));
-      const page = list.slice(req.offset ?? 0, (req.offset ?? 0) + limit);
-      const gs = new Set(page.map((r) => r.group).filter(Boolean));
-      return { opportunity_id: o.id, total: list.length, offset: req.offset ?? 0, rows: page.map((r) => rowJson(m, o.id, r)), groups: (m.groups.get(o.id) ?? []).filter((g) => gs.has(g.id)) };
+      const res = orderPage([...(m.rows.get(o.id) ?? [])], req, limit, groups.length > 0);
+      const gs = new Set(res.rows.map((r) => r.group).filter(Boolean));
+      return { opportunity_id: o.id, total: res.total, offset: res.offset, rows: res.rows.map((r) => rowJson(m, o.id, r)), groups: groups.filter((g) => gs.has(g.id)), group_stats: res.stats.filter((g) => gs.has(g.id)), has_groups: groups.length > 0, keep_groups: res.grouped, page: res.page, pages: res.pages, next_offset: res.next, prev_offset: res.prev };
+    },
+    // W6-A stand-in: every image row gets the same small generated PNG.
+    candidate_thumbnails: (req) => {
+      if ((req.candidate_ids ?? []).length > 100) throw fail('invalid_input', 'at most 100 thumbnails per call');
+      const list = m.rows.get(needOpp(req.opportunity_id).id) ?? [];
+      return { thumbnails: (req.candidate_ids ?? []).map((id) => {
+        const r = list.find((x) => x.id === id);
+        if (!r) return { candidate_id: id, reason: 'unknown' };
+        return /\.(jpe?g|png|gif|webp|bmp)$/i.test(r.path) ? { candidate_id: id, data_url: `data:image/png;base64,${PNG_B64}` } : { candidate_id: id, reason: 'not_image' };
+      }) };
     },
     selection_set: (req) => {
       const o = needOpp(req.opportunity_id);

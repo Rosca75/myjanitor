@@ -7,6 +7,7 @@
  */
 import { toErrorInfo } from './errors.js';
 import { copy } from './copy.js';
+import { createThumbLoader } from './thumbs.js';
 
 export const PAGE_SIZE = 50;
 
@@ -23,8 +24,13 @@ const ACTIONS = {
   reflink: () => ({ kind: 'reflink' }),
 };
 
-/** A fresh step state. @param {string} id */
-export const freshStep = (id) => ({ id, detail: null, page: null, subGroup: null, offset: 0, loading: true, advancedOpen: false, pendingAction: null, preview: null, previewFor: null, sort: 'group', descending: false, filter: '', focusId: null, previewLoading: false });
+/**
+ * A fresh step state. `keepGroups` (W6-A, on by default) keeps duplicate groups
+ * together whatever the sort; `minSize` is the "At least" size filter in bytes.
+ * Both survive paging and selection changes and reset when another step opens.
+ * @param {string} id
+ */
+export const freshStep = (id) => ({ id, detail: null, page: null, subGroup: null, offset: 0, loading: true, advancedOpen: false, pendingAction: null, preview: null, previewFor: null, sort: 'group', descending: false, filter: '', minSize: 0, keepGroups: true, focusId: null, previewLoading: false });
 
 /**
  * Table operations over one step slot.
@@ -36,15 +42,21 @@ export function createStepOps(c, slot) {
   const cur = () => slot.read();
   const patch = (p) => slot.write({ ...cur(), ...p });
   const oppId = () => cur().id;
+  const thumbs = createThumbLoader(api);
 
-  /** Reload the page of rows for the current group, offset, sort and filter. */
+  /** Reload the page of rows for the current group, offset, sort and filters. */
   async function loadPage() {
     const s = cur();
     const g = gens.next(`${slot.key}:page`);
-    const req = { opportunity_id: s.id, sub_group: s.subGroup, offset: s.offset, limit: PAGE_SIZE, sort: s.sort, descending: s.descending };
+    const req = { opportunity_id: s.id, sub_group: s.subGroup, offset: s.offset, limit: PAGE_SIZE, sort: s.sort, descending: s.descending, keep_groups: s.keepGroups !== false };
     if (s.filter) req.filter = s.filter;
+    if (s.minSize > 0) req.min_size = s.minSize;
     const page = await api.candidatesPage(req);
-    if (gens.current(`${slot.key}:page`, g) && cur()?.id === s.id) patch({ page, loading: false });
+    if (!gens.current(`${slot.key}:page`, g) || cur()?.id !== s.id) return;
+    // With groups kept together the engine starts the page at a group boundary.
+    patch({ page, loading: false, offset: typeof page.offset === 'number' ? page.offset : s.offset });
+    // Thumbnails load after the rows are drawn and patch their own cells.
+    if (page.has_groups) void thumbs.load(s.id, page.rows ?? [], page.groups ?? []);
   }
   async function loadDetail() {
     const id = oppId();
@@ -81,6 +93,12 @@ export function createStepOps(c, slot) {
     }),
     /** "Filter these results": case-insensitive path substring. @param {string} text */
     setFilter: guard(async (text) => { patch({ filter: text, offset: 0 }); await loadPage(); }),
+    /** "At least" size filter in bytes (0: any size). @param {number} bytes */
+    setMinSize: guard(async (bytes) => { patch({ minSize: Math.max(0, Number(bytes) || 0), offset: 0 }); await loadPage(); }),
+    /** "Keep groups together" (W6-A). The sort and filters stay as they are. @param {boolean} on */
+    setKeepGroups: guard(async (on) => { patch({ keepGroups: !!on, offset: 0 }); await loadPage(); }),
+    /** Cached thumbnail of a row: a data URL, null (none), undefined (loading). @param {any} row */
+    thumbFor: (row) => thumbs.get(row),
     /** Check or uncheck one row. @param {number} id @param {boolean} selected */
     toggleRow: guard(async (id, selected) => {
       await api.selectionSet({ opportunity_id: oppId(), ids: [id], selected });

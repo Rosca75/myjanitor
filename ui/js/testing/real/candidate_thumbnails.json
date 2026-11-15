@@ -1,0 +1,20 @@
+{
+  "thumbnails": [
+    {
+      "candidate_id": 10,
+      "reason": "not_image"
+    },
+    {
+      "candidate_id": 11,
+      "reason": "not_image"
+    },
+    {
+      "candidate_id": 9,
+      "reason": "not_image"
+    },
+    {
+      "candidate_id": 8,
+      "reason": "not_image"
+    }
+  ]
+}

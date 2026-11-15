@@ -464,7 +464,7 @@ test('step: keyboard moves between rows, Page Down changes page', async () => {
   assert.equal(env.doc.activeElement, files[2]);
   env.$('.table').key('PageDown');
   await env.settle();
-  assert.equal(last(env, 'candidates_page').offset, 50);
+  assert.equal(last(env, 'candidates_page').offset, 48, 'the next page starts at the next group (W6-A)');
   assert.match(env.$('.pager__range').textContent, /Page 2 of 5/);
 });
 
