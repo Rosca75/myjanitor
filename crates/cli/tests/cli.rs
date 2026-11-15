@@ -269,3 +269,26 @@ fn quarantine_list_and_purge() {
     assert!(all.out.contains("0 item(s) remain"), "{}", all.out);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap().len(), 1, "the kept copy is untouched");
 }
+
+/// IPC-6: a command that changes files refuses at once while another MyJanitor holds the
+/// data folder, before it rescans, measures or asks for a confirmation.
+#[test]
+fn acting_commands_refuse_at_once_while_another_myjanitor_holds_the_data_folder() {
+    let (t, data, home) = sandbox("cli-held");
+    let tree = t.mkdir("tree").unwrap();
+    let tmp = t.write("tree/old.tmp", b"scratch").unwrap();
+    mj_core::testutil::set_mtime(&tmp, std::time::SystemTime::now() - std::time::Duration::from_secs(86_400 * 5))
+        .unwrap();
+    let root = tree.to_str().unwrap();
+    assert_eq!(cli(&data, &home, &["scan", root]).code, 0);
+    let _held = mj_engine::instance::acquire(&data).unwrap();
+    for args in [vec!["apply", "--yes"], vec!["clean", root, "--detectors", "temp_files", "--apply", "--yes"]] {
+        let r = cli(&data, &home, &args);
+        assert_eq!(r.code, 1, "{args:?}: {}", r.err);
+        assert!(r.err.contains("another MyJanitor"), "{}", r.err);
+        assert!(!r.err.to_lowercase().contains("scan"), "refused before any scan: {}", r.err);
+    }
+    assert!(tmp.exists());
+    // Reading still works while the folder is held.
+    assert_eq!(cli(&data, &home, &["list"]).code, 0);
+}
