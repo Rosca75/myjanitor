@@ -236,6 +236,9 @@ fn a_lossy_optimiser_is_refused_without_confirmation_and_runs_with_it() {
         acknowledged: true,
         originals: Default::default(),
         synced_online_only: false,
+        selection_digest: Some(
+            fx.engine.plan_confirmation_info(StepRequest { step_id: step }).unwrap().selection_digest,
+        ),
     };
     fx.engine.plan_apply(PlanApplyRequest { confirmations: vec![conf] }).unwrap();
     let jobs = wait_jobs(&fx.engine);

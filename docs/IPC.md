@@ -332,13 +332,20 @@ shows (SAF-11): tiles, originals options with the default (Recycle Bin), the
 synced-folder warning with the online-only alternative (SAF-10, CLN-ACT-07),
 the acknowledgement text and the acting-button label. The UI renders the
 acting button in the warning colour (`permanent: false`) or the danger colour
-(`permanent: true`), disabled until the checkbox is ticked.
+(`permanent: true`), disabled until the checkbox is ticked. `selection_digest`
+identifies exactly what the dialog describes (the step's action and its items
+with their scan stamps); the UI sends it back in `StepConfirmation`.
 
 ### `plan_apply`
 `PlanApplyRequest` → `ApplyStarted`. *Spawns.* Needs one `StepConfirmation`
 with `acknowledged: true` for every step whose safety class requires
-confirmation (`lossy_opt_in`, `permanent`); otherwise fails with
-`confirmation_required` and nothing runs. Creates a run (`RunId`), queues one
+confirmation (`lossy_opt_in`, `permanent`), carrying the `selection_digest` of
+the `ConfirmationInfo` it answers; otherwise (missing, unticked, or a digest that
+no longer matches the step because a rescan or a selection change altered what
+it would act on) fails with `confirmation_required` and nothing runs. After a
+rescan, a row the previous results had keeps the selection the user saw (by
+path; a checked row stays checked only while its scan stamp is unchanged); only
+new rows take the detector's default. Creates a run (`RunId`), queues one
 job per step in plan order; progress via `job://*`, then `history://changed`
 and `plan://changed` (applied steps leave the plan) and `opportunities://changed`
 (applied items leave their cards). Fails with `conflict` while another plan is
@@ -770,13 +777,13 @@ keep_if_not_smaller}`, `archive{format, level, dest?, originals, keep_sources}`,
 #### ConfirmationInfo
 
 ```json ConfirmationInfo
-{"step_id":15,"title":"Compress 23 recordings?","body":"This is lossy. The new files sound fine for speech but cannot be turned back into the originals.","files":23,"bytes_now":5153960755,"bytes_after":644245094,"saving":4509715661,"confidence":"estimated","originals_options":[{"policy":{"policy":"recycle_bin"},"label":"Move to Recycle Bin (default)","reversible":true},{"policy":{"policy":"quarantine"},"label":"Keep in quarantine for 30 days","reversible":true},{"policy":{"policy":"delete"},"label":"Delete permanently","reversible":false}],"default_originals":{"policy":"recycle_bin"},"synced":{"count":6,"provider":"OneDrive – Acme","can_online_only":true},"acknowledge_text":"I understand the new files are lower quality than the originals","undo_text":"Every change is logged; History → Restore brings the originals back for 30 days.","action_label":"Compress 23 files","permanent":false}
+{"step_id":15,"title":"Compress 23 recordings?","body":"This is lossy. The new files sound fine for speech but cannot be turned back into the originals.","files":23,"bytes_now":5153960755,"bytes_after":644245094,"saving":4509715661,"confidence":"estimated","originals_options":[{"policy":{"policy":"recycle_bin"},"label":"Move to Recycle Bin (default)","reversible":true},{"policy":{"policy":"quarantine"},"label":"Keep in quarantine for 30 days","reversible":true},{"policy":{"policy":"delete"},"label":"Delete permanently","reversible":false}],"default_originals":{"policy":"recycle_bin"},"synced":{"count":6,"provider":"OneDrive – Acme","can_online_only":true},"acknowledge_text":"I understand the new files are lower quality than the originals","undo_text":"Every change is logged; History → Restore brings the originals back for 30 days.","action_label":"Compress 23 files","permanent":false,"selection_digest":"9f2c4e0b7d1a5c3e8f6b2d4a0c9e7f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c3e"}
 ```
 
 #### StepConfirmation
 
 ```json StepConfirmation
-{"step_id":15,"acknowledged":true,"originals":{"policy":"quarantine"}}
+{"step_id":15,"acknowledged":true,"originals":{"policy":"quarantine"},"selection_digest":"9f2c4e0b7d1a5c3e8f6b2d4a0c9e7f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c3e"}
 ```
 
 #### ApplyStarted

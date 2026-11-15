@@ -84,6 +84,30 @@ pub fn is_selected(rec: &OpportunityRecord, c: &Candidate, skip: Badges) -> bool
     blocked_reason(c, skip).is_none() && rec.selection.is_selected(c.id, c.default_selected)
 }
 
+/// G-04: after a rescan, a row the previous results already had keeps the selection the
+/// user saw (matched by path): a row they unchecked stays unchecked, and a row that was
+/// checked stays checked only while its scan stamp is unchanged. Only rows new to this scan
+/// take the detector's default. Without this, a rescan silently put back the defaults of
+/// steps the user had curated.
+pub(crate) fn carry_selections(old: &[OpportunityRecord], new: &mut [OpportunityRecord]) {
+    use mj_core::pathutil::path_key;
+    for rec in new.iter_mut() {
+        let Some(prev) = old.iter().find(|o| o.opportunity.id == rec.opportunity.id) else { continue };
+        let seen: std::collections::HashMap<String, (bool, mj_core::FileStamp)> = prev
+            .candidates
+            .iter()
+            .map(|c| (path_key(&c.path), (prev.selection.is_selected(c.id, c.default_selected), c.stamp)))
+            .collect();
+        let mut sel = mj_core::SelectionOverrides::default();
+        for c in &rec.candidates {
+            let Some((was, stamp)) = seen.get(&path_key(&c.path)) else { continue };
+            let now = *was && *stamp == c.stamp;
+            sel.set(c.id, c.default_selected, now);
+        }
+        rec.selection = sel;
+    }
+}
+
 /// Safety class of one candidate (its override, else the card's).
 pub fn candidate_safety(rec: &OpportunityRecord, c: &Candidate) -> SafetyClass {
     c.safety_override().unwrap_or(rec.opportunity.safety)

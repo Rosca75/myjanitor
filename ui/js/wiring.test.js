@@ -150,7 +150,9 @@ test('Apply plan asks for confirmation first and sends plan_apply only after the
   env.$('[data-fk="dlg-ack"]').click();
   await env.settle();
   await env.click(env.$('[data-fk="dlg-act"]'));
-  assert.deepEqual(last(env, 'plan_apply'), { confirmations: [{ step_id: stepId, acknowledged: true, originals: { policy: 'recycle_bin' }, synced_online_only: false }] });
+  const sent = last(env, 'plan_apply');
+  assert.equal(typeof sent.confirmations[0].selection_digest, 'string', 'the confirmation is bound to what the dialog showed (G-04)');
+  assert.deepEqual(sent, { confirmations: [{ step_id: stepId, acknowledged: true, selection_digest: sent.confirmations[0].selection_digest, originals: { policy: 'recycle_bin' }, synced_online_only: false }] });
   assert.equal(env.$('[role="dialog"]'), null);
 });
 

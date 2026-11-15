@@ -80,6 +80,7 @@ fn f02_apply_keeps_one_copy_even_when_every_copy_is_selected() {
             acknowledged: true,
             originals: mj_core::OriginalsPolicy::RecycleBin,
             synced_online_only: false,
+            selection_digest: Some(e.plan_confirmation_info(StepRequest { step_id }).unwrap().selection_digest),
         }];
         e.plan_apply(PlanApplyRequest { confirmations }).unwrap();
         wait_jobs(e);
@@ -113,6 +114,9 @@ fn f04_folder_that_gained_a_file_after_the_scan_is_not_deleted() {
         acknowledged: true,
         originals: mj_core::OriginalsPolicy::RecycleBin,
         synced_online_only: false,
+        selection_digest: Some(
+            e.plan_confirmation_info(StepRequest { step_id: plan.steps[0].id }).unwrap().selection_digest,
+        ),
     }];
     e.plan_apply(PlanApplyRequest { confirmations }).unwrap();
     wait_jobs(e);

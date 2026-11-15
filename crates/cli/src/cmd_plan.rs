@@ -223,13 +223,18 @@ fn apply_loaded(ctx: &Ctx, a: &Parsed, policy: Option<OriginalsPolicy>) -> Res {
         .steps
         .iter()
         .filter(|s| s.safety.requires_confirmation())
-        .map(|s| StepConfirmation {
-            step_id: s.id,
-            acknowledged: true,
-            originals: policy.clone().unwrap_or_else(|| default_policy.clone()),
-            synced_online_only: false,
+        .map(|s| {
+            // G-04: the confirmation is bound to exactly what this run lists and applies.
+            let info = ctx.engine.plan_confirmation_info(mj_engine::api::StepRequest { step_id: s.id })?;
+            Ok(StepConfirmation {
+                step_id: s.id,
+                acknowledged: true,
+                originals: policy.clone().unwrap_or_else(|| default_policy.clone()),
+                synced_online_only: false,
+                selection_digest: Some(info.selection_digest),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, mj_core::Error>>()?;
     let started = ctx.engine.plan_apply(PlanApplyRequest { confirmations })?;
     let jobs = ctx.wait_apply(&started)?;
     finish(ctx, started.run_id.0, &jobs)

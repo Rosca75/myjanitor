@@ -418,6 +418,7 @@ impl Engine {
             },
             action_label: label,
             permanent,
+            selection_digest: selection_digest(&work),
         })
     }
 
@@ -443,7 +444,16 @@ impl Engine {
             if confirm && conf.is_none() {
                 return Err(Error::ConfirmationRequired(format!("step {} ({}) needs confirmation", s.id.0, s.title)));
             }
-            works.push((self.build_step(s, conf)?, confirm));
+            let work = self.build_step(s, conf)?;
+            // G-04: the acknowledgement covers what the dialog showed, nothing else.
+            if confirm && conf.and_then(|c| c.selection_digest.as_deref()) != Some(selection_digest(&work).as_str()) {
+                return Err(Error::ConfirmationRequired(format!(
+                    "step {} ({}) changed since it was confirmed (a new scan or a selection change): \
+                     review it and confirm it again",
+                    s.id.0, s.title
+                )));
+            }
+            works.push((work, confirm));
         }
         // G-03: the copy one step keeps is kept by every other step of the run too.
         skip_kept_copies(works.iter_mut().map(|(w, _)| w));
@@ -542,6 +552,36 @@ impl Engine {
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
         done
     }
+}
+
+/// G-04: a digest of what a step would act on: its action and every item's path, kind,
+/// scan stamp, subtree stamp and file id, in a stable order. The originals choice and the
+/// synced-folder choice are the dialog's own answers and are not part of it.
+pub(crate) fn selection_digest(w: &StepWork) -> String {
+    let mut lines: Vec<String> = w
+        .items
+        .iter()
+        .map(|i| {
+            format!(
+                "{}\t{:?}\t{}\t{}\t{:?}\t{:?}",
+                mj_core::pathutil::path_key(&i.path),
+                i.target,
+                i.expected.size,
+                i.expected.mtime.0,
+                i.expected_tree,
+                i.expected_id
+            )
+        })
+        .collect();
+    lines.sort();
+    let mut h = mj_core::hash::Sha256::new();
+    let action = with_originals(&w.step.action, Some(&OriginalsPolicy::RecycleBin));
+    h.update(format!("{action:?}\n{}\n", w.step.id.0).as_bytes());
+    for l in &lines {
+        h.update(l.as_bytes());
+        h.update(b"\n");
+    }
+    h.finish_hex()
 }
 
 /// True when `action`, run on a kept copy (or a folder holding one), could leave no copy of

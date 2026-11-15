@@ -25,6 +25,8 @@ export function settingsProblem(s) {
 }
 
 const lc = (s) => String(s).toLowerCase();
+/** G-04: what a confirmation is bound to (the mock's stand-in for the engine's SHA-256). */
+const selectionDigest = (st) => `mock-${st.id}-${st.action?.action ?? ''}-${st.estimate.files}-${st.estimate.bytes_before}`;
 const sameOrInside = (child, parent) => lc(child) === lc(parent) || lc(child).startsWith(lc(parent).replace(/[\\/]+$/, '') + '\\');
 
 /** Wire shape of a candidate row. @param {any} m @param {string} oppId @param {any} r */
@@ -324,6 +326,7 @@ export function createHandlers(m, sim, emit) {
         undo_text: permanent ? 'This step is not undoable. Everything else in the plan stays in History.' : `Every change is logged; History → Restore brings the originals back for ${m.settings.general.undo_days} days.`,
         action_label: permanent ? `Delete ${n} files permanently` : `Compress ${n} files`,
         permanent,
+        selection_digest: selectionDigest(st),
       };
     },
     plan_apply: (req) => {
@@ -333,6 +336,8 @@ export function createHandlers(m, sim, emit) {
         if (st.safety !== 'lossy_opt_in' && st.safety !== 'permanent') continue;
         const c = (req.confirmations ?? []).find((x) => x.step_id === st.id);
         if (!c?.acknowledged) throw fail('confirmation_required', `Confirmation required: step ${st.id} (${st.title}) needs confirmation`, 'Review the step and confirm it in the dialog.');
+        // G-04: the acknowledgement is bound to what the dialog showed.
+        if (c.selection_digest !== selectionDigest(st)) throw fail('confirmation_required', `Step ${st.id} (${st.title}) changed since it was confirmed: review it and confirm it again`, 'Review the step and confirm it in the dialog.');
       }
       return sim.startApply();
     },

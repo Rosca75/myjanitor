@@ -273,6 +273,12 @@ impl Engine {
                     }
                     {
                         let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
+                        let mut records = records;
+                        crate::results::carry_selections(&results.opportunities, &mut records);
+                        let skip = crate::results::skip_badges(&lock(&self.settings));
+                        for rec in &mut records {
+                            crate::opportunities::recompute(rec, skip);
+                        }
                         results.generation = generation;
                         results.index = Some(index);
                         results.opportunities = records;

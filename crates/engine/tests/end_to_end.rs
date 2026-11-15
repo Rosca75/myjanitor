@@ -172,6 +172,7 @@ fn permanent_step_needs_confirmation_and_signed_files_are_skipped() {
         acknowledged: false,
         originals: Default::default(),
         synced_online_only: false,
+        selection_digest: None,
     };
     let err = e.plan_apply(PlanApplyRequest { confirmations: vec![unticked] }).unwrap_err();
     assert_eq!(err.code(), "confirmation_required");

@@ -627,6 +627,9 @@ pub struct ConfirmationInfo {
     pub action_label: String,
     /// True for permanent (irreversible) steps: the button uses the danger colour.
     pub permanent: bool,
+    /// G-04: digest of exactly what the dialog describes (the step's action and its items
+    /// with their scan stamps). Sent back in `StepConfirmation.selection_digest`.
+    pub selection_digest: String,
 }
 
 /// `plan_apply` request: one confirmation per step whose safety requires it.

@@ -115,4 +115,9 @@ pub struct StepConfirmation {
     /// removing them (SAF-10, CLN-ACT-07).
     #[serde(default)]
     pub synced_online_only: bool,
+    /// G-04: the `selection_digest` of the `ConfirmationInfo` the dialog showed. A step is
+    /// applied only while its current selection still has this digest; after a rescan or a
+    /// selection change it needs a new confirmation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection_digest: Option<String>,
 }
