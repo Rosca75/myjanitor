@@ -164,6 +164,9 @@ impl Engine {
         };
         let mut warned: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         let locked = rec.candidates.iter().filter(|c| !(c.badges & skip).is_empty()).count();
+        // ENG-5: one lookup per group id instead of a scan of every group per row.
+        let groups: HashMap<mj_core::GroupId, &mj_core::CandidateGroup> =
+            rec.groups.iter().map(|g| (g.id, g)).collect();
         for c in rec.candidates.iter().filter(|c| is_selected(rec, c, skip)) {
             if c.badges.contains(Badges::ONLINE_ONLY) && !matches!(action, Action::Copy { .. }) {
                 online += 1;
@@ -174,7 +177,7 @@ impl Engine {
                 continue;
             };
             let link_source = if matches!(action, Action::Hardlink | Action::Reflink) {
-                match c.group.and_then(|g| rec.groups.iter().find(|x| x.id == g)).and_then(|g| g.keeper.clone()) {
+                match c.group.and_then(|g| groups.get(&g)).and_then(|g| g.keeper.clone()) {
                     Some(k) if k != c.path => Some(k),
                     _ => {
                         no_keeper += 1;
@@ -190,7 +193,7 @@ impl Engine {
                     continue;
                 }
                 Some((g, Some(k))) => {
-                    let exact = rec.groups.iter().find(|x| x.id == g).is_some_and(|x| x.kind == GroupKind::Exact);
+                    let exact = groups.get(&g).is_some_and(|x| x.kind == GroupKind::Exact);
                     // A survivor the index does not know cannot be verified: skip.
                     let Some(ke) = index.get(k) else {
                         last_copy += 1;
@@ -292,9 +295,11 @@ impl Engine {
                     if removes(&w.step.action) {
                         // Removals: the scan's allocated sizes (folders = subtree totals) of the
                         // items that pass every check, minus what other hard links keep.
+                        let skipped: std::collections::HashSet<&Path> =
+                            r.skipped.iter().map(|s| s.path.as_path()).collect();
                         let mut before = 0u64;
                         for (item, (size, _)) in w.items.iter().zip(&w.sizes) {
-                            if !r.skipped.iter().any(|s| s.path == item.path) {
+                            if !skipped.contains(item.path.as_path()) {
                                 before += size;
                             }
                         }
@@ -771,10 +776,10 @@ pub(crate) fn skip_items_other_steps_remove<'a>(works: impl Iterator<Item = &'a 
 /// (only some of a file's links are in the step), or counted once per link when all are.
 fn hardlink_not_freed(w: &StepWork, skipped: &[mj_core::ItemOutcome]) -> u64 {
     let mut by_id: HashMap<mj_core::FileId, (u32, u32, u64)> = HashMap::new();
+    let not_done: std::collections::HashSet<&Path> =
+        skipped.iter().filter(|s| s.status != ItemStatus::Done).map(|s| s.path.as_path()).collect();
     for (item, (size, id)) in w.items.iter().zip(&w.sizes) {
-        if item.target != TargetKind::File
-            || skipped.iter().any(|s| s.path == item.path && s.status != ItemStatus::Done)
-        {
+        if item.target != TargetKind::File || not_done.contains(item.path.as_path()) {
             continue;
         }
         if let Some((id, links)) = id {
