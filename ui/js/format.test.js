@@ -1,6 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatBytes, formatAbout, formatApprox, formatCount, formatAgo, formatClock, formatDate, plural, basename, dirname, displayPath, pct } from './format.js';
+
+// Dates show in the local time zone (UI-8): pin it so the expectations hold anywhere.
+process.env.TZ = 'UTC';
+import { formatBytes, formatAbout, formatApprox, formatCount, formatAgo, formatClock, formatDate, formatDateTime, plural, basename, dirname, displayPath, pct } from './format.js';
 
 const GB = 1024 ** 3;
 
@@ -67,4 +70,17 @@ test('pct clamps', () => {
   assert.equal(pct(50, 200), 25);
   assert.equal(pct(5, 0), 0);
   assert.equal(pct(500, 100), 100);
+});
+
+test('dates and times are shown in the local time zone, as schedules are computed (UI-8)', () => {
+  const was = process.env.TZ;
+  try {
+    process.env.TZ = 'Australia/Sydney';
+    assert.equal(formatDateTime(Date.UTC(2026, 10, 15, 21, 30) * 1e6), '16 Nov 2026, 08:30');
+    assert.equal(formatDate(Date.UTC(2026, 10, 15, 21, 30) * 1e6), '16 Nov 2026');
+    process.env.TZ = 'America/Los_Angeles';
+    assert.equal(formatDateTime(Date.UTC(2026, 10, 16, 3, 5) * 1e6), '15 Nov 2026, 19:05');
+  } finally {
+    process.env.TZ = was;
+  }
 });
