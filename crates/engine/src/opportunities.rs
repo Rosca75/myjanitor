@@ -391,6 +391,7 @@ impl Engine {
                 summary.overlap += share.overlap;
                 summary.opportunities += u64::from(share.selected > 0);
                 summary.review_opportunities += u64::from(share.to_review_count > 0);
+                summary.to_review += share.to_review;
             }
             counts.all += 1;
             for (tab, n) in [

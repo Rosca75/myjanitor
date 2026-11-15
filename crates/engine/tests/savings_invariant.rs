@@ -117,6 +117,9 @@ fn hero_is_the_sum_of_the_cards_and_counts_every_file_once() {
     let cards: u64 = available(&l).iter().map(|o| o.saving).sum();
     assert_eq!(s.total, cards, "hero total vs sum of the cards");
     assert_eq!(s.total, s.reversible + s.opt_in + s.review_only, "{s:?}");
+    // What is only listed for review is reported next to the total, never in it.
+    assert_eq!(s.to_review, available(&l).iter().map(|o| o.to_review).sum::<u64>());
+    assert!(s.to_review > 0 && s.review_opportunities > 0, "the review-only cards list old data: {s:?}");
 
     // The two overlaps of the tree are really there.
     let by_path = selected_by_path(e, &l);

@@ -191,7 +191,8 @@ the plan, else `default_action`) frees, **every file counted once**:
 - rows a card lists but does not count because nothing is selected (or its
   action is `none`) are reported as `to_review` / `to_review_count`, never
   added to `saving` or `summary.total`; `summary.review_opportunities` is the
-  number of cards that have some.
+  number of cards that have some and `summary.to_review` the sum of their
+  `to_review` (the hero names it in words, next to the total, as not counted).
 
 `summary.opportunities` is the number of available cards with at least one
 selected row; `summary.reclaimed` is what runs applied this session freed. The
@@ -684,7 +685,7 @@ from `params` take the spec default).
 #### OpportunitiesList
 
 ```json OpportunitiesList
-{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":15,"overlap":123731968,"review_opportunities":4,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
+{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":15,"overlap":123731968,"review_opportunities":4,"to_review":220200960,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
 ```
 
 #### StepSummary

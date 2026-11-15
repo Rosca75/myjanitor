@@ -121,6 +121,10 @@ pub struct SavingsSummary {
     /// Available opportunities that list rows for review (`Opportunity::to_review_count`).
     #[serde(default)]
     pub review_opportunities: u64,
+    /// Sum of the cards' `to_review`: current size of the rows listed for review. Never
+    /// part of `total`; the hero names it in words next to the total.
+    #[serde(default)]
+    pub to_review: u64,
     /// Bytes freed by runs applied this session (status strip "Reclaimed").
     #[serde(default)]
     pub reclaimed: u64,
