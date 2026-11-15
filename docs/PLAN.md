@@ -22,6 +22,8 @@ State: todo / in progress / done / blocked.
 | 3 | W3-D | Real IPC wiring, derived screens | Sonnet | done |
 | 3 | W3-E | Settings, schedules, CLI, context menu, portable | Sonnet | done |
 | 4 | W4-1 | Integration pass | Opus | done |
-| 4 | W4-2 | Adversarial review of destructive paths | Opus | review 1 fixed; review 2 done; second fix pass pending |
+| 4 | W4-2 | Adversarial review of destructive paths | Opus | review 1 fixed; review 2 done; second fix pass in progress |
 | 4 | W4-3 | CI | Sonnet | done (first run unproven) |
 | 4 | W4-4 | Docs | Sonnet | in progress |
+| 5 | W5-1 | Review-2 fixes + T1 gap closure | Opus | in progress |
+| 5 | W5-2 | Docs refresh (Windows verification level, review status, feature status) | Sonnet | todo |
