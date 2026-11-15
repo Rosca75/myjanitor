@@ -380,7 +380,7 @@ impl Engine {
         if let Action::Optimise { params: p, .. } = &mut action {
             *p = params.clone();
         }
-        let lossy = o.safety == SafetyClass::LossyOptIn || crate::steps::params_lossy(rec, &params);
+        let lossy = crate::steps::step_lossy(rec, &params);
         drop(results);
         {
             let mut st = lock(&self.plan);
@@ -443,8 +443,7 @@ impl Engine {
                 *p = step.params.clone();
             }
             if let Some(rec) = rec {
-                step.lossy =
-                    rec.opportunity.safety == SafetyClass::LossyOptIn || crate::steps::params_lossy(rec, &step.params);
+                step.lossy = crate::steps::step_lossy(rec, &step.params);
             }
             st.measured.remove(&req.step_id);
         }

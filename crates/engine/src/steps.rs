@@ -96,6 +96,14 @@ fn view_query(
     }
 }
 
+/// ENG-6: whether a step with these parameters is lossy: a lossy-by-nature card
+/// (`LossyOptIn`, e.g. audio or video re-encoding) always is, whatever its parameters;
+/// any other card is when its parameters make it so. The one rule for adding a step,
+/// changing its action and changing its parameters.
+pub(crate) fn step_lossy(rec: &OpportunityRecord, params: &mj_core::ParamValues) -> bool {
+    rec.opportunity.safety == SafetyClass::LossyOptIn || params_lossy(rec, params)
+}
+
 fn none(reason: &str) -> Preview {
     Preview { kind: "none".into(), mime: None, data: None, text: None, waveform: None, reason: Some(reason.into()) }
 }
@@ -328,7 +336,7 @@ impl Engine {
         params = params.merged(&req.params);
         let generation = self.results.read().unwrap_or_else(|e| e.into_inner()).generation;
         let mut rec = self.rerun_analysis(&req.opportunity_id, params.clone())?;
-        let lossy = params_lossy(&rec, &params);
+        let lossy = step_lossy(&rec, &params);
         let safety = if lossy && !matches!(rec.opportunity.safety, SafetyClass::ReviewOnly) {
             SafetyClass::LossyOptIn
         } else {

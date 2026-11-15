@@ -328,3 +328,15 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
   order for the same answer.
 - **Rejected:** having the UI send the ids of the visible rows (only one page is loaded;
   the request would grow with the step).
+
+## D-6A20 One rule for "is this step lossy" (ENG-6)
+
+- **Context:** adding a step and changing its action treated a `LossyOptIn` card (audio,
+  video re-encoding) as always lossy; changing its parameters looked only at the lossy
+  toggles and presets. Setting the bitrate of a "Transcription-safe" audio step to 64
+  therefore cleared the flag: the step showed as reversible, Apply asked nothing, every
+  file was encoded and then refused by the action engine's lossy gate.
+- **Choice:** `steps::step_lossy` (card class `LossyOptIn`, or parameters that make it lossy)
+  is the only rule, used by `plan_add_step`, `plan_update_step` and `step_params_set`
+  (step flag and response). Lossy-by-nature steps always ask; asking once too often for a
+  lossless FLAC choice is the safe side, and it is what the two other paths already did.
