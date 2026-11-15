@@ -26,6 +26,9 @@ pub(crate) struct JobResult {
     pub error: Option<Error>,
     /// `report_get` works for the job's run.
     pub report: bool,
+    /// ENG-10: the body did all its work. A job whose token was cancelled after its last
+    /// item is reported by what it did (completed), not as cancelled.
+    pub complete: bool,
 }
 
 /// Body of a job.
@@ -198,7 +201,7 @@ impl Engine {
             j.state = match (&result.error, &result.outcome) {
                 (Some(Error::Cancelled), _) => JobState::Cancelled,
                 (Some(_), _) => JobState::Failed,
-                _ if token.is_cancelled() => JobState::Cancelled,
+                _ if token.is_cancelled() && !result.complete => JobState::Cancelled,
                 (None, Some(o)) if o.failed > 0 || o.skipped > 0 => JobState::CompletedWithErrors,
                 _ => JobState::Completed,
             };

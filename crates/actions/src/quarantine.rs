@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use mj_core::pathutil::is_within;
-use mj_core::{EntryId, Error, JournalEntry, JournalState, Result, RunId, Timestamp};
+use mj_core::{CancelToken, EntryId, Error, JournalEntry, JournalState, Result, RunId, Timestamp};
 
 use crate::fsops;
 use crate::journal::Journal;
@@ -155,13 +155,39 @@ fn is_own_slot(quarantine_dir: &Path, e: &JournalEntry, retained: &Path) -> bool
 /// Purge items older than `days` (an explicit "empty the quarantine" with that age).
 /// Returns bytes freed. See [`purge_expired`] for the automatic purge.
 pub fn purge(journal: &Journal, quarantine_dir: &Path, now: Timestamp, days: u32) -> Result<u64> {
-    purge_by(journal, quarantine_dir, now, &|_| days)
+    purge_by(journal, quarantine_dir, now, &|_| days, None).map(|o| o.bytes)
 }
 
 /// The automatic purge (F-15): each item expires after its own retention (the
 /// `purge_after_days` of the step that quarantined it), else `default_days`.
 pub fn purge_expired(journal: &Journal, quarantine_dir: &Path, now: Timestamp, default_days: u32) -> Result<u64> {
-    purge_by(journal, quarantine_dir, now, &|e| e.retention_days.unwrap_or(default_days))
+    purge_by(journal, quarantine_dir, now, &|e| e.retention_days.unwrap_or(default_days), None).map(|o| o.bytes)
+}
+
+/// What a [`purge_with`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PurgeOutcome {
+    /// Items permanently deleted.
+    pub items: u64,
+    /// Bytes freed.
+    pub bytes: u64,
+    /// The token was cancelled before every expired item was deleted.
+    pub stopped: bool,
+}
+
+/// [`purge`] (`older_than_days: Some(n)`) or [`purge_expired`] (`None`) as a job body:
+/// `cancel` is checked between items (a pause blocks there, a cancel stops the purge and
+/// the items not reached stay held). Items deleted before the stop stay deleted.
+pub fn purge_with(
+    journal: &Journal,
+    quarantine_dir: &Path,
+    now: Timestamp,
+    older_than_days: Option<u32>,
+    default_days: u32,
+    cancel: &CancelToken,
+) -> Result<PurgeOutcome> {
+    let days_of = |e: &JournalEntry| older_than_days.unwrap_or_else(|| e.retention_days.unwrap_or(default_days));
+    purge_by(journal, quarantine_dir, now, &days_of, Some(cancel))
 }
 
 /// An item expires `days_of(entry)` after it was quarantined (its `done` record), compared
@@ -172,8 +198,9 @@ fn purge_by(
     quarantine_dir: &Path,
     now: Timestamp,
     days_of: &dyn Fn(&JournalEntry) -> u32,
-) -> Result<u64> {
-    let mut freed = 0u64;
+    cancel: Option<&CancelToken>,
+) -> Result<PurgeOutcome> {
+    let mut out = PurgeOutcome::default();
     for e in held(journal, quarantine_dir) {
         if e.at.add_days(i64::from(days_of(&e))) > now {
             continue;
@@ -182,11 +209,16 @@ fn purge_by(
         if !is_quarantined_path(quarantine_dir, &retained) {
             continue;
         }
+        if cancel.is_some_and(|c| c.checkpoint().is_err()) {
+            out.stopped = true;
+            break;
+        }
         let size = if fsops::exists(&retained) { fsops::tree_size(&retained) } else { 0 };
         if fsops::exists(&retained) && fsops::remove_item(&retained).is_err() {
             continue;
         }
-        freed = freed.saturating_add(size);
+        out.bytes = out.bytes.saturating_add(size);
+        out.items += 1;
         let mut rec = e.clone();
         rec.state = JournalState::Purged;
         rec.at = now;
@@ -194,5 +226,5 @@ fn purge_by(
         journal.append(&rec)?;
         cleanup_slot(quarantine_dir, e.run_id, e.id);
     }
-    Ok(freed)
+    Ok(out)
 }

@@ -14,12 +14,12 @@ pub mod os;
 use std::sync::Arc;
 
 use mj_core::{
-    lock, CancelToken, Error, Job, JobKind, JobOutcome, Result, Schedule, ScheduledStep, SettingKind, Timestamp,
+    lock, CancelToken, Error, Job, JobKind, JobOutcome, Result, Schedule, ScheduledStep, SettingKind, StepId, Timestamp,
 };
 
 use crate::api::{
     ApplyStarted, IdRequest, PlanAddStepRequest, PlanApplyRequest, ScanRunState, ScanStartRequest,
-    ScheduleFromPlanRequest, ScheduleSaveRequest, ScopeSetRequest,
+    ScheduleFromPlanRequest, ScheduleSaveRequest, ScopeSetRequest, StepRequest,
 };
 use crate::jobs::{JobResult, Work};
 use crate::settings::persist::{read_or_backup, Loaded};
@@ -221,9 +221,9 @@ impl Engine {
                     }
                 }
                 let outcome = JobOutcome { succeeded: 1, ..JobOutcome::default() };
-                JobResult { outcome: Some(outcome), error: None, report: false }
+                JobResult { outcome: Some(outcome), error: None, report: false, complete: true }
             }
-            Err(e) => JobResult { outcome: None, error: Some(e), report: false },
+            Err(e) => JobResult { outcome: None, error: Some(e), report: false, complete: false },
         });
         self.spawn_detached(job, work)
     }
@@ -255,12 +255,25 @@ impl Engine {
     fn run_schedule(self: &Arc<Self>, id: &str, cancel: Option<&CancelToken>) -> Result<ApplyStarted> {
         self.require_writable()?;
         let sched = self.runnable_schedule(id)?;
+        // IPC-7: the run's scan replaces the session results, so the session scope becomes
+        // the schedule's (the scope chips and the cards keep describing the same folders;
+        // the UI re-reads the scope on `scan://done`).
         self.scope_set(ScopeSetRequest { scope: sched.scope.clone() })?;
         let generation = self.scan_start(ScanStartRequest::default())?.generation;
         loop {
-            if cancel.is_some_and(|c| c.is_cancelled()) {
-                let _ = self.scan_stop();
-                return Err(Error::Cancelled);
+            if let Some(c) = cancel {
+                // ENG-10: a paused job pauses its scan and waits; a cancel stops it.
+                if c.is_paused() && !c.is_cancelled() {
+                    let _ = self.scan_pause();
+                    let waited = c.checkpoint();
+                    if waited.is_ok() {
+                        let _ = self.scan_resume();
+                    }
+                }
+                if c.is_cancelled() {
+                    let _ = self.scan_stop();
+                    return Err(Error::Cancelled);
+                }
             }
             let st = self.scan_status()?;
             if st.generation != generation {
@@ -279,11 +292,11 @@ impl Engine {
                 }
             }
         }
-        let started = self.apply_steps(&sched);
-        if started.is_err() {
-            let _ = self.plan_clear();
+        // ENG-10: a pause or cancel that arrived as the scan ended still holds the apply.
+        if let Some(c) = cancel {
+            c.checkpoint()?;
         }
-        let started = started?;
+        let started = self.apply_steps(&sched)?;
         {
             let mut v = lock(&self.schedules);
             if let Some(s) = v.iter_mut().find(|s| s.id == sched.id) {
@@ -294,8 +307,13 @@ impl Engine {
         Ok(started)
     }
 
+    /// Add the schedule's steps to the plan and apply those steps only (ENG-8): a step the
+    /// user added to the plan while the run was scanning is neither applied nor removed.
+    /// On any failure the steps this run added are taken out again.
     fn apply_steps(self: &Arc<Self>, sched: &Schedule) -> Result<ApplyStarted> {
+        let before: Vec<StepId> = lock(&self.plan).plan.steps.iter().map(|s| s.id).collect();
         let mut skipped = 0;
+        let mut failure = None;
         for step in &sched.steps {
             let added = self.plan_add_step(PlanAddStepRequest {
                 opportunity_id: step.opportunity.clone(),
@@ -305,22 +323,32 @@ impl Engine {
             match added {
                 Ok(_) => {}
                 Err(Error::InvalidInput(_) | Error::Unsupported { .. } | Error::Conflict(_)) => skipped += 1,
-                Err(e) => return Err(e),
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
             }
         }
-        let plan = lock(&self.plan).plan.clone();
-        if plan.steps.is_empty() {
-            return Err(Error::InvalidInput(format!(
-                "nothing to do: none of the {skipped} steps found anything this time"
-            )));
-        }
-        // Defence in depth: the opportunity may be lossier than the template said.
-        if plan.steps.iter().any(|s| s.safety.requires_confirmation()) {
-            return Err(Error::ConfirmationRequired(
+        let ours: Vec<mj_core::PlanStep> =
+            lock(&self.plan).plan.steps.iter().filter(|s| !before.contains(&s.id)).cloned().collect();
+        let ids: Vec<StepId> = ours.iter().map(|s| s.id).collect();
+        let res = match failure {
+            Some(e) => Err(e),
+            None if ours.is_empty() => {
+                Err(Error::InvalidInput(format!("nothing to do: none of the {skipped} steps found anything this time")))
+            }
+            // Defence in depth: the opportunity may be lossier than the template said.
+            None if ours.iter().any(|s| s.safety.requires_confirmation()) => Err(Error::ConfirmationRequired(
                 "a scheduled step turned out to need confirmation; it was not run".into(),
-            ));
+            )),
+            None => self.apply_plan_steps(PlanApplyRequest::default(), Some(&ids)),
+        };
+        if res.is_err() {
+            for id in ids {
+                let _ = self.plan_remove_step(StepRequest { step_id: id });
+            }
         }
-        self.plan_apply(PlanApplyRequest::default())
+        res
     }
 }
 

@@ -238,3 +238,27 @@ fn quarantine_purge_uses_the_callers_now() {
     mj_actions::quarantine::purge(&f.journal, &f.qdir, done_at.add_days(400), 30).unwrap();
     assert!(outside.exists());
 }
+
+/// ENG-10: the purge job stops between items when its token is cancelled; the items not
+/// reached stay held and the outcome says it stopped.
+#[test]
+fn a_cancelled_purge_stops_between_items_and_keeps_the_rest() {
+    let f = Fixture::new("purge-cancel");
+    let a = f.write("a.bin", &[1u8; 1000]);
+    let b = f.write("b.bin", &[2u8; 500]);
+    let item = |p: &Path| f.item(p, Action::Quarantine { purge_after_days: 30 });
+    let (run, out) = f.apply(&[item(&a), item(&b)], &opts());
+    assert_eq!(out.succeeded, 2);
+    let later = f.journal.entries_of(run).iter().map(|e| e.at).max().unwrap().add_days(31);
+    let cancel = mj_core::CancelToken::new();
+    cancel.cancel();
+    let o = mj_actions::quarantine::purge_with(&f.journal, &f.qdir, later, None, 30, &cancel).unwrap();
+    assert_eq!(o, mj_actions::quarantine::PurgeOutcome { items: 0, bytes: 0, stopped: true });
+    assert_eq!(mj_actions::quarantine::summary(&f.journal, &f.qdir).items, 2, "nothing deleted after the cancel");
+    let o =
+        mj_actions::quarantine::purge_with(&f.journal, &f.qdir, later, None, 30, &mj_core::CancelToken::new()).unwrap();
+    assert_eq!(o, mj_actions::quarantine::PurgeOutcome { items: 2, bytes: 1500, stopped: false });
+    // Nothing expired: an explicit age that no item reaches deletes nothing and is not a stop.
+    let o = mj_actions::quarantine::purge_with(&f.journal, &f.qdir, later, Some(400), 30, &cancel).unwrap();
+    assert_eq!(o, mj_actions::quarantine::PurgeOutcome::default());
+}

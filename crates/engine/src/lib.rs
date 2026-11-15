@@ -42,3 +42,6 @@ mod tests;
 
 #[cfg(test)]
 mod fault_tests;
+
+#[cfg(test)]
+mod schedule_job_tests;

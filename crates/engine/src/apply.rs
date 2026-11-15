@@ -19,8 +19,8 @@ use std::sync::Arc;
 use mj_actions::{ExecContext, ExecOptions, Guard, ProtectedPaths, Services};
 use mj_core::{
     lock, Action, ActionItem, Badges, CancelToken, Confidence, Error, Estimate, FileStamp, GroupKind, ItemStatus, Job,
-    JobId, JobKind, JobOutcome, JournalState, KeepCopy, OriginalsPolicy, PlanStep, ProgressSink, Result, RunId,
-    RunKind, RunRecord, SafetyClass, StepConfirmation, StepId, TargetKind, Timestamp,
+    JobId, JobKind, JournalState, KeepCopy, OriginalsPolicy, PlanStep, ProgressSink, Result, RunId, RunKind, RunRecord,
+    SafetyClass, StepConfirmation, StepId, TargetKind, Timestamp,
 };
 
 use crate::api::{
@@ -327,7 +327,7 @@ impl Engine {
         let plan = self.refresh_plan();
         let _ = self.plan_changed(plan);
         self.emit(Event::DryRun(report));
-        JobResult { outcome: None, error, report: false }
+        JobResult { outcome: None, error, report: false, complete: false }
     }
 
     /// Content of the confirmation dialog for one step (SAF-10/11).
@@ -477,11 +477,24 @@ impl Engine {
 
     /// Apply the plan: one job per step, in plan order.
     pub fn plan_apply(self: &Arc<Self>, req: PlanApplyRequest) -> Result<ApplyStarted> {
+        self.apply_plan_steps(req, None)
+    }
+
+    /// Apply the plan's steps, or only the steps in `only` (ENG-8: a scheduled run applies
+    /// the steps it added and never a step the user added meanwhile).
+    pub(crate) fn apply_plan_steps(
+        self: &Arc<Self>,
+        req: PlanApplyRequest,
+        only: Option<&[StepId]>,
+    ) -> Result<ApplyStarted> {
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(Error::Conflict("MyJanitor is shutting down".into()));
         }
         self.require_writable()?;
-        let plan = lock(&self.plan).plan.clone();
+        let mut plan = lock(&self.plan).plan.clone();
+        if let Some(only) = only {
+            plan.steps.retain(|s| only.contains(&s.id));
+        }
         if plan.steps.is_empty() {
             return Err(Error::InvalidInput("the plan is empty".into()));
         }
@@ -567,7 +580,9 @@ impl Engine {
         // CLN-ACT-04: expired quarantine items are purged after each completed step.
         self.quarantine_auto_purge();
         self.emit(Event::HistoryChanged(HistoryChanged { run_id: Some(run.run_id) }));
-        JobResult { outcome: outcome.or_else(|| Some(JobOutcome::default())), error, report: true }
+        let outcome = outcome.unwrap_or_default();
+        let complete = error.is_none() && outcome.succeeded + outcome.skipped + outcome.failed >= w.items.len() as u64;
+        JobResult { outcome: Some(outcome), error, report: true, complete }
     }
 
     /// Applied items leave their cards (and the index); the applied step leaves the plan.
