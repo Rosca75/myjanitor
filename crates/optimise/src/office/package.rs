@@ -315,9 +315,12 @@ pub fn remove_thumbnail(pkg: &mut Pkg, rep: &mut OpReport) -> Result<()> {
     Ok(())
 }
 
+/// Parts that may be stored once when identical: pictures, audio and video under `/media/`
+/// only. G-11: embedded objects (`/embeddings/`, OLE `.bin`, packages) are never merged:
+/// two relationships to one embedding would make Office edit both objects as one.
 fn is_media_name(name: &str) -> bool {
     let l = name.to_ascii_lowercase();
-    !is_xml_part(&l) && (l.contains("/media/") || l.ends_with(".bin") && l.contains("/embeddings/"))
+    !is_xml_part(&l) && l.contains("/media/") && !l.contains("/embeddings/")
 }
 
 /// OPT-PPT-08 (all formats): byte-identical media parts are stored once; every
@@ -732,6 +735,10 @@ mod tests {
         assert_eq!(category("ppt/media/clip.mp4"), BreakdownCategory::Media);
         assert_eq!(category("ppt/fonts/font1.fntdata"), BreakdownCategory::Fonts);
         assert_eq!(category("xl/embeddings/oleObject1.bin"), BreakdownCategory::Objects);
+        // G-11: only `/media/` parts are de-duplicated, never embedded objects.
+        assert!(is_media_name("ppt/media/image1.png"));
+        assert!(!is_media_name("ppt/embeddings/oleObject1.bin"));
+        assert!(!is_media_name("word/embeddings/Microsoft_Excel_Worksheet.xlsx"));
         assert_eq!(category("xl/pivotCache/pivotCacheRecords1.xml"), BreakdownCategory::Caches);
         assert_eq!(category("xl/worksheets/sheet1.xml"), BreakdownCategory::Content);
         assert_eq!(category("xl/styles.xml"), BreakdownCategory::Styles);
