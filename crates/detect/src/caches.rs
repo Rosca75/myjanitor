@@ -125,28 +125,57 @@ pub fn builtin_rules() -> Vec<RuleDef> {
         v.push(rule(app, "Shader cache", "rebuilt on demand", pat, d));
     }
     // Crash dumps and error reports.
-    v.push(rule("Windows", "Crash dumps", "only useful for debugging", "**/AppData/Local/CrashDumps", d));
-    v.push(rule("Windows", "Crash dumps", "only useful for debugging", "**/Windows/Minidump", d).review());
-    v.push(rule("Windows", "Memory dump", "only useful for debugging", "**/Windows/MEMORY.DMP", Target::File).review());
+    // RF-11: dumps, reports, logs, temp files and an old installation are disposable, not
+    // rebuildable: nothing recreates them, so they carry no `rebuildable` badge.
+    v.push(
+        rule("Windows", "Crash dumps", "only useful for debugging", "**/AppData/Local/CrashDumps", d).not_rebuildable(),
+    );
+    v.push(
+        rule("Windows", "Crash dumps", "only useful for debugging", "**/Windows/Minidump", d)
+            .review()
+            .not_rebuildable(),
+    );
+    v.push(
+        rule("Windows", "Memory dump", "only useful for debugging", "**/Windows/MEMORY.DMP", Target::File)
+            .review()
+            .not_rebuildable(),
+    );
     for sub in ["ReportArchive", "ReportQueue"] {
-        v.push(rule(
-            "Windows Error Reporting",
-            "Error reports",
-            "only useful for debugging",
-            format!("**/Microsoft/Windows/WER/{sub}"),
-            d,
-        ));
+        v.push(
+            rule(
+                "Windows Error Reporting",
+                "Error reports",
+                "only useful for debugging",
+                format!("**/Microsoft/Windows/WER/{sub}"),
+                d,
+            )
+            .not_rebuildable(),
+        );
     }
-    v.push(rule("System", "Crash reports", "only useful for debugging", "**/var/crash", d).review());
-    v.push(rule("System", "Core dumps", "only useful for debugging", "**/var/lib/systemd/coredump", d).review());
+    v.push(rule("System", "Crash reports", "only useful for debugging", "**/var/crash", d).review().not_rebuildable());
+    v.push(
+        rule("System", "Core dumps", "only useful for debugging", "**/var/lib/systemd/coredump", d)
+            .review()
+            .not_rebuildable(),
+    );
     // Logs (rotated and compressed only; live logs are left alone).
     for pat in
         ["**/var/log/*.gz", "**/var/log/**/*.gz", "**/var/log/*.[0-9]", "**/var/log/*.old", "**/var/log/**/*.[0-9]"]
     {
-        v.push(rule("System logs", "Rotated logs", "already archived by logrotate", pat, Target::File).review());
+        v.push(
+            rule("System logs", "Rotated logs", "already archived by logrotate", pat, Target::File)
+                .review()
+                .not_rebuildable(),
+        );
     }
-    v.push(rule("Desktop session", "Old logs", "replaced at every login", "**/.xsession-errors.old", Target::File));
-    v.push(rule("Xorg", "Old logs", "replaced at every start", "**/.local/share/xorg/*.log.old", Target::File));
+    v.push(
+        rule("Desktop session", "Old logs", "replaced at every login", "**/.xsession-errors.old", Target::File)
+            .not_rebuildable(),
+    );
+    v.push(
+        rule("Xorg", "Old logs", "replaced at every start", "**/.local/share/xorg/*.log.old", Target::File)
+            .not_rebuildable(),
+    );
     // Windows Update leftovers (system folders: never pre-selected).
     v.push(
         rule(
@@ -173,7 +202,8 @@ pub fn builtin_rules() -> Vec<RuleDef> {
             "**/Windows.old",
             d,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
     );
     // Temp folders: children only, never the folder itself, and never anything touched recently.
     v.push(
@@ -184,22 +214,26 @@ pub fn builtin_rules() -> Vec<RuleDef> {
             "**/AppData/Local/Temp/*",
             Target::Any,
         )
-        .aged(),
+        .aged()
+        .not_rebuildable(),
     );
     v.push(
         rule("Windows temp", "Temporary file", "programs recreate what they need", "**/Windows/Temp/*", Target::Any)
             .aged()
+            .not_rebuildable()
             .review(),
     );
     v.push(
         rule("Temp files", "Temporary file", "programs recreate what they need", "/tmp/*", Target::Any)
             .aged()
+            .not_rebuildable()
             .review()
             .runtime_tmp(),
     );
     v.push(
         rule("Temp files", "Temporary file", "programs recreate what they need", "/var/tmp/*", Target::Any)
             .aged()
+            .not_rebuildable()
             .review()
             .runtime_tmp(),
     );
@@ -344,6 +378,23 @@ mod tests {
         let out = run(&AppCaches, &index_of(t.path()), &Default::default());
         assert_eq!(rel(&out, t.path()), vec!["u/AppData/Local/Temp/done"]);
         assert_eq!(out.diagnostics.skipped["recently_modified"], 1);
+        // RF-11: a temp folder is disposable, not rebuildable.
+        assert!(!out.candidates[0].badges.contains(mj_core::Badges::REBUILDABLE));
+    }
+
+    /// RF-11: a previous Windows installation holds the old user profile; it is never
+    /// labelled rebuildable, and its row does not own a repository inside it.
+    #[test]
+    fn rf11_windows_old_is_not_rebuildable() {
+        let t = TempDir::new("caches-rf11").unwrap();
+        t.write("Windows.old/Users/me/Documents/a.txt", b"old profile").unwrap();
+        t.write("u/AppData/Local/CrashDumps/app.dmp", b"dump").unwrap();
+        let out = run(&AppCaches, &index_of(t.path()), &Default::default());
+        for c in &out.candidates {
+            assert!(!c.badges.contains(mj_core::Badges::REBUILDABLE), "{:?}", c.path);
+            assert_eq!(c.safety_override(), Some(mj_core::SafetyClass::Reversible), "{:?}", c.path);
+        }
+        assert_eq!(out.candidates.len(), 2);
     }
 
     #[test]

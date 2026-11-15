@@ -420,6 +420,9 @@ impl Engine {
             if other_spelling(&spellings, &c.path).is_some_and(|q| protected.is_protected(&q)) {
                 b |= Badges::PROTECTED;
             }
+            // RF-11: a row of a regenerable card that says it is not regenerable itself
+            // (Windows.old, a temp folder) does not own the repositories inside it.
+            let owned = owned && c.safety_override().is_none_or(|s| s == mj_core::SafetyClass::Rebuildable);
             if c.target == mj_core::TargetKind::Folder
                 && folder_holds_protected(index, &protected, &c.path, owned, &spellings)
             {

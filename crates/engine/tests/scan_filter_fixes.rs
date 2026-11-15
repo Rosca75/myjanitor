@@ -106,3 +106,25 @@ fn scan5_scanning_settings_apply_to_app_scans() {
     let o = again.scope_get().unwrap().options;
     assert!(!o.include_hidden && !o.use_cache);
 }
+
+/// RF-11: a Windows.old row is not a regenerable artefact, so a repository inside it locks
+/// the row as it would on any other card.
+#[test]
+fn rf11_a_repository_inside_windows_old_protects_the_row() {
+    let t = TempDir::new("rf11").unwrap();
+    t.write("Windows.old/Users/me/proj/.git/HEAD", b"ref: refs/heads/main").unwrap();
+    t.write("Windows.old/Users/me/proj/main.rs", b"fn main() {}").unwrap();
+    t.write("u/.cache/pip/http/a", b"cached").unwrap();
+    t.write("u/.cache/pip/src/.git/HEAD", b"ref: refs/heads/main").unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let r = rows(e, "det:app_caches");
+    let row = |n: &str| r.iter().find(|r| r.candidate.path.ends_with(n)).unwrap_or_else(|| panic!("{n}: {r:#?}"));
+    let old = row("Windows.old");
+    assert!(old.candidate.badges.contains(mj_core::Badges::PROTECTED), "{old:?}");
+    assert!(!old.candidate.badges.contains(mj_core::Badges::REBUILDABLE));
+    // A real cache still owns what is inside it.
+    let pip = row("pip");
+    assert!(!pip.candidate.badges.contains(mj_core::Badges::PROTECTED), "{pip:?}");
+}

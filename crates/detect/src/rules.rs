@@ -42,6 +42,11 @@ pub struct RuleDef {
     pub aged: bool,
     /// Skip runtime sockets/session folders of `/tmp` (`.X11-unix`, `systemd-private-*`, ...).
     pub runtime_tmp: bool,
+    /// RF-11: what it matches can be recreated by the program that made it (the
+    /// `rebuildable` badge, and a folder row owns the version-control data inside it).
+    /// False for user data, dumps, logs, temp files and previous installations: such a row
+    /// is an ordinary reversible removal.
+    pub rebuildable: bool,
 }
 
 /// Rule constructor with the common defaults (`select`, not aged, not runtime tmp).
@@ -52,7 +57,17 @@ pub fn rule(
     pattern: impl Into<String>,
     target: Target,
 ) -> RuleDef {
-    RuleDef { app, what, note, pattern: pattern.into(), target, select: true, aged: false, runtime_tmp: false }
+    RuleDef {
+        app,
+        what,
+        note,
+        pattern: pattern.into(),
+        target,
+        select: true,
+        aged: false,
+        runtime_tmp: false,
+        rebuildable: true,
+    }
 }
 
 impl RuleDef {
@@ -71,6 +86,12 @@ impl RuleDef {
     /// Skip runtime sockets and session folders.
     pub fn runtime_tmp(mut self) -> Self {
         self.runtime_tmp = true;
+        self
+    }
+
+    /// Not something its program recreates (RF-11).
+    pub fn not_rebuildable(mut self) -> Self {
+        self.rebuildable = false;
         self
     }
 }
@@ -157,6 +178,8 @@ pub struct Hit {
     pub select: bool,
     /// Derived from a catch-all rule (no known application): yields to specific hits inside it.
     pub generic: bool,
+    /// See [`RuleDef::rebuildable`].
+    pub rebuildable: bool,
 }
 
 /// Names `/tmp` keeps for running sessions; removing them breaks the desktop.
@@ -206,7 +229,15 @@ pub fn run_rules(
         let app = if r.app.is_empty() { e.name() } else { r.app.to_string() };
         hits.insert(
             pos,
-            Hit { pos, app, what: r.what.into(), note: r.note.into(), select: r.select, generic: r.app.is_empty() },
+            Hit {
+                pos,
+                app,
+                what: r.what.into(),
+                note: r.note.into(),
+                select: r.select,
+                generic: r.app.is_empty(),
+                rebuildable: r.rebuildable,
+            },
         );
     }
     for h in extra {
@@ -251,7 +282,13 @@ fn build(ix: &FileIndex, h: &Hit, id: DetectorId, force_review: bool, out: &mut 
     } else {
         common::file_candidate(e, id, format!("{}: {}{note}", h.app, h.what), select)
     };
-    c.badges |= mj_core::Badges::REBUILDABLE;
+    if h.rebuildable {
+        c.badges |= mj_core::Badges::REBUILDABLE;
+    } else {
+        // An ordinary reversible removal, not a regenerable artefact: no badge, and a
+        // folder row does not own a repository inside it (F-01 applies as anywhere else).
+        c.columns.insert(mj_core::candidate::columns::SAFETY.into(), "reversible".into());
+    }
     c.sub_group = Some(common::slug(&h.app));
     c.columns.insert("app".into(), h.app.clone());
     c.columns.insert("kind".into(), h.what.clone());

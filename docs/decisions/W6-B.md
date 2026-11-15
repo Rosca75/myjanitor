@@ -405,3 +405,18 @@ a photo and video library costs 8 KiB per file instead of 8 MiB. Not done: makin
 `search_run` a cancellable job with progress. It is a synchronous IPC command today; a job
 needs a contract change in `docs/IPC.md` and `ui/js/api.js` plus the search view, which
 belong to the other lane in this wave. Left as an open item.
+
+## D-B30 Only what its program recreates is "rebuildable" (RF-11)
+
+`rules::build` badged every rule-table hit `rebuildable` ("Can be recreated by the tool
+that made it"), including Office's unsaved files and AutoRecover copies, Outlook `.ost`,
+`Windows.old`, crash dumps, rotated logs and temp files, and the whole AppCaches card's
+class made every folder row own the repositories inside it (F-01 exemption). `RuleDef`
+and `Hit` now carry `rebuildable` (default true; `.not_rebuildable()` turns it off). Off:
+the Office unsaved/AutoRecover and offline-mail rules, `Windows.old`, every dump and
+error-report rule, rotated and old logs, the four temp-folder rules, and every winapp2 hit
+(a user's own rule file says nothing about rebuilding). Such a row has no badge and
+`columns.safety = "reversible"`, so `candidate_safety` is `Reversible`, the apply does not
+mark it an owned tree, and the scan's badger (now per candidate, not per card) badges a
+folder holding a repository `protected`, as on any other card. Caches proper (browser,
+shader, package, thumbnails, Office file cache, Teams) keep the badge and the exemption.

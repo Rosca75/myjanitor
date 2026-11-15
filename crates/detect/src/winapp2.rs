@@ -260,6 +260,8 @@ pub fn resolve(
                     note: note.clone(),
                     select: entry.default,
                     generic: false,
+                    // A user's own rule file: nothing says what it matches is rebuildable.
+                    rebuildable: false,
                 });
             }
         }
