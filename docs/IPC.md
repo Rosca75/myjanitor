@@ -230,7 +230,10 @@ explicit `ids` pick selects it, and apply still keeps one member of every group
 
 ### `selection_apply_keep_rule`
 `SelectionKeepRuleRequest` → `StepSummary`. CLN-ACT-01: in every group the
-keeper chosen by the rule is unchecked and the other members checked.
+keeper chosen by the rule is unchecked and the other members checked. The rule is
+recorded as the opportunity's `keep_rule` parameter (and `preferred_folder` for that
+rule) when its analysis has a keep-rule setting: `opportunities_list` and `step_detail`
+show it, the plan step (if any) takes it, and a rescan picks the same copies.
 
 ```json SelectionKeepRuleRequest
 {"opportunity_id":"det:exact_duplicates","rule":{"rule":"preferred_folder","folder":"/home/me/Photos"}}
@@ -244,7 +247,8 @@ keeper chosen by the rule is unchecked and the other members checked.
 and/or merges toggle/number values into the step parameters, then re-estimates.
 The result says whether the step is now lossy (and its safety class), which
 switches the plan step and the badge to *lossy · opt-in*. If the opportunity is
-in the plan the plan step is updated too (`plan://changed`).
+in the plan the plan step is updated too (`plan://changed`). The values are kept for the
+session, in the plan or not: a rescan runs the analysis with them.
 
 ```json StepParamsRequest
 {"opportunity_id":"opt:audio","preset_id":"speech","params":{"downmix_mono":true,"remove_silences":true,"max_pause_s":2,"strip_cover_art":true}}

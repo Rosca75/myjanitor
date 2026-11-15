@@ -406,3 +406,65 @@ fn the_undo_window_names_the_quarantine_retention_when_it_is_shorter() {
     let until = run.undo_until.unwrap();
     assert!(until <= mj_core::Timestamp::now().add_days(7), "{until:?}");
 }
+
+/// Keeper path (relative to the tree) of the group whose files are named `name`.
+fn keeper_of(e: &mj_engine::Engine, t: &std::path::Path, name: &str) -> String {
+    let page = e.candidates_page(page_req("det:exact_duplicates")).unwrap();
+    let g = page
+        .groups
+        .iter()
+        .find(|g| g.keeper.as_ref().is_some_and(|k| k.file_name().unwrap() == name))
+        .unwrap_or_else(|| panic!("a group of {name}"));
+    let k = g.keeper.as_ref().unwrap();
+    k.strip_prefix(t).unwrap().to_string_lossy().replace('\\', "/")
+}
+
+fn keep_param(e: &mj_engine::Engine) -> String {
+    opp(e, "det:exact_duplicates").unwrap().params.text("keep_rule", "?").to_string()
+}
+
+/// DUP-2: the keep rule chosen in the review is recorded as the opportunity's parameter, so
+/// the dropdown shows it and a rescan keeps the same copies, in the plan or not.
+#[test]
+fn the_chosen_keep_rule_is_recorded_and_survives_a_rescan() {
+    let f = engine_for(dated_dup_tree());
+    let e = &f.engine;
+    let root = f.tree.path().to_path_buf();
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    assert_eq!(keep_param(e), "oldest", "the detector default");
+    assert_eq!(keeper_of(e, &root, "one.bin"), "x/one.bin");
+    let apply = |rule| {
+        e.selection_apply_keep_rule(SelectionKeepRuleRequest { opportunity_id: oid("det:exact_duplicates"), rule })
+            .unwrap()
+    };
+    // Not in the plan.
+    apply(mj_core::KeepRule::Newest);
+    assert_eq!(keep_param(e), "newest");
+    assert_eq!(keeper_of(e, &root, "one.bin"), "y/one.bin");
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    assert_eq!(keep_param(e), "newest", "after a rescan");
+    assert_eq!(keeper_of(e, &root, "one.bin"), "y/one.bin", "a rescan keeps the newest copy");
+    assert_eq!(keeper_of(e, &root, "two.bin"), "x/two.bin");
+    // In the plan: the step's parameters follow.
+    e.plan_add_step(PlanAddStepRequest { opportunity_id: oid("det:exact_duplicates"), action: None, params: None })
+        .unwrap();
+    let step_rule = |e: &mj_engine::Engine| {
+        let plan = e.plan_get().unwrap();
+        let s = plan.steps.iter().find(|s| s.opportunity == oid("det:exact_duplicates")).unwrap();
+        s.params.text("keep_rule", "?").to_string()
+    };
+    assert_eq!(step_rule(e), "newest");
+    apply(mj_core::KeepRule::Oldest);
+    assert_eq!(step_rule(e), "oldest");
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    assert_eq!(keep_param(e), "oldest");
+    assert_eq!(keeper_of(e, &root, "one.bin"), "x/one.bin");
+    // A preferred folder is recorded with its folder.
+    apply(mj_core::KeepRule::PreferredFolder { folder: root.join("zz") });
+    assert_eq!(keep_param(e), "preferred_folder");
+    let p = opp(e, "det:exact_duplicates").unwrap().params;
+    assert_eq!(std::path::Path::new(p.text("preferred_folder", "")), root.join("zz"));
+    assert_eq!(step_rule(e), "preferred_folder");
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    assert_eq!(keeper_of(e, &root, "one.bin"), "zz/one.bin", "a rescan keeps the copy in the preferred folder");
+}

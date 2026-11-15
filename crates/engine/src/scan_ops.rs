@@ -325,14 +325,18 @@ impl Engine {
         }
     }
 
-    /// Effective parameters for an analysis: spec defaults, then the plan step's
-    /// parameters when the opportunity is in the plan.
+    /// Effective parameters for an analysis: spec defaults, then the parameters the user
+    /// chose in the review this session (DUP-2), then the plan step's parameters when the
+    /// opportunity is in the plan.
     fn params_for(&self, card: &CardInfo) -> ParamValues {
-        let defaults = mj_core::params::defaults(&card.settings);
+        let mut params = mj_core::params::defaults(&card.settings);
         let plan = lock(&self.plan);
+        if let Some(chosen) = plan.chosen.get(&card.id) {
+            params = params.merged(chosen);
+        }
         match plan.plan.steps.iter().find(|s| s.opportunity == card.id) {
-            Some(step) => defaults.merged(&step.params),
-            None => defaults,
+            Some(step) => params.merged(&step.params),
+            None => params,
         }
     }
 

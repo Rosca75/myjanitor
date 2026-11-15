@@ -134,6 +134,21 @@ pub(crate) fn sync_keepers(rec: &mut OpportunityRecord, skip: Badges) {
     }
 }
 
+/// DUP-2: the parameters that record `rule` on an opportunity, or `None` when its analysis has
+/// no keep-rule setting (nothing to record) or the preferred folder is not valid Unicode (a
+/// parameter is text; recording a mangled folder would make a rescan keep another copy).
+fn keep_rule_params(rec: &OpportunityRecord, rule: &mj_core::KeepRule) -> Option<mj_core::ParamValues> {
+    use mj_dupes::keep::{rule_name, KEEP_RULE, PREFERRED_FOLDER};
+    if !rec.opportunity.settings.iter().any(|s| s.key == KEEP_RULE) {
+        return None;
+    }
+    let mut p = mj_core::ParamValues::new().with(KEEP_RULE, ParamValue::Text(rule_name(rule).into()));
+    if let mj_core::KeepRule::PreferredFolder { folder } = rule {
+        p.set(PREFERRED_FOLDER, ParamValue::Text(folder.to_str()?.into()));
+    }
+    Some(p)
+}
+
 fn none(reason: &str) -> Preview {
     Preview { kind: "none".into(), mime: None, data: None, text: None, waveform: None, reason: Some(reason.into()) }
 }
@@ -319,9 +334,26 @@ impl Engine {
                     .find(|c| c.group == Some(g.id) && c.badges.contains(Badges::KEEPER))
                     .map(|c| c.path.clone());
             }
+            // DUP-2: the rule becomes the opportunity's parameter, so the review shows it and
+            // a rescan picks the same copies.
+            let chosen = keep_rule_params(rec, &req.rule);
+            if let Some(chosen) = &chosen {
+                rec.opportunity.params = rec.opportunity.params.merged(chosen);
+            }
             recompute(rec, skip);
-            summary_of(rec)
+            (summary_of(rec), chosen)
         };
+        let (summary, chosen) = summary;
+        if let Some(chosen) = chosen {
+            // The plan step (when there is one) runs with it too; `after_selection_change`
+            // then publishes the plan.
+            let mut st = lock(&self.plan);
+            let entry = st.chosen.entry(req.opportunity_id.clone()).or_default();
+            *entry = entry.merged(&chosen);
+            if let Some(step) = st.plan.steps.iter_mut().find(|s| s.opportunity == req.opportunity_id) {
+                step.params = step.params.merged(&chosen);
+            }
+        }
         self.after_selection_change(&req.opportunity_id);
         Ok(summary)
     }
@@ -375,6 +407,8 @@ impl Engine {
             rec.opportunity.safety
         };
         rec.opportunity.params = params.clone();
+        // DUP-2: remembered for the session, in the plan or not, so a rescan keeps them.
+        lock(&self.plan).chosen.insert(req.opportunity_id.clone(), params.clone());
         let summary = {
             let skip = skip_badges(&lock(&self.settings));
             let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());

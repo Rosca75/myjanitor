@@ -24,6 +24,10 @@ pub struct PlanState {
     /// the identity of its items (`measure_key` of the items the dry run built) are
     /// unchanged.
     pub measured: BTreeMap<StepId, (Action, u64, Estimate)>,
+    /// DUP-2: the parameters the user chose for an opportunity this session (in the review:
+    /// `step_params_set`, the keep rule), in the plan or not. A rescan runs the analysis
+    /// with them (`params_for`), so the review shows and keeps what the user chose.
+    pub chosen: BTreeMap<OpportunityId, mj_core::ParamValues>,
 }
 
 /// One-line summary of an action.

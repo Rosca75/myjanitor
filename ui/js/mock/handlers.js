@@ -231,9 +231,11 @@ export function createHandlers(m, sim, emit) {
         g.keeper = keeper.path;
       }
       m.selection.set(o.id, sel);
-      o.params = { ...o.params, keep_rule: req.rule.rule };
+      // DUP-2, as the engine: the rule (and its folder) become the opportunity's parameters.
+      const recorded = { keep_rule: req.rule.rule, ...(req.rule.rule === 'preferred_folder' ? { preferred_folder: req.rule.folder } : {}) };
+      o.params = { ...o.params, ...recorded };
       const st = m.step(o.id);
-      if (st) st.params = { ...st.params, keep_rule: req.rule.rule };
+      if (st) st.params = { ...st.params, ...recorded };
       touched(o.id);
       return m.summary(o.id);
     },

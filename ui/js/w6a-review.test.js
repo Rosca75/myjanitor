@@ -36,3 +36,34 @@ test('Undo on a finished run with nothing undoable is disabled and says why', as
   await env.click(env.$('[data-fk="done-undo"]'));
   assert.equal(env.sent('undo_last').length + env.sent('undo_run').length, 0);
 });
+
+// ---------------------------------------------------------------- DUP-2 the keep rule is recorded
+
+test('the keep-rule dropdown shows the rule last applied, and the preferred folder reopens the dialog there', async () => {
+  const env = await makeEnv({ scenario: 'rich', dialog: { folder: '/data/keep here' } });
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const chosen = () => Array.from(env.$('[data-fk="keep-rule"]').querySelectorAll('option')).find((o) => o.selected)?.getAttribute('value') ?? env.$('[data-fk="keep-rule"]').value;
+  for (const rule of ['oldest', 'shortest_path', 'newest']) {
+    env.$('[data-fk="keep-rule"]').setValue(rule);
+    await env.settle();
+    assert.deepEqual(last(env, 'selection_apply_keep_rule').rule, { rule });
+    assert.equal(chosen(), rule, 'the dropdown follows the rule just applied');
+    assert.equal(env.state().step.detail.opportunity.params.keep_rule, rule);
+  }
+  env.$('[data-fk="keep-rule"]').setValue('preferred_folder');
+  await env.settle();
+  assert.deepEqual(last(env, 'selection_apply_keep_rule').rule, { rule: 'preferred_folder', folder: '/data/keep here' });
+  assert.equal(chosen(), 'preferred_folder');
+  env.$('[data-fk="keep-rule"]').setValue('preferred_folder');
+  await env.settle();
+  assert.equal(last(env, 'dialog_pick_folder').start_dir, '/data/keep here', 'the dialog opens at the recorded folder');
+});
+
+test('without a recorded rule the dropdown shows the default of the card setting, not a fixed one', async () => {
+  const { keepValue } = await import('./views/step/clean-panel.js');
+  const settings = [{ key: 'keep_rule', kind: { default: 'oldest', options: [] } }];
+  assert.equal(keepValue({ params: {}, settings }), 'oldest');
+  assert.equal(keepValue({ params: { keep_rule: 'newest' }, settings }), 'newest');
+  assert.equal(keepValue({ params: { keep_rule: { rule: 'shortest_path' } }, settings }), 'shortest_path');
+});

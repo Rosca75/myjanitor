@@ -184,8 +184,9 @@ export function stepActions(c) {
      * again so its list shows that rule instead of the entry that was clicked.
      */
     chooseKeepFolder: guard(async () => {
-      const rule = cur()?.detail?.opportunity?.params?.keep_rule;
-      const folder = await c.pickFolder(copy.dialogs.keepFolder, typeof rule === 'object' ? rule?.folder : null);
+      const params = cur()?.detail?.opportunity?.params ?? {};
+      const rule = params.keep_rule;
+      const folder = await c.pickFolder(copy.dialogs.keepFolder, params.preferred_folder || (typeof rule === 'object' ? rule?.folder : null) || null);
       if (folder) await c.actions.applyKeepRule('preferred_folder', folder);
       else if (cur()) set({ step: { ...cur() } });
     }),
