@@ -152,6 +152,8 @@ export const copy = {
     reorderHint: 'Use the arrow buttons, or Alt with the up and down arrow keys, to reorder steps.',
     exact: 'exact',
     estimatedTag: 'estimated',
+    dryRunCancelled: 'Dry run cancelled; the estimates of unmeasured steps are still the scan\'s guesses',
+    dryRunFailed: (why) => `Dry run stopped: ${why}`,
     dryRunDone: (n, size) => `Dry run finished: ${n} ${plural(n, 'file')}, ${size} saved`,
     scheduleSaved: 'Weekly schedule saved',
     stepsLabel: 'Plan steps',

@@ -14,6 +14,7 @@ import { reportActions } from './ctl-report.js';
 import { searchActions } from './ctl-search.js';
 import { diskActions } from './ctl-disk.js';
 import { copy } from './copy.js';
+import { lastReportOf } from './lib/last-report.js';
 import { createGens } from './lib/gens.js';
 import { toErrorInfo, isUnavailable } from './errors.js';
 
@@ -121,8 +122,8 @@ function coreActions(c) {
   let stepRefreshQueued = false;
 
   const refreshHistory = async () => {
-    const [history, lastReport] = await Promise.all([soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] }), soft(api.reportLast(), null)]);
-    set({ history, lastReport, undoable: history.runs.some((r) => r.undoable) });
+    const history = await soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] });
+    set({ history, lastReport: lastReportOf(history), undoable: history.runs.some((r) => r.undoable) });
   };
   /** A start-up read that may fail without stopping the app: toast it, use the fallback. */
   const startup = (p, fallback) => p.catch((e) => { c.fail(e); return fallback; });

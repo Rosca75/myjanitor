@@ -56,7 +56,7 @@ test('history://changed refreshes history, undo availability and the last report
   env.backend.emit('history://changed', { run_id: 1 });
   await env.settle();
   assert.equal(env.sent('history_list').length, 1);
-  assert.equal(env.sent('report_last').length, 1);
+  assert.equal(env.sent('report_last').length, 0, 'the report itself is fetched on click only (IPC-8)');
 });
 
 test('plan://dry_run clears the running flag', async () => {
@@ -94,4 +94,21 @@ test('after a scheduled run the scope chips name the folders its scan covered (I
   env.backend.emit('scan://done', { ...env.state().scan, state: 'done', generation: env.state().scan.generation + 1 });
   await env.settle();
   assert.equal(env.state().scope, scope);
+});
+
+test('plan://dry_run with an error is not announced as a success (IPC-10)', async () => {
+  const env = await makeEnv();
+  const toasts = () => JSON.stringify(env.state().toast ?? null);
+  env.store.set({ dryRunning: true });
+  env.backend.emit('plan://dry_run', { total: { files: 152, bytes_before: 9e9, bytes_after: 1e9 }, error: { code: 'internal', message: 'scratch folder gone' } });
+  assert.equal(env.state().dryRunning, false);
+  assert.ok(toasts().includes('scratch folder gone'));
+  assert.ok(!toasts().includes('Dry run finished'));
+});
+
+test('job://done of a dry run clears the busy flag even without plan://dry_run (IPC-10)', async () => {
+  const env = await makeEnv();
+  env.store.set({ dryRunning: true });
+  env.backend.emit('job://done', { job: { id: 77, kind: 'dry_run', state: 'failed', progress: { done: 0, total: 1 } } });
+  assert.equal(env.state().dryRunning, false);
 });

@@ -26,6 +26,11 @@ export async function bridgeEvents({ api, store, actions }) {
     'plan://changed': (plan) => set({ plan }),
     'plan://dry_run': (r) => {
       set({ dryRunning: false });
+      if (r.error) { // failed or cancelled: the totals cover only the steps measured so far (IPC-10)
+        if (r.error.code === 'cancelled') actions.notify?.(copy.plan.dryRunCancelled, 'info');
+        else actions.notify?.(copy.plan.dryRunFailed(r.error.message), 'error');
+        return;
+      }
       actions.notify?.(copy.plan.dryRunDone(r.total.files, formatBytes(r.total.bytes_before - r.total.bytes_after)), 'success');
     },
     'job://progress': (p) => set({ jobProgress: { ...get().jobProgress, [p.job_id]: p.progress }, jobCurrent: { ...get().jobCurrent, [p.job_id]: p.current ?? '' } }),
@@ -40,6 +45,7 @@ export async function bridgeEvents({ api, store, actions }) {
           patch.reclaimed = get().reclaimed + done.saved;
         }
       }
+      if (job.kind === 'dry_run') patch.dryRunning = false; // a body that panicked sends no plan://dry_run
       if (job.kind === 'undo') patch.historyUi = { ...get().historyUi, result: { job } };
       set(patch);
     },

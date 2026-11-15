@@ -1,6 +1,8 @@
 // @ts-check
 /** History: the journal of runs, expandable entries, restore, undo and purge. */
 
+import { lastReportOf } from './lib/last-report.js';
+
 /** @param {any} c */
 export function historyActions(c) {
   const { api, set, get, gens, guard } = c;
@@ -25,13 +27,13 @@ export function historyActions(c) {
     const g = gens.next('history');
     setUi({ loading: true, error: null });
     try {
-      const [history, lastReport, quarantine, settings] = await Promise.all([
-        api.historyList({ offset: 0, limit: 50 }), soft(api.reportLast(), null),
+      const [history, quarantine, settings] = await Promise.all([
+        api.historyList({ offset: 0, limit: 50 }),
         api.quarantineInfo().catch((e) => { if (['not_implemented', 'unsupported'].includes(e?.code)) c.markUnavailable('quarantine', e); return null; }),
         soft(api.settingsGet(), null),
       ]);
       if (!gens.current('history', g)) return;
-      set({ history, lastReport, undoable: history.runs.some((r) => r.undoable), quarantine });
+      set({ history, lastReport: lastReportOf(history), undoable: history.runs.some((r) => r.undoable), quarantine });
       setUi({ loading: false, undoDays: settings?.general?.undo_days ?? null });
       for (const id of Object.keys(ui().expanded)) if (ui().expanded[id]) await loadDetail(Number(id), ui().details[id]?.offset ?? 0);
     } catch (e) {

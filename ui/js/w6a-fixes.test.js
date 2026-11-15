@@ -135,3 +135,37 @@ test('the quarantine action holds items for the Settings value, not a fixed 7 da
   await env.settle();
   assert.deepEqual(env.state().step.pendingAction, { kind: 'quarantine', purge_after_days: 9 }, 'the loaded settings win');
 });
+
+// ---------------------------------------------------------------- IPC-5 trash route follows settings
+
+test('app_info is refetched after a settings change, so the trash route label follows the toggle', async () => {
+  const env = await makeEnv();
+  assert.equal(env.state().info.trash_route, 'quarantine');
+  const s = await env.backend.call('settings_get', {});
+  s.general.windows_recycle_bin = true;
+  await env.backend.call('settings_set', { settings: s });
+  env.clearCalls();
+  await env.actions.loadSettings();
+  await env.settle();
+  assert.equal(env.sent('app_info').length, 1);
+  assert.equal(env.state().info.trash_route, 'recycle_bin');
+  s.general.windows_recycle_bin = false;
+  await env.backend.call('settings_set', { settings: s });
+  await env.actions.loadSettings();
+  assert.equal(env.state().info.trash_route, 'quarantine');
+});
+
+// ---------------------------------------------------------------- IPC-8 no report fetch for a button
+
+test('the Last report button is enabled from the history list; the report is fetched on click only', async () => {
+  const env = await makeEnv();
+  await env.actions.refreshHistory();
+  await env.settle();
+  assert.equal(env.sent('report_last').length, 0);
+  const runs = env.state().history.runs;
+  const want = runs.some((r) => r.kind !== 'undo' && r.items > 0);
+  assert.equal(!!env.state().lastReport, want);
+  assert.ok(want, 'the fixture history has an apply run');
+  await env.click(env.$('[data-fk="last-report"]'));
+  assert.equal(env.sent('report_last').length, 1);
+});
