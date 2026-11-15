@@ -119,7 +119,7 @@ export const TOOLS = [
 
 export const SETTINGS = {
   version: 1,
-  general: { undo_days: 30, quarantine_days: 30, default_originals: { policy: 'recycle_bin' }, light_copy_suffix: '_light', kept_languages: [] },
+  general: { undo_days: 30, quarantine_days: 30, default_originals: { policy: 'recycle_bin' }, light_copy_suffix: '_light', kept_languages: [], windows_recycle_bin: false },
   scan: { include_hidden: true, use_fast_index: true, use_cache: true, one_file_system: true, max_depth: null, threads: 0, collect_owner: false },
   safety: { protected_paths: [], exclusions: [], skip_signed: true, skip_labelled: true, skip_encrypted: true, synced_folder_warning: true },
   optimise: { lossless_only: true, keep_if_not_smaller: true, preserve_timestamps: true, preserve_permissions: true, preserve_ads: true },

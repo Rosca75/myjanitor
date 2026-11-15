@@ -71,6 +71,8 @@ export const sc = {
     chooseBackup: 'Choose folder',
     deleteNote: 'Deleting originals is set to "delete permanently". It is only offered per step, in the confirmation dialog.',
     retention: 'Quarantine retention',
+    windowsRecycleBin: 'Use the Windows Recycle Bin for removals',
+    windowsRecycleBinHelp: 'Off: removed files go to MyJanitor quarantine and History restores them exactly. On: they go to the Recycle Bin, and a restore from History is best effort because the Recycle Bin gives no restore handle.',
     undoWindow: 'Undo window',
     daysValue: (n) => `${n} ${n === 1 ? 'day' : 'days'}`,
     preserveTimestamps: 'Keep original dates on optimised files',

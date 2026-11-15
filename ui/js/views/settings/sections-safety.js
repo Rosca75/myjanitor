@@ -28,6 +28,7 @@ export function safety(s, ctl) {
     rows(
       row(ctl, 'quarantine_days', sc.safety.retention, num('quarantine_days', g.quarantine_days, 1, 3650, (n, v) => { n.general.quarantine_days = v; }, sc.safety.retention), { help: sc.safety.daysValue(g.quarantine_days) }),
       row(ctl, 'undo_days', sc.safety.undoWindow, num('undo_days', g.undo_days, 1, 3650, (n, v) => { n.general.undo_days = v; }, sc.safety.undoWindow), { help: sc.safety.daysValue(g.undo_days) }),
+      s.info?.platform === 'windows' && flag('general', 'windows_recycle_bin', sc.safety.windowsRecycleBin, sc.safety.windowsRecycleBinHelp),
       flag('optimise', 'preserve_timestamps', sc.safety.preserveTimestamps),
       row(ctl, 'keep_if_not_smaller', sc.safety.keepIfNotSmaller, toggle({ label: sc.safety.keepIfNotSmaller, checked: true, disabled: true, onChange: () => {}, fk: 'set-keep-smaller' }), { help: sc.safety.keepIfNotSmallerHelp })),
     advanced(ctl, 'safety',

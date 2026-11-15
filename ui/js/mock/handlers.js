@@ -125,7 +125,7 @@ export function createHandlers(m, sim, emit) {
   };
 
   return {
-    app_info: () => ({ name: 'MyJanitor', version: '0.1.0', platform: 'windows', bundle_id: 'com.myjanitor.app', portable: false, data_dir: 'C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor', cache_dir: m.cache.path, elevated: false, journal_persistent: true, capabilities: ['recycle_bin', 'wof_compression', 'cloud_dehydrate', 'hardlinks', 'context_menu', 'os_schedules'] }),
+    app_info: () => ({ name: 'MyJanitor', version: '0.1.0', platform: 'windows', bundle_id: 'com.myjanitor.app', portable: false, data_dir: 'C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor', cache_dir: m.cache.path, elevated: false, journal_persistent: true, capabilities: ['recycle_bin', 'wof_compression', 'cloud_dehydrate', 'hardlinks', 'context_menu', 'os_schedules'], trash_route: m.settings.general.windows_recycle_bin ? 'recycle_bin' : 'quarantine' }),
 
     scope_get: () => m.scope,
     scope_set: (req) => (m.scope = { ...m.scope, ...req.scope }),

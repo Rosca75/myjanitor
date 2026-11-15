@@ -71,6 +71,11 @@ pub struct GeneralSettings {
     /// system language. English is always kept by the detector. Fills the language-pack
     /// detector's `kept_languages` parameter when the step leaves it empty.
     pub kept_languages: Vec<String>,
+    /// CLN-ACT-02 (Windows only): send "Recycle Bin" removals to the real Windows Recycle
+    /// Bin instead of MyJanitor's quarantine. Off by default: the Recycle Bin gives no
+    /// restore handle, so a restore from History is best effort. Ignored on Linux (the
+    /// freedesktop Trash is always used there).
+    pub windows_recycle_bin: bool,
 }
 
 impl Default for GeneralSettings {
@@ -82,6 +87,7 @@ impl Default for GeneralSettings {
             light_copy_suffix: "_light".into(),
             quarantine_dir: None,
             kept_languages: Vec::new(),
+            windows_recycle_bin: false,
         }
     }
 }

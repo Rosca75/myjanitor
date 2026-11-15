@@ -88,7 +88,11 @@ mode, elevation, and whether the undo journal is persistent (if `false`, show a
 warning that History will not survive a restart). `capabilities` lists the platform
 features this build can use here (`recycle_bin`, `freedesktop_trash`,
 `wof_compression`, `btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
-`context_menu`, `os_schedules`); the UI labels "Windows only" from it. `launch`
+`context_menu`, `os_schedules`); the UI labels "Windows only" from it.
+`trash_route` names where "Recycle Bin / Trash" removals actually go: `quarantine`
+(MyJanitor quarantine, the Windows default), `recycle_bin` (Windows with the
+`general.windows_recycle_bin` setting on; restore is best effort) or `trash` (Linux
+freedesktop Trash); the UI words every such label from it. `launch`
 (absent normally) is `{"mode":"optimise"|"duplicates","path":…}` when the GUI was
 started from a context-menu entry (`--optimise <path>` / `--duplicates <path>`): the
 scope is already that path and the UI opens the Optimise or Clean view; nothing is
@@ -582,7 +586,7 @@ Every example below is checked against the Rust types. Field order is free.
 #### AppInfo
 
 ```json AppInfo
-{"name":"MyJanitor","version":"0.1.0","platform":"windows","bundle_id":"com.myjanitor.app","portable":false,"data_dir":"C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor","cache_dir":"C:\\Users\\Michel\\AppData\\Local\\MyJanitor\\cache","elevated":false,"journal_persistent":true,"capabilities":["recycle_bin","wof_compression","cloud_dehydrate","hardlinks","context_menu","os_schedules"]}
+{"name":"MyJanitor","version":"0.1.0","platform":"windows","bundle_id":"com.myjanitor.app","portable":false,"data_dir":"C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor","cache_dir":"C:\\Users\\Michel\\AppData\\Local\\MyJanitor\\cache","elevated":false,"journal_persistent":true,"capabilities":["recycle_bin","wof_compression","cloud_dehydrate","hardlinks","context_menu","os_schedules"],"trash_route":"quarantine"}
 ```
 
 #### ScanScope
@@ -847,7 +851,7 @@ Every field is optional on input (defaults shown here); unknown fields are
 ignored. `type_groups` are the editable file-type groups (CLN-FLT-02).
 
 ```json Settings
-{"version":1,"general":{"undo_days":30,"quarantine_days":30,"default_originals":{"policy":"recycle_bin"},"light_copy_suffix":"_light","kept_languages":["en","fr"]},"scan":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false},"safety":{"protected_paths":[],"exclusions":[],"skip_signed":true,"skip_labelled":true,"skip_encrypted":true,"synced_folder_warning":true},"optimise":{"lossless_only":true,"keep_if_not_smaller":true,"preserve_timestamps":true,"preserve_permissions":true,"preserve_ads":true},"performance":{"threads":0,"parallel_jobs":0,"low_memory":false,"cpu_priority":"normal"},"tool_paths":{},"integration":{"context_menu":false,"fs_compression_watcher":false,"watched_folders":[]},"type_groups":{"installers":["msi","exe","iso"]}}
+{"version":1,"general":{"undo_days":30,"quarantine_days":30,"default_originals":{"policy":"recycle_bin"},"light_copy_suffix":"_light","kept_languages":["en","fr"],"windows_recycle_bin":false},"scan":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false},"safety":{"protected_paths":[],"exclusions":[],"skip_signed":true,"skip_labelled":true,"skip_encrypted":true,"synced_folder_warning":true},"optimise":{"lossless_only":true,"keep_if_not_smaller":true,"preserve_timestamps":true,"preserve_permissions":true,"preserve_ads":true},"performance":{"threads":0,"parallel_jobs":0,"low_memory":false,"cpu_priority":"normal"},"tool_paths":{},"integration":{"context_menu":false,"fs_compression_watcher":false,"watched_folders":[]},"type_groups":{"installers":["msi","exe","iso"]}}
 ```
 
 ```json SettingsSetRequest

@@ -48,6 +48,10 @@ pub struct AppInfo {
     /// by `drives_list`.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// CLN-ACT-02: where "Recycle Bin / Trash" removals actually go: `recycle_bin`
+    /// (Windows, setting on), `trash` (Linux freedesktop Trash) or `quarantine`
+    /// (MyJanitor quarantine: the Windows default). The UI names the route from this.
+    pub trash_route: String,
     /// How the app was opened from a context-menu entry (`--optimise <path>` /
     /// `--duplicates <path>`): the scope is already set to `path`; the UI opens the
     /// matching view. Nothing is scanned or applied automatically.

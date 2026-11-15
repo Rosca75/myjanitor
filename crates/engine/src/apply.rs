@@ -98,7 +98,34 @@ impl Engine {
     }
 
     pub(crate) fn exec_options(&self, confirmed: bool) -> ExecOptions {
-        ExecOptions { confirmed, trash_route: self.cfg.trash_route, ..ExecOptions::default() }
+        ExecOptions { confirmed, trash_route: self.trash_route(), ..ExecOptions::default() }
+    }
+
+    /// CLN-ACT-02: the route "Recycle Bin / Trash" removals take. The configured route,
+    /// except on Windows where the `windows_recycle_bin` setting switches the OS default
+    /// (MyJanitor's quarantine) to the real Recycle Bin. A route a test or caller fixed to
+    /// something else than the OS default is never changed by the setting.
+    pub(crate) fn trash_route(&self) -> mj_actions::TrashRoute {
+        let base = self.cfg.trash_route;
+        if cfg!(windows)
+            && base == mj_actions::TrashRoute::default_for_os()
+            && base == mj_actions::TrashRoute::Quarantine
+            && self.cfg.persist
+            && lock(&self.settings).general.windows_recycle_bin
+        {
+            mj_actions::TrashRoute::Platform
+        } else {
+            base
+        }
+    }
+
+    /// The name of the route for `app_info` (`recycle_bin`, `trash` or `quarantine`).
+    pub(crate) fn trash_route_name(&self) -> &'static str {
+        match self.trash_route() {
+            mj_actions::TrashRoute::Quarantine => "quarantine",
+            mj_actions::TrashRoute::Platform if cfg!(windows) => "recycle_bin",
+            mj_actions::TrashRoute::Platform => "trash",
+        }
     }
 
     /// Expand a plan step into action items from the current selection.
@@ -339,10 +366,10 @@ impl Engine {
                 can_online_only |= r.can_dehydrate && cfg!(windows);
             }
         }
-        let recycle = if cfg!(windows) && self.cfg.trash_route == mj_actions::TrashRoute::Quarantine {
-            "Keep in MyJanitor's quarantine (restorable, default)"
-        } else {
-            "Move to Recycle Bin / Trash (default)"
+        let recycle = match self.trash_route_name() {
+            "quarantine" => "Keep in MyJanitor quarantine (restorable, default)",
+            "recycle_bin" => "Move to the Recycle Bin (default; restore is best effort)",
+            _ => "Move to the Trash (default)",
         };
         let has_originals = matches!(step.action, Action::Optimise { .. } | Action::Archive { .. });
         let originals_options = if has_originals {

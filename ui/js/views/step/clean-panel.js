@@ -17,6 +17,14 @@ function currentAction(s) {
 /** The keep rule as a select value (the engine may send a bare name or the tagged object). @param {any} v */
 const keepValue = (v) => (typeof v === 'object' && v ? v.rule : v) ?? 'newest';
 
+/**
+ * CLN-ACT-02: the label and help of a clean action tile; the default route is named after
+ * where it really goes (`app_info.trash_route`). @param {string} kind @param {any} info
+ */
+export function actionLabel(kind, info) {
+  return (kind === 'trash' && copy.trashRoute[info?.trash_route]) || copy.clean.actions[kind];
+}
+
 /** @param {any} s @param {any} actions */
 export function renderCleanPanel(s, actions) {
   const st = s.step;
@@ -24,7 +32,8 @@ export function renderCleanPanel(s, actions) {
   const sum = st.detail.summary;
   const act = currentAction(s);
   const offered = opp.available_actions;
-  const tile = (kind) => radioTile({ title: copy.clean.actions[kind].label, sub: kind === 'move' && act.kind === 'move' && act.dest ? act.dest : copy.clean.actions[kind].help, selected: act.kind === kind, fk: `act-${kind}`, onSelect: () => (kind === 'move' ? actions.openBrowser({ mode: 'move' }) : actions.setStepAction(kind)) });
+  const label = (kind) => actionLabel(kind, s.info);
+  const tile = (kind) => radioTile({ title: label(kind).label, sub: kind === 'move' && act.kind === 'move' && act.dest ? act.dest : label(kind).help, selected: act.kind === kind, fk: `act-${kind}`, onSelect: () => (kind === 'move' ? actions.openBrowser({ mode: 'move' }) : actions.setStepAction(kind)) });
   const dup = opp.id === 'det:exact_duplicates';
   return h('div', { class: 'shrink clean' },
     h('h2', { class: 'panel__title' }, copy.clean.title),

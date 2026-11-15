@@ -35,3 +35,17 @@ fn cln_act_04_expired_quarantine_items_are_purged_after_the_run() {
     let left = ["a/x.bin", "b/x.bin"].iter().filter(|p| exists(&f.tree.join(p))).count();
     assert_eq!(left, 1, "the kept copy stays");
 }
+
+/// CLN-ACT-02: `app_info` names the route removals really take; the Windows Recycle Bin
+/// setting never changes a route fixed by the caller (the tests' own quarantine), and on
+/// Linux it is ignored.
+#[test]
+fn cln_act_02_app_info_names_the_real_trash_route() {
+    let f = engine_for(TempDir::new("t1-route").unwrap());
+    let e = &f.engine;
+    assert_eq!(e.app_info().unwrap().trash_route, "quarantine");
+    let mut s = e.settings_get().unwrap();
+    s.general.windows_recycle_bin = true;
+    e.settings_set(SettingsSetRequest { settings: s }).unwrap();
+    assert_eq!(e.app_info().unwrap().trash_route, "quarantine", "a fixed route is kept");
+}

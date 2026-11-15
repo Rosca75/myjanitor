@@ -248,6 +248,12 @@ export const copy = {
     lossyNote: 'This preset is lossy. You will be asked to confirm before anything runs.',
   },
 
+  /** CLN-ACT-02: the default removal route, named from app_info.trash_route. */
+  trashRoute: {
+    quarantine: { label: 'MyJanitor quarantine', help: 'Default. Kept aside by MyJanitor and restored exactly from History.' },
+    recycle_bin: { label: 'Recycle Bin', help: 'Default. Restore from History is best effort; the Recycle Bin can also restore it.' },
+    trash: { label: 'Trash', help: 'Default. Restore from History or the Trash.' },
+  },
   clean: {
     title: 'What happens to them',
     action: 'Action',
