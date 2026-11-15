@@ -58,7 +58,7 @@ export function historyActions(c) {
     }),
     /** @param {number} runId @param {number} offset */
     setRunPage: guard(async (runId, offset) => { await loadDetail(runId, Math.max(0, offset)); }),
-    /** @param {number} id @param {boolean} on */
+    /** @param {string} id journal entry id (opaque decimal string) @param {boolean} on */
     selectEntry: (id, on) => setUi({ selected: { ...ui().selected, [id]: on || undefined } }),
     /** Select or clear every restorable entry of a run's page. @param {number} runId @param {boolean} on @param {(e: any) => boolean} restorable */
     selectAllEntries(runId, on, restorable) {
@@ -66,7 +66,7 @@ export function historyActions(c) {
       for (const e of ui().details[runId]?.entries ?? []) if (restorable(e)) next[e.id] = on || undefined;
       setUi({ selected: next });
     },
-    /** Restore chosen entries. @param {number[]} ids */
+    /** Restore chosen entries. @param {string[]} ids journal entry ids, sent back exactly as received */
     restoreEntries: c.feature('restore_entries', async (ids) => {
       if (!ids.length) return;
       setUi({ result: null });

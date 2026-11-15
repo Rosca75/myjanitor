@@ -195,7 +195,7 @@ fn journal_survives_restart_and_runs_are_listed() {
         .unwrap()
         .path();
     let text = std::fs::read_to_string(file).unwrap();
-    let id = format!("\"id\":{}", e.id.0);
+    let id = format!("\"id\":\"{}\"", e.id.0);
     let lines: Vec<&str> = text.lines().filter(|l| l.contains(&id)).collect();
     assert_eq!(lines.len(), 2);
     assert!(lines[0].contains("\"state\":\"intent\"") && lines[1].contains("\"state\":\"done\""));

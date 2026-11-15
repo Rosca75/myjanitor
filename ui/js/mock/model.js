@@ -9,6 +9,15 @@ import { buildOpportunities, buildCandidates, PLAN_BASE, DRIVES, GB, SETTINGS, T
 
 const DAY_NS = 86_400_000_000_000;
 
+/**
+ * Journal entry id as the engine sends it: run id (ms) * 1 000 000 + index, as a decimal
+ * string, because the value is beyond what a JavaScript number holds exactly.
+ * @param {number} runId @param {number} index
+ */
+export function entryId(runId, index) {
+  return String(BigInt(runId) * 1_000_000n + BigInt(index));
+}
+
 /** @param {{ now?: () => number, scenario?: string }} opts */
 export function createModel(opts) {
   const nowMs = opts.now ?? (() => Date.now());

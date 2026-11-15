@@ -36,7 +36,7 @@ CLI does not have them; the mock backend answers them with a stand-in (§7).
 | Paths | Strings. A path that is not valid Unicode is sent as `"\u0000"` + an escaped form (`%XX` bytes on Linux, `%uXXXX` surrogates on Windows); it round-trips exactly. Display it with the replacement; never build paths in JS by string concatenation except for display. |
 | Timestamps | Integer **nanoseconds** since 1970-01-01 UTC. JS: `new Date(ts / 1e6)`. Precision loss in JS (~256 ns) is irrelevant. |
 | Sizes | Integer bytes. Display with binary units and Explorer labels (`1.5 KB` = 1536 B, D-107). |
-| Ids | Integers below 2^53 (`CandidateId`, `GroupId`, `StepId`, `JobId`, `RunId`, `EntryId`), strings for `OpportunityId` (`det:<detector>`, `opt:<optimiser>`, `custom:<n>`), preset and schedule ids. Candidate ids are valid for one scan generation only. |
+| Ids | Integers below 2^53 (`CandidateId`, `GroupId`, `StepId`, `JobId`, `RunId`); `EntryId` is a **decimal string** (`"1794582245123000001"`: run id x 1 000 000 + index, beyond what a JavaScript number holds exactly; the UI keeps it opaque and never does arithmetic on it; the engine also accepts a bare integer on input); strings for `OpportunityId` (`det:<detector>`, `opt:<optimiser>`, `custom:<n>`), preset and schedule ids. Candidate ids are valid for one scan generation only. |
 | Errors | Rejected promise with an `ErrorInfo` (`{code, message, hint, path?}`). Per-item failures of a batch are **not** command errors: they are in `JobOutcome.errors`, reports and journal entries. |
 | Long work | Commands marked *spawns* return immediately (a `Job` or a generation) and report through events. All wrappers run off the UI thread. |
 | Generations | Every scan has a `generation`. Results and events from an older generation must be ignored by the UI. |
@@ -454,7 +454,7 @@ can be undone.
 `RestoreEntriesRequest` → `Job`. *Spawns.* Restore selected entries.
 
 ```json RestoreEntriesRequest
-{"entry_ids":[1794582245123000001,1794582245123000002]}
+{"entry_ids":["1794582245123000001","1794582245123000002"]}
 ```
 
 ### `quarantine_info`
@@ -907,13 +907,13 @@ removed as itself; a restore then puts back only a link, and a file entry only a
 file with the recorded content.
 
 ```json JournalEntry
-{"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}
+{"id":"1794582245123000001","run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}
 ```
 
 #### HistoryRunDetail
 
 ```json HistoryRunDetail
-{"run":{"run_id":1794582245123,"kind":"apply","title":"Plan · 1 step","started":1794582245000000000,"steps":["Temporary files"],"items":1,"done":1,"failed":0,"undone":0,"bytes_saved":1200,"undoable":true},"total":1,"entries":[{"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"at":1794582246000000000,"state":"done","action":"quarantine","target":"file","original":"/home/me/a.tmp","original_stamp":{"size":1200,"mtime":1690000000000000000},"bytes_before":1200,"bytes_after":0,"retained_at":"/home/me/.local/share/myjanitor/quarantine/1794582245123/1794582245123000001/a.tmp","reversible":true}],"occupied":[]}
+{"run":{"run_id":1794582245123,"kind":"apply","title":"Plan · 1 step","started":1794582245000000000,"steps":["Temporary files"],"items":1,"done":1,"failed":0,"undone":0,"bytes_saved":1200,"undoable":true},"total":1,"entries":[{"id":"1794582245123000001","run_id":1794582245123,"job_id":31,"at":1794582246000000000,"state":"done","action":"quarantine","target":"file","original":"/home/me/a.tmp","original_stamp":{"size":1200,"mtime":1690000000000000000},"bytes_before":1200,"bytes_after":0,"retained_at":"/home/me/.local/share/myjanitor/quarantine/1794582245123/1794582245123000001/a.tmp","reversible":true}],"occupied":[]}
 ```
 
 #### QuarantineInfo

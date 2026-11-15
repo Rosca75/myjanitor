@@ -6,6 +6,8 @@
  * for the simulation to finish.
  */
 
+import { entryId } from './model.js';
+
 const TICK = 140;
 
 /**
@@ -162,7 +164,7 @@ export function createSim(m, emit, later) {
     for (const st of steps.filter((s) => doneIds.has(s.id))) {
       const picked = (m.rows.get(st.opportunity) ?? []).filter((x) => m.selection.get(st.opportunity)?.has(x.id)).slice(0, 40);
       for (const r of picked) {
-        entries.push({ id: runId * 1000 + entries.length + 1, run_id: runId, job_id: jobs[0].id, step_id: st.id, at: m.nowNs(), state: 'done', action: st.action.kind, target: r.target, original: r.path, original_stamp: r.stamp, bytes_before: r.size, bytes_after: r.size_after, reversible: st.safety !== 'permanent' });
+        entries.push({ id: entryId(runId, entries.length), run_id: runId, job_id: jobs[0].id, step_id: st.id, at: m.nowNs(), state: 'done', action: st.action.kind, target: r.target, original: r.path, original_stamp: r.stamp, bytes_before: r.size, bytes_after: r.size_after, reversible: st.safety !== 'permanent' });
       }
     }
     const now = m.nowNs();

@@ -287,7 +287,9 @@ confirmation (D-116).
   end of each item.
 - `runs.jsonl`: `RunRecord` snapshots (same last-wins rule).
 - Ids: `RunId` = start time in ms (bumped past the newest existing id);
-  `EntryId` = `run_id * 1_000_000 + item index` (unique across sessions).
+  `EntryId` = `run_id * 1_000_000 + item index` (unique across sessions), written as a
+  decimal string because it exceeds 2^53 (the webview's exact-integer limit); lines
+  written earlier with a bare number still load.
 - Retention: entries older than `undo_days` are not undoable
   (`undo_deadline`) but stay for the audit log; quarantine purge marks entries
   `purged`. Paths use the lossless codec.

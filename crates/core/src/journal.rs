@@ -19,9 +19,44 @@ use crate::plan::StepId;
 use crate::time::Timestamp;
 
 /// Journal entry id (unique across sessions: run id * 1_000_000 + item index).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
-#[serde(transparent)]
+///
+/// Serialised as a **decimal string** (`"1794582245123000005"`): the values are around
+/// 1.8e18, beyond the 2^53 a JavaScript number holds exactly, so a bare JSON number would be
+/// rounded by the webview and sent back as another entry's id. Deserialisation accepts the
+/// string and, for journal lines and manifests written before this rule, a bare number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct EntryId(pub u64);
+
+impl Serialize for EntryId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for EntryId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = EntryId;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an entry id (decimal string or unsigned integer)")
+            }
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<EntryId, E> {
+                Ok(EntryId(v))
+            }
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<EntryId, E> {
+                u64::try_from(v).map(EntryId).map_err(|_| E::custom("negative entry id"))
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<EntryId, E> {
+                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err(E::custom(format!("invalid entry id `{v}`")));
+                }
+                v.parse().map(EntryId).map_err(|_| E::custom(format!("entry id `{v}` out of range")))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
 
 /// Lifecycle of a journal entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,4 +182,30 @@ pub struct RunRecord {
     /// For undo runs: the run being undone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_of: Option<RunId>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Entry ids are `run_ms * 1_000_000 + index`, far above 2^53: a webview parses a JSON
+    /// number of that size into a double and rounds it, so the id must cross as a string.
+    #[test]
+    fn entry_id_is_a_decimal_string_on_the_wire() {
+        let id = EntryId(1_794_582_245_123_000_005);
+        assert_eq!(serde_json::to_string(&id).unwrap(), "\"1794582245123000005\"");
+        assert_eq!(serde_json::from_str::<EntryId>("\"1794582245123000005\"").unwrap(), id);
+        // Journal lines and manifests written before the change carry bare numbers.
+        assert_eq!(serde_json::from_str::<EntryId>("1794582245123000005").unwrap(), id);
+        assert!(serde_json::from_str::<EntryId>("\"18446744073709551616\"").is_err());
+        assert!(serde_json::from_str::<EntryId>("\"-1\"").is_err());
+        assert!(serde_json::from_str::<EntryId>("\" 5\"").is_err());
+        assert!(serde_json::from_str::<EntryId>("-1").is_err());
+        assert!(serde_json::from_str::<EntryId>("1.5").is_err());
+        // Ids as map keys (serde_json writes keys as strings in both formats).
+        let m: std::collections::BTreeMap<EntryId, u8> = [(id, 1)].into_iter().collect();
+        let text = serde_json::to_string(&m).unwrap();
+        assert_eq!(text, "{\"1794582245123000005\":1}");
+        assert_eq!(serde_json::from_str::<std::collections::BTreeMap<EntryId, u8>>(&text).unwrap(), m);
+    }
 }

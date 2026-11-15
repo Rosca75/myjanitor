@@ -5,7 +5,8 @@
 //! unknown fields; optional request fields may be omitted; optional response
 //! fields are omitted when `None`; paths use the lossless codec
 //! (`mj_core::pathutil`); timestamps are integer nanoseconds since the epoch;
-//! sizes are integer bytes; ids are integers below 2^53.
+//! sizes are integer bytes; ids are integers below 2^53, except `EntryId`, which is
+//! a decimal string (see `mj_core::EntryId`).
 
 use std::path::PathBuf;
 

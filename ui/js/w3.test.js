@@ -50,7 +50,7 @@ test('history: Restore on an entry sends restore_entries and shows refusals with
   await go(env, 'history');
   await env.click(env.$('.run .run__toggle'));
   const row = env.$$('.entry').find((e) => /Done/.test(e.textContent) && !e.querySelector('button[disabled]'));
-  const id = Number(row.getAttribute('data-entry'));
+  const id = row.getAttribute('data-entry');
   await env.click(row.querySelector('button'));
   assert.deepEqual(last(env, 'restore_entries'), { entry_ids: [id] });
   assert.equal(env.state().jobs.at(-1).kind, 'undo');
@@ -672,7 +672,7 @@ test('every backend error reaches the user as a toast, never as an unhandled rej
     ['report_export', () => env.actions.startExport({ type: 'audit', format: 'csv' })],
     ['dialog_save_file', () => env.actions.startExport({ type: 'audit', format: 'csv' })],
     ['dialog_pick_folder', () => env.actions.addLocation()],
-    ['restore_entries', () => env.actions.restoreEntries([1])],
+    ['restore_entries', () => env.actions.restoreEntries(['1'])],
     ['undo_run', async () => { await env.actions.acceptAsk(); env.store.set({ ask: { kind: 'undo_run', runId: 1 } }); await env.actions.acceptAsk(); }],
     ['presets_list', () => env.actions.loadPresets()],
     ['scope_remove_root', () => env.actions.removeRoot('x')],

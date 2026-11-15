@@ -269,3 +269,31 @@ same cache, which also speeds up its paging.
 `ui/js/mock/review-order.js` mirrors the engine order (same aggregates, filters, packing and
 group totals; a parity test runs the engine's unit-test fixture through it). The mock's
 `candidate_thumbnails` answers a generated PNG for image paths and `not_image` otherwise.
+
+# W6-A (third task): review findings on entry ids, step selection, confirmation, lossy flag
+
+Findings IPC-1 (same defect as ACT-2 and ENG-1), ENG-2, ENG-3, ENG-6, ENG-4, ENG-7, ENG-9
+and ACT-10 of the first independent review. Each was shown with a failing test first.
+
+## D-6A17 `EntryId` crosses the wire as a decimal string (IPC-1, ACT-2, ENG-1)
+
+- **Context:** entry ids are `run_ms * 1_000_000 + index`, about 1.8e18. The webview parses
+  JSON numbers into doubles (exact only below 2^53), so up to 256 consecutive entries of a
+  run collapsed onto one id: Restore on one History row restored another file (usually the
+  run's first) or failed, one tick ticked a block of rows, and the occupied flag landed on
+  the wrong rows. IPC.md promised ids below 2^53 while its own example was not.
+- **Choice:** `mj_core::EntryId` gets hand-written serde: it writes a decimal string and
+  reads a string (digits only) or a bare unsigned integer. Every carrier follows at once
+  (`JournalEntry.id`, `undo_of`, `HistoryRunDetail.occupied`,
+  `RestoreEntriesRequest.entry_ids`). The UI treats the id as an opaque string; the mock
+  produces ids of the real magnitude (`String(BigInt(run) * 1_000_000n + index)`), and a UI
+  test passes every answer through JSON text as Tauri does.
+- **On disk:** new journal lines and manifests write the string; lines written before keep
+  loading (the number branch). An older build cannot read the new lines; there is no
+  release that would need to, so no downgrade path was kept. `crates/actions/tests/
+  recovery.rs` searched the journal text for `"id":<n>`; it now looks for `"id":"<n>"`
+  (deliberate format change, the assertion itself is unchanged).
+- **Rejected:** shrinking the id scheme below 2^53 (a ms run id leaves about 5000 ids per
+  run and needs a journal migration); BigInt in the UI (no arithmetic is ever needed).
+- **Fixture:** only `ui/js/testing/real/history_run_detail.json` was regenerated; the other
+  fixtures carry time-dependent values that would churn without changing what they test.
