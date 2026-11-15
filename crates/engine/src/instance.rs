@@ -1,4 +1,4 @@
-//! One acting MyJanitor per data folder (F-13 of the adversarial review). Owner: W3-D.
+//! One acting MyJanitor per data folder (F-13, G-06 of the adversarial reviews). Owner: W3-D.
 //!
 //! Two processes appending to the same journal and acting on the same files could
 //! interleave records, and the second one's start-up recovery would "settle" the first
@@ -9,102 +9,101 @@
 //! changes files ([`crate::Engine::require_writable`]); the GUI refuses to open a second
 //! window.
 //!
-//! - Windows: the file is kept open without sharing for the life of the process, so a
-//!   second open fails with a sharing violation; the OS releases it on exit or crash.
-//! - Linux: the file is created with `create_new` and holds the owner's pid; a lock whose
-//!   pid no longer runs (`/proc/<pid>` missing) is stale and taken over. The same process
-//!   may take it again (an engine rebuilt in-process).
+//! The lock is an OS lock held on the open file for the life of the process
+//! ([`mj_platform::lockfile`]: `flock` on Linux, an unshared handle on Windows), never a
+//! pid written in a file: the kernel releases it on exit or crash, so a stale file after a
+//! crash never blocks start-up and a reused pid is never trusted. The file itself is never
+//! deleted (deleting it would let a second process lock a new file while the first still
+//! holds the old one). The pid written into it is for people reading it only. Engines of
+//! one process share one lock (an engine rebuilt in-process, tests): it is released when
+//! the last of them is dropped.
 
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Locks this process holds, by data folder key; the count of engines sharing each.
+static HELD: Mutex<Option<HashMap<String, (Arc<File>, usize)>>> = Mutex::new(None);
 
 /// Held for the life of the engine.
 #[derive(Debug)]
 pub struct InstanceLock {
-    /// The open lock file; `None` only while dropping.
-    file: Option<File>,
-    path: PathBuf,
+    key: String,
+    _file: Arc<File>,
 }
 
 impl Drop for InstanceLock {
     fn drop(&mut self) {
-        // Close before removing: on Windows the file is open without delete sharing, so
-        // removing it while the handle is open fails and would leave the file behind.
-        drop(self.file.take());
-        let _ = std::fs::remove_file(&self.path);
+        let mut held = mj_core::lock(&HELD);
+        if let Some(map) = held.as_mut() {
+            if let Some((_, n)) = map.get_mut(&self.key) {
+                *n -= 1;
+                if *n == 0 {
+                    // Closing the last handle releases the OS lock.
+                    map.remove(&self.key);
+                }
+            }
+        }
     }
 }
 
-#[cfg(windows)]
-fn open_exclusive(path: &Path) -> std::io::Result<File> {
-    use std::os::windows::fs::OpenOptionsExt;
-    OpenOptions::new().read(true).write(true).create(true).truncate(true).share_mode(0).open(path)
-}
-
-#[cfg(not(windows))]
-fn open_exclusive(path: &Path) -> std::io::Result<File> {
-    for _ in 0..4 {
-        match OpenOptions::new().write(true).create_new(true).open(path) {
-            Ok(f) => return Ok(f),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e),
-        }
-        let text = std::fs::read_to_string(path).unwrap_or_default();
-        match text.trim().parse::<u32>() {
-            Ok(pid) if pid == std::process::id() => {
-                return OpenOptions::new().write(true).truncate(true).open(path);
-            }
-            Ok(pid) if Path::new(&format!("/proc/{pid}")).exists() => {
-                return Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, format!("held by pid {pid}")));
-            }
-            // A dead pid: stale. An empty or unreadable file may be another process
-            // between `create_new` and writing its pid: give it a moment once.
-            Ok(_) => {
-                let _ = std::fs::remove_file(path);
-            }
-            Err(_) => std::thread::sleep(std::time::Duration::from_millis(50)),
-        }
-    }
-    Err(std::io::Error::new(std::io::ErrorKind::WouldBlock, "the lock file is in use"))
+fn key_of(data_dir: &Path) -> String {
+    let p = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
+    mj_core::pathutil::path_key(&p)
 }
 
 /// Take the lock for `data_dir`, or say why not.
 pub fn acquire(data_dir: &Path) -> Result<InstanceLock, String> {
     std::fs::create_dir_all(data_dir).map_err(|e| format!("cannot create {}: {e}", data_dir.display()))?;
-    let path = data_dir.join("myjanitor.lock");
-    let mut file = open_exclusive(&path).map_err(|e| {
-        format!("another MyJanitor (window, command line or scheduled run) is using {} ({e})", data_dir.display())
-    })?;
+    let key = key_of(data_dir);
+    let mut held = mj_core::lock(&HELD);
+    let map = held.get_or_insert_with(HashMap::new);
+    if let Some((file, n)) = map.get_mut(&key) {
+        *n += 1;
+        return Ok(InstanceLock { key, _file: file.clone() });
+    }
+    let path: PathBuf = data_dir.join("myjanitor.lock");
+    let busy = || format!("another MyJanitor (window, command line or scheduled run) is using {}", data_dir.display());
+    let mut file = match mj_platform::lockfile::open_locked(&path) {
+        Ok(Some(f)) => f,
+        Ok(None) => return Err(busy()),
+        Err(e) => return Err(format!("{} ({e})", busy())),
+    };
+    // Informational only: who holds it (never read back to decide anything).
+    let _ = file.set_len(0);
+    let _ = file.rewind();
     let _ = write!(file, "{}", std::process::id());
     let _ = file.sync_all();
-    Ok(InstanceLock { file: Some(file), path })
+    let file = Arc::new(file);
+    map.insert(key.clone(), (file.clone(), 1));
+    Ok(InstanceLock { key, _file: file })
 }
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn lock_is_released_on_drop_and_stale_locks_are_taken_over() {
-        let dir = std::env::temp_dir().join(format!("myjanitor-test-lock-{}", std::process::id()));
-        let l = super::acquire(&dir).unwrap();
-        assert!(dir.join("myjanitor.lock").is_file());
-        drop(l);
-        assert!(!dir.join("myjanitor.lock").exists());
-        // A stale lock (dead pid) is taken over.
-        std::fs::write(dir.join("myjanitor.lock"), "4294967294").unwrap();
-        #[cfg(not(windows))]
-        assert!(super::acquire(&dir).is_ok());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
+    use mj_core::testutil::TempDir;
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn a_live_other_process_holds_the_lock() {
-        let dir = std::env::temp_dir().join(format!("myjanitor-test-lock2-{}", std::process::id()));
+    fn g06_a_stale_lock_file_never_blocks_and_the_lock_is_shared_in_process() {
+        let t = TempDir::new("lock").unwrap();
+        let dir = t.join("data");
         std::fs::create_dir_all(&dir).unwrap();
-        // pid 1 always runs.
+        // A file left by a crash, naming a pid that runs (pid 1 always does).
         std::fs::write(dir.join("myjanitor.lock"), "1").unwrap();
-        assert!(super::acquire(&dir).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        let a = super::acquire(&dir).expect("a stale file is not a lock");
+        let b = super::acquire(&dir).expect("engines of one process share the lock");
+        // Another holder (another open of the file, as another process would be) is refused.
+        assert!(mj_platform::lockfile::open_locked(&dir.join("myjanitor.lock")).unwrap().is_none());
+        drop(a);
+        assert!(mj_platform::lockfile::open_locked(&dir.join("myjanitor.lock")).unwrap().is_none(), "b holds it");
+        drop(b);
+        let other = mj_platform::lockfile::open_locked(&dir.join("myjanitor.lock")).unwrap();
+        assert!(other.is_some(), "released with the last engine");
+        assert!(super::acquire(&dir).is_err(), "now the other holder has it");
+        drop(other);
+        assert!(super::acquire(&dir).is_ok());
+        assert!(dir.join("myjanitor.lock").exists(), "never deleted");
     }
 }
