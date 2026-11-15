@@ -183,7 +183,8 @@ export function createHandlers(m, sim, emit) {
       const o = needOpp(req.opportunity_id);
       const sel = m.selection.get(o.id) ?? new Set();
       let list = m.rows.get(o.id) ?? [];
-      if (req.ids) { const ids = new Set(req.ids); list = list.filter((r) => ids.has(r.id)); } else if (req.sub_group) list = list.filter((r) => r.sub_group === req.sub_group);
+      // ENG-3: without ids, exactly the rows the table query shows (tab, filters, grouping).
+      if (req.ids) { const ids = new Set(req.ids); list = list.filter((r) => ids.has(r.id)); } else list = orderPage([...list], { sub_group: req.sub_group, filter: req.filter, min_size: req.min_size, keep_groups: req.keep_groups, sort: 'path', offset: 0 }, Number.MAX_SAFE_INTEGER, (m.groups.get(o.id) ?? []).length > 0).rows;
       for (const r of list) {
         if (r.badges.includes('protected') || o.safety === 'review_only') continue;
         // F-02: "Select all" (no ids) never selects the copy a group keeps.

@@ -131,6 +131,9 @@ fn a_parameter_change_keeps_the_rows_the_user_unchecked() {
         ids: Some(off),
         sub_group: None,
         selected: false,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
     })
     .unwrap();
     let r = e
@@ -185,10 +188,76 @@ fn running_the_same_search_again_keeps_unchecked_rows() {
         ids: Some(vec![first]),
         sub_group: None,
         selected: false,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
     })
     .unwrap();
     let again = run(e);
     assert_eq!(again.id, o.id);
     assert_eq!(again.selected, all.iter().filter(|r| r.1).count() as u64 - 1);
     assert!(!rows(e, &id).iter().find(|r| r.0 == "f00.tmp").unwrap().1);
+}
+
+fn select_all(e: &mj_engine::Engine, id: &str, filter: Option<&str>, keep_groups: bool, selected: bool) -> StepSummary {
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: oid(id),
+        ids: None,
+        sub_group: None,
+        filter: filter.map(Into::into),
+        min_size: None,
+        keep_groups,
+        selected,
+    })
+    .unwrap()
+}
+
+/// ENG-3 (flat table): "select all" under a text filter acts on the filtered rows only.
+#[test]
+fn select_all_under_a_filter_touches_only_the_filtered_rows() {
+    let f = engine_for(installers_tree());
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    assert_eq!(select_all(e, "det:old_installers", None, false, false).selected, 0);
+    let s = select_all(e, "det:old_installers", Some("SETUP-1"), false, true);
+    assert_eq!(s.selected, 1, "only the filtered row");
+    for (name, sel, _) in rows(e, "det:old_installers") {
+        assert_eq!(sel, name == "setup-1.msi", "{name}");
+    }
+    // Unticking under a filter leaves the hidden rows alone too.
+    assert_eq!(select_all(e, "det:old_installers", None, false, true).selected, 5);
+    assert_eq!(select_all(e, "det:old_installers", Some("setup-3"), false, false).selected, 4);
+    assert!(!rows(e, "det:old_installers").iter().find(|r| r.0 == "setup-3.msi").unwrap().1);
+}
+
+fn dup_tree() -> TempDir {
+    let t = TempDir::new("w6a-dups").unwrap();
+    let one = bytes(31, 200_000);
+    let two = bytes(32, 150_000);
+    for p in ["x/one.bin", "y/one.bin", "zz/one.bin"] {
+        t.write(p, &one).unwrap();
+    }
+    for p in ["x/two.bin", "y/two.bin"] {
+        t.write(p, &two).unwrap();
+    }
+    t
+}
+
+/// ENG-3 (groups kept together): the filter keeps whole groups, so "select all" acts on the
+/// shown groups, never on a hidden group and never on a group's kept copy.
+#[test]
+fn select_all_in_grouped_mode_acts_on_the_shown_groups_only() {
+    let f = engine_for(dup_tree());
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    let id = "det:exact_duplicates";
+    assert_eq!(select_all(e, id, None, true, false).selected, 0);
+    let s = select_all(e, id, Some("zz/"), true, true);
+    assert_eq!(s.selected, 2, "the shown group minus its kept copy");
+    let page = e.candidates_page(page_req(id)).unwrap();
+    for r in &page.rows {
+        let name = r.candidate.path.file_name().unwrap().to_string_lossy().into_owned();
+        let keeper = r.candidate.badges.contains(mj_core::Badges::KEEPER);
+        assert_eq!(r.selected, name == "one.bin" && !keeper, "{}", r.candidate.path.display());
+    }
 }

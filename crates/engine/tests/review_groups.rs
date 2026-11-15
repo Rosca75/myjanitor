@@ -153,7 +153,16 @@ fn select_all_and_keep_rules_behave_the_same_in_both_modes() {
     scan(e);
     let all = |keep_groups| e.candidates_page(req(0, 100, CandidateSortKey::Size, false, keep_groups)).unwrap().rows;
     // Select all never selects a kept copy (F-02), whichever mode the table shows.
-    e.selection_set(SelectionSetRequest { opportunity_id: dup(), ids: None, sub_group: None, selected: true }).unwrap();
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: dup(),
+        ids: None,
+        sub_group: None,
+        selected: true,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
+    })
+    .unwrap();
     for mode in [true, false] {
         for r in all(mode) {
             assert_eq!(r.selected, !keeper(&r), "{}", r.candidate.path.display());
@@ -176,8 +185,16 @@ fn select_all_and_keep_rules_behave_the_same_in_both_modes() {
     assert_ne!(before, after.iter().map(|r| r.candidate.id).collect::<Vec<_>>());
     // Explicitly checking a kept copy still works (and apply keeps one per group, F-02).
     let k = after[0].candidate.id;
-    e.selection_set(SelectionSetRequest { opportunity_id: dup(), ids: Some(vec![k]), sub_group: None, selected: true })
-        .unwrap();
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: dup(),
+        ids: Some(vec![k]),
+        sub_group: None,
+        selected: true,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
+    })
+    .unwrap();
     assert!(all(true).iter().find(|r| r.candidate.id == k).unwrap().selected);
     assert!(all(false).iter().find(|r| r.candidate.id == k).unwrap().selected);
 }

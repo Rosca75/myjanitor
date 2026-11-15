@@ -312,3 +312,19 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
   refused with `conflict` when a scan finished during the re-run (the record was built from
   the older index and must not overwrite newer results). `search_run` under an existing
   title carries the same way.
+
+## D-6A19 "Select all" acts on the rows the table shows (ENG-3)
+
+- **Context:** `selection_set` without ids targeted every row of the tab, while the header
+  box of the table reflects the filtered page: with a text filter showing 12 rows, ticking
+  the header selected all 4000 rows of the step (and unticking cleared them all).
+- **Choice:** `SelectionSetRequest` takes the table's `filter`, `min_size` and
+  `keep_groups` (all optional). Without ids the engine builds the same `review_order`
+  query as `candidates_page` (one helper, `view_query`) and acts on exactly the rows that
+  query returns, on every page: the two commands cannot disagree about what is shown.
+  With groups kept together a filter shows whole groups, so "select all" covers those
+  groups and never a hidden one; the kept copy is still never selected by "select all".
+  The UI sends the filters only when one is active; the mock runs its `candidates_page`
+  order for the same answer.
+- **Rejected:** having the UI send the ids of the visible rows (only one page is loaded;
+  the request would grow with the step).

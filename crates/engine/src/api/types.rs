@@ -471,6 +471,18 @@ pub struct SelectionSetRequest {
     pub ids: Option<Vec<CandidateId>>,
     #[serde(default)]
     pub sub_group: Option<String>,
+    /// With `ids: None`: only the rows the table shows for this text filter, same meaning
+    /// as in `candidates_page` (ENG-3: "select all" acts on what is visible, never on rows
+    /// a filter hides).
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// With `ids: None`: the "At least" size filter of `candidates_page`.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    /// With `ids: None`: whether the table keeps groups together (a filter then keeps or
+    /// drops whole groups, as in `candidates_page`).
+    #[serde(default)]
+    pub keep_groups: bool,
     pub selected: bool,
 }
 

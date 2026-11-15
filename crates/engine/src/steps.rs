@@ -75,6 +75,27 @@ pub(crate) fn carry_user_choices(old: &OpportunityRecord, new: &mut OpportunityR
     new.selection = sel;
 }
 
+/// The row set of the step table for a tab and its filters (sort, direction and page size
+/// left at neutral values): shared by `candidates_page` and "select all" in
+/// `selection_set`, so the two can never disagree about which rows are shown (ENG-3).
+fn view_query(
+    rec: &OpportunityRecord,
+    sub_group: &Option<String>,
+    filter: &Option<String>,
+    min_size: Option<u64>,
+    keep_groups: bool,
+) -> Query {
+    Query {
+        sub_group: sub_group.clone(),
+        filter: filter.as_ref().map(|f| f.to_lowercase()).filter(|f| !f.is_empty()),
+        min_size: min_size.filter(|&m| m > 0),
+        sort: crate::api::CandidateSortKey::Path,
+        descending: false,
+        keep_groups: keep_groups && !rec.groups.is_empty(),
+        limit: 0,
+    }
+}
+
 fn none(reason: &str) -> Preview {
     Preview { kind: "none".into(), mime: None, data: None, text: None, waveform: None, reason: Some(reason.into()) }
 }
@@ -126,16 +147,11 @@ impl Engine {
         let rec = results.get(&req.opportunity_id).ok_or_else(|| unknown(&req.opportunity_id))?;
         let has_groups = !rec.groups.is_empty();
         let limit = req.limit.clamp(1, 500) as usize;
-        let query = Query {
-            sub_group: req.sub_group.clone(),
-            filter: req.filter.as_ref().map(|f| f.to_lowercase()).filter(|f| !f.is_empty()),
-            min_size: req.min_size.filter(|&m| m > 0),
-            sort: req.sort,
-            descending: req.descending,
-            keep_groups: req.keep_groups && has_groups,
-            // The flat order does not depend on the page size.
-            limit: if req.keep_groups && has_groups { limit } else { 0 },
-        };
+        let mut query = view_query(rec, &req.sub_group, &req.filter, req.min_size, req.keep_groups);
+        query.sort = req.sort;
+        query.descending = req.descending;
+        // The flat order does not depend on the page size.
+        query.limit = if query.keep_groups { limit } else { 0 };
         let key = OrderKey {
             opportunity: req.opportunity_id.clone(),
             generation: results.generation,
@@ -199,13 +215,22 @@ impl Engine {
                     return Err(Error::InvalidInput(format!("unknown candidate {} (scan again)", bad.0)));
                 }
             }
+            // ENG-3: "select all" (no ids) means the rows the table query returns for the same
+            // tab, filters and grouping mode, through the very function that orders the table.
+            let shown: Option<std::collections::HashSet<u32>> = req.ids.is_none().then(|| {
+                let q = view_query(rec, &req.sub_group, &req.filter, req.min_size, req.keep_groups);
+                order(&rec.candidates, &q).rows.into_iter().collect()
+            });
             let targets: Vec<(mj_core::CandidateId, bool)> = rec
                 .candidates
                 .iter()
-                .filter(|c| match &req.ids {
-                    Some(ids) => ids.contains(&c.id),
-                    None => req.sub_group.is_none() || c.sub_group == req.sub_group,
+                .enumerate()
+                .filter(|(i, c)| match (&req.ids, &shown) {
+                    (Some(ids), _) => ids.contains(&c.id),
+                    (None, Some(rows)) => rows.contains(&(*i as u32)),
+                    (None, None) => false,
                 })
+                .map(|(_, c)| c)
                 .filter(|c| !req.selected || blocked_reason(c, skip).is_none())
                 // F-02: "Select all" (no ids) never selects the copy a group keeps; only an
                 // explicit pick of that row does (and apply still keeps one per group).

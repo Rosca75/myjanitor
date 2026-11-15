@@ -208,7 +208,10 @@ own, `offset` is used as given and `next_offset = offset + limit`.
 
 ### `selection_set`
 `SelectionSetRequest` → `StepSummary`. Checks or unchecks rows. With `ids`
-omitted, applies to the whole `sub_group` (or the whole step). Protected rows
+omitted, applies to exactly the rows `candidates_page` returns (every page) for
+the same `sub_group`, `filter`, `min_size` and `keep_groups` (all optional, same
+meaning as there; with groups kept together a filter keeps or drops whole
+groups): "select all" never touches a row the table's filters hide. Protected rows
 never become selected. With `ids` omitted and `selected: true` ("Select all"),
 the copy each group keeps (`keeper` badge) is not selected either; only an
 explicit `ids` pick selects it, and apply still keeps one member of every group
@@ -217,6 +220,12 @@ explicit `ids` pick selects it, and apply still keeps one member of every group
 
 ```json SelectionSetRequest
 {"opportunity_id":"opt:audio","ids":[1041,1042],"selected":false}
+```
+
+"Select all" under the table's filter:
+
+```json
+{"opportunity_id":"det:exact_duplicates","filter":"downloads","keep_groups":true,"selected":true}
 ```
 
 ### `selection_apply_keep_rule`

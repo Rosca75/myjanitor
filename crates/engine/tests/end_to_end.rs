@@ -197,6 +197,9 @@ fn permanent_step_needs_confirmation_and_signed_files_are_skipped() {
         ids: Some(ids),
         sub_group: None,
         selected: true,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
     })
     .unwrap();
     assert!(page(e, "det:exact_duplicates")

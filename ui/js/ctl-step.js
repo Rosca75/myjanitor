@@ -106,8 +106,14 @@ export function createStepOps(c, slot) {
     }),
     /** "Select all" in the header: the current group, or the whole step. @param {boolean} selected */
     selectAll: guard(async (selected) => {
-      const sub = cur().subGroup;
-      await api.selectionSet({ opportunity_id: oppId(), ...(sub ? { sub_group: sub } : {}), selected });
+      // ENG-3: the same tab, filters and grouping as the table, so "select all" acts on the
+      // rows the table shows and never on rows a filter hides.
+      const s = cur();
+      const req = { opportunity_id: oppId(), ...(s.subGroup ? { sub_group: s.subGroup } : {}), selected };
+      if (s.filter) req.filter = s.filter;
+      if (s.minSize > 0) req.min_size = s.minSize;
+      if (s.filter || s.minSize > 0) req.keep_groups = s.keepGroups !== false;
+      await api.selectionSet(req);
       await reload();
     }),
     /** Re-apply the keep rule through the backend. @param {string} rule @param {string} [folder] */

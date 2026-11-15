@@ -135,7 +135,15 @@ fn paging_sorting_and_selection() {
 
     // Uncheck everything, check two rows, select all, keep rule, reset.
     let s = e
-        .selection_set(SelectionSetRequest { opportunity_id: oid(id), ids: None, sub_group: None, selected: false })
+        .selection_set(SelectionSetRequest {
+            opportunity_id: oid(id),
+            ids: None,
+            sub_group: None,
+            selected: false,
+            filter: None,
+            min_size: None,
+            keep_groups: false,
+        })
         .unwrap();
     assert_eq!(s.selected, 0);
     assert_eq!(s.saving, 0);
@@ -147,7 +155,15 @@ fn paging_sorting_and_selection() {
         .map(|r| r.candidate.id)
         .collect();
     let s = e
-        .selection_set(SelectionSetRequest { opportunity_id: oid(id), ids: Some(two), sub_group: None, selected: true })
+        .selection_set(SelectionSetRequest {
+            opportunity_id: oid(id),
+            ids: Some(two),
+            sub_group: None,
+            selected: true,
+            filter: None,
+            min_size: None,
+            keep_groups: false,
+        })
         .unwrap();
     assert_eq!(s.selected, 2);
     assert!(f.events.events().iter().any(|ev| matches!(ev, Event::OpportunitiesChanged(_))));
@@ -156,6 +172,9 @@ fn paging_sorting_and_selection() {
         ids: Some(vec![mj_core::CandidateId(u64::MAX >> 12)]),
         sub_group: None,
         selected: true,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
     });
     assert_eq!(bad.unwrap_err().code(), "invalid_input");
     let s = e
@@ -172,7 +191,15 @@ fn paging_sorting_and_selection() {
         assert_eq!(g.keeper.as_ref(), Some(&keepers[0].candidate.path));
     }
     let s = e
-        .selection_set(SelectionSetRequest { opportunity_id: oid(id), ids: None, sub_group: None, selected: true })
+        .selection_set(SelectionSetRequest {
+            opportunity_id: oid(id),
+            ids: None,
+            sub_group: None,
+            selected: true,
+            filter: None,
+            min_size: None,
+            keep_groups: false,
+        })
         .unwrap();
     // F-02: "Select all" never selects the copy each group keeps (it used to: 36).
     assert_eq!(s.selected, 24, "select all leaves every group's kept copy unchecked");
@@ -182,8 +209,16 @@ fn paging_sorting_and_selection() {
     // The plan follows the selection.
     e.plan_add_step(PlanAddStepRequest { opportunity_id: oid(id), action: None, params: None }).unwrap();
     let before = e.plan_get().unwrap().estimate;
-    e.selection_set(SelectionSetRequest { opportunity_id: oid(id), ids: None, sub_group: None, selected: false })
-        .unwrap();
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: oid(id),
+        ids: None,
+        sub_group: None,
+        selected: false,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
+    })
+    .unwrap();
     let plan = e.plan_get().unwrap();
     assert_eq!(plan.estimate.files, 0);
     assert!(before.files > 0);
