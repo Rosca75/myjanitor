@@ -336,10 +336,15 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
   toggles and presets. Setting the bitrate of a "Transcription-safe" audio step to 64
   therefore cleared the flag: the step showed as reversible, Apply asked nothing, every
   file was encoded and then refused by the action engine's lossy gate.
-- **Choice:** `steps::step_lossy` (card class `LossyOptIn`, or parameters that make it lossy)
-  is the only rule, used by `plan_add_step`, `plan_update_step` and `step_params_set`
-  (step flag and response). Lossy-by-nature steps always ask; asking once too often for a
-  lossless FLAC choice is the safe side, and it is what the two other paths already did.
+- **Choice:** `steps::step_lossy` is the only rule, used by `plan_add_step`,
+  `plan_update_step` and `step_params_set` (step flag and response): a step is lossy when
+  its parameters make it so, and a `LossyOptIn` card is lossy unless its parameters are
+  exactly those of one of its own lossless presets (the audio card's FLAC preset; the
+  output of that preset is lossless, so the action engine's gate accepts it without a
+  confirmation). Changing the bitrate of an Opus step therefore keeps it lossy, and picking
+  the lossless preset still removes the dialog, as the UI promised before. The earlier add
+  and update paths (always lossy for such a card) asked once too often for FLAC; that is
+  corrected by the same rule.
 
 ## D-6A21 The confirmation describes the items its digest binds (ENG-4)
 
@@ -363,3 +368,21 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
 - **Not covered by a dedicated test:** the in-flight race (selection changed while a dry run
   runs) is closed by construction (the key is taken with the items at queue time); the
   tests cover the search replacement end to end, including the apply count.
+
+## D-6A22 The kept badge follows the selection (ENG-7)
+
+- **Context:** a keep rule moved the `keeper` badge and the group's keeper, but "Reset
+  selection" only cleared the overrides and a rescan carried the selection with fresh
+  badges: the row labelled as kept was the one removed, and "select all except the kept
+  copy" then selected it.
+- **Choice:** `steps::sync_keepers` makes the badge a function of the selection: in every
+  group, the member that survives the removal of the selected rows
+  (`results::group_survivors`, the same rule apply uses) carries `keeper` and is the group's
+  keeper; a group whose every member is selected keeps its badge (apply skips it whole).
+  It runs after every selection change (`selection_set`, `selection_reset`), after a
+  parameter re-run and after the rescan carry. After a reset this gives back the
+  detector's keeper without storing it (the detector's defaults leave exactly that member
+  unselected).
+- **Not done:** the keep-rule dropdown still shows the rule saved in the step parameters
+  (`opp.params.keep_rule`), which `selection_apply_keep_rule` does not update; the label
+  can lag behind the rule last applied. Cosmetic, left for a later UI pass.

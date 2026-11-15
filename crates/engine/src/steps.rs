@@ -96,12 +96,42 @@ fn view_query(
     }
 }
 
-/// ENG-6: whether a step with these parameters is lossy: a lossy-by-nature card
-/// (`LossyOptIn`, e.g. audio or video re-encoding) always is, whatever its parameters;
-/// any other card is when its parameters make it so. The one rule for adding a step,
-/// changing its action and changing its parameters.
+/// ENG-6: whether a step with these parameters is lossy. Any card is when its parameters
+/// make it so (`params_lossy`). A lossy-by-nature card (`LossyOptIn`: audio, video
+/// re-encoding) is too, unless its parameters are exactly those of one of its own lossless
+/// presets (the audio card's FLAC preset): changing the bitrate of an Opus step does not
+/// make it lossless. The one rule for adding a step, changing its action and changing its
+/// parameters.
 pub(crate) fn step_lossy(rec: &OpportunityRecord, params: &mj_core::ParamValues) -> bool {
-    rec.opportunity.safety == SafetyClass::LossyOptIn || params_lossy(rec, params)
+    let o = &rec.opportunity;
+    let lossless_preset =
+        || o.presets.iter().any(|p| !p.lossy && p.values.0.iter().all(|(k, v)| params.0.get(k) == Some(v)));
+    params_lossy(rec, params) || (o.safety == SafetyClass::LossyOptIn && !lossless_preset())
+}
+
+/// ENG-7: the kept badge and every group's `keeper` follow the selection: in each group the
+/// member that survives the removal of the selected rows (`results::group_survivors`)
+/// carries `KEEPER` and is the group's keeper. A group whose every member is selected keeps
+/// its badge as it is (apply skips that group whole). Called after every change of the
+/// selection or of the rows (selection, reset, re-analysis, rescan), so a reset or a
+/// rescan after a keep rule can no longer leave the badge on the copy that is removed.
+pub(crate) fn sync_keepers(rec: &mut OpportunityRecord, skip: Badges) {
+    if rec.groups.is_empty() {
+        return;
+    }
+    let survivors = crate::results::group_survivors(rec, skip);
+    let mut keep: std::collections::HashMap<mj_core::GroupId, std::path::PathBuf> = Default::default();
+    for g in &mut rec.groups {
+        if let Some(Some(p)) = survivors.get(&g.id) {
+            g.keeper = Some(p.clone());
+            keep.insert(g.id, p.clone());
+        }
+    }
+    for c in &mut rec.candidates {
+        if let Some(p) = c.group.and_then(|g| keep.get(&g)) {
+            c.badges.set(Badges::KEEPER, &c.path == p);
+        }
+    }
 }
 
 fn none(reason: &str) -> Preview {
@@ -248,6 +278,7 @@ impl Engine {
             for (id, def) in targets {
                 rec.selection.set(id, def, req.selected);
             }
+            sync_keepers(rec, skip);
             recompute(rec, skip);
             summary_of(rec)
         };
@@ -302,6 +333,7 @@ impl Engine {
             let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
             let rec = results.get_mut(&req.opportunity_id).ok_or_else(|| unknown(&req.opportunity_id))?;
             rec.selection = Default::default();
+            sync_keepers(rec, skip);
             recompute(rec, skip);
             summary_of(rec)
         };
@@ -354,6 +386,7 @@ impl Engine {
             let slot = results.get_mut(&req.opportunity_id).ok_or_else(|| unknown(&req.opportunity_id))?;
             // ENG-2: the rows the user ticked or unticked keep their choice.
             carry_user_choices(slot, &mut rec);
+            sync_keepers(&mut rec, skip);
             recompute(&mut rec, skip);
             let summary = summary_of(&rec);
             *slot = rec;

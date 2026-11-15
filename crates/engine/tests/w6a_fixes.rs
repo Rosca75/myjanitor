@@ -319,3 +319,55 @@ fn a_measured_estimate_does_not_survive_a_replaced_record() {
     let jobs = wait_jobs(e);
     assert_eq!(jobs.iter().map(|j| j.outcome.as_ref().map_or(0, |o| o.succeeded)).sum::<u64>(), 5);
 }
+
+/// Every group of the duplicates step: exactly one member unselected, it carries the kept
+/// badge, and the group's keeper is that member.
+fn assert_keepers_follow_selection(e: &mj_engine::Engine, when: &str) {
+    let page = e.candidates_page(page_req("det:exact_duplicates")).unwrap();
+    assert!(!page.groups.is_empty());
+    for g in &page.groups {
+        let members: Vec<_> = page.rows.iter().filter(|r| r.candidate.group == Some(g.id)).collect();
+        let left: Vec<_> = members.iter().filter(|r| !r.selected).collect();
+        assert_eq!(left.len(), 1, "{when}: one copy stays in {:?}", g.members);
+        let kept: Vec<_> = members.iter().filter(|r| r.candidate.badges.contains(mj_core::Badges::KEEPER)).collect();
+        assert_eq!(kept.len(), 1, "{when}: one kept badge");
+        assert_eq!(kept[0].candidate.id, left[0].candidate.id, "{when}: the badge is on the copy that stays");
+        assert_eq!(g.keeper.as_ref(), Some(&left[0].candidate.path), "{when}: group keeper");
+    }
+}
+
+fn dated_dup_tree() -> TempDir {
+    let t = dup_tree();
+    for (p, days) in [("x/one.bin", 30u64), ("y/one.bin", 10), ("zz/one.bin", 20), ("x/two.bin", 5), ("y/two.bin", 50)]
+    {
+        mj_core::testutil::set_mtime(
+            &t.join(p),
+            std::time::SystemTime::now() - std::time::Duration::from_secs(86_400 * days),
+        )
+        .unwrap();
+    }
+    t
+}
+
+/// ENG-7: after a keep rule, "Reset selection" and a rescan leave the kept badge on the
+/// copy that actually stays.
+#[test]
+fn the_kept_badge_follows_the_selection_after_reset_and_rescan() {
+    let f = engine_for(dated_dup_tree());
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    assert_keepers_follow_selection(e, "default");
+    for rule in [mj_core::KeepRule::Newest, mj_core::KeepRule::Oldest] {
+        e.selection_apply_keep_rule(SelectionKeepRuleRequest { opportunity_id: oid("det:exact_duplicates"), rule })
+            .unwrap();
+        assert_keepers_follow_selection(e, "keep rule");
+        e.selection_reset(OpportunityRequest { opportunity_id: oid("det:exact_duplicates") }).unwrap();
+        assert_keepers_follow_selection(e, "reset");
+    }
+    for rule in [mj_core::KeepRule::Newest, mj_core::KeepRule::Oldest] {
+        e.selection_apply_keep_rule(SelectionKeepRuleRequest { opportunity_id: oid("det:exact_duplicates"), rule })
+            .unwrap();
+        assert_eq!(scan(e).state, ScanRunState::Done);
+        assert_keepers_follow_selection(e, "rescan");
+    }
+}

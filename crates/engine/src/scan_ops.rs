@@ -283,6 +283,8 @@ impl Engine {
                         crate::results::carry_selections(&results.opportunities, &mut records);
                         let skip = crate::results::skip_badges(&lock(&self.settings));
                         for rec in &mut records {
+                            // ENG-7: carried selections keep the kept badge truthful.
+                            crate::steps::sync_keepers(rec, skip);
                             crate::opportunities::recompute(rec, skip);
                         }
                         results.generation = generation;

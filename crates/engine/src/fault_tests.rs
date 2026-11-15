@@ -34,8 +34,15 @@ impl Optimiser for FakeOpt {
             safety: if self.lossy { SafetyClass::LossyOptIn } else { SafetyClass::Reversible },
             default_action: ActionKind::Optimise,
             available_actions: vec![ActionKind::Optimise],
-            presets: vec![],
-            // A setting that is not lossy by itself (like the audio bitrate): ENG-6.
+            // A lossless preset and a setting that is not lossy by itself (like the audio
+            // card's FLAC preset and bitrate): ENG-6.
+            presets: vec![mj_core::StepPreset {
+                id: "lossless".into(),
+                label: "Lossless".into(),
+                description: String::new(),
+                values: ParamValues::new().with("bitrate_kbps", mj_core::ParamValue::Number(320.0)),
+                lossy: false,
+            }],
             settings: vec![mj_core::SettingSpec {
                 key: "bitrate_kbps".into(),
                 label: "Bitrate".into(),
@@ -279,6 +286,17 @@ fn a_parameter_change_keeps_a_lossy_step_lossy() {
     assert_eq!(err.code(), "confirmation_required");
     assert!(fx.engine.jobs_list().unwrap().is_empty());
     assert_eq!(std::fs::metadata(fx.tree.join("clip.fake")).unwrap().len(), 4000);
+    // Its own lossless preset is not lossy, in the response and in the plan.
+    let r = fx
+        .engine
+        .step_params_set(StepParamsRequest {
+            opportunity_id: OpportunityId("opt:video".into()),
+            params: ParamValues::new(),
+            preset_id: Some("lossless".into()),
+        })
+        .unwrap();
+    assert!(!r.lossy, "{r:?}");
+    assert!(!fx.engine.plan_get().unwrap().steps[0].lossy);
 }
 
 #[test]
