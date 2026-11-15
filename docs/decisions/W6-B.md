@@ -269,3 +269,16 @@ children are seen", so excluded, hidden, other-volume and link-target content is
 the same way on both. Chosen over a component-wise sort because it does not depend on any
 ordering property beyond "parent first". `Admitted::Dropped` lost its `subtree` flag,
 which nothing reads any more.
+
+## D-B20 A typed path wildcard with separators matches part of the path (RF-3)
+
+Indexed paths are absolute and `*` does not cross a separator, so `path:*/Photos/*` (the
+documented example) matched only a `Photos` folder at a filesystem root, and
+`-path:*/Photos/*` excluded nothing while the rows were pre-selected. The quick-query
+parser (`query::values::anchor_path_wildcard`) now rewrites a typed path wildcard that
+holds a separator: `\` becomes `/`, a lone `*` as first or last segment becomes `**`, and
+a pattern not anchored at a root (`/`, `**`, `X:`) gets a leading `**/`. So
+`*/Photos/*` = `**/Photos/**`, `Photos/*.png` = `**/Photos/*.png`, `/home/*/Photos/*` stays
+anchored. Patterns written in the rule builder (`Condition::Path` directly) are taken
+literally; they were never documented as relative. The two parser tests that pinned the old
+shape now pin the new one.

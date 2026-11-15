@@ -264,12 +264,40 @@ fn text_cond(it: &Item, op: Option<(Op, Span)>, path: bool, force_regex: bool) -
         let p = if path && !text.contains(['/', '\\']) {
             let tail = if text.ends_with('*') { "**" } else { "" };
             format!("**{}{tail}", text.trim_matches('*'))
+        } else if path {
+            anchor_path_wildcard(&text)
         } else {
             text
         };
         return Ok(field(TextMode::Wildcard, p));
     }
     Ok(field(TextMode::Contains, text))
+}
+
+/// RF-3: a typed path wildcard with separators describes part of a path, but every indexed
+/// path is absolute, and `*` does not cross a separator. A lone `*` as the first or last
+/// segment therefore becomes `**` (any number of folders), and a pattern that is not
+/// anchored at a root (`/`, `**`, `X:`) may start anywhere: `*/Photos/*` is
+/// `**/Photos/**`, `Photos/*.png` is `**/Photos/*.png`. Rule-builder patterns
+/// (`Condition::Path` written directly) are taken as they are.
+fn anchor_path_wildcard(text: &str) -> String {
+    let norm = text.replace('\\', "/");
+    let mut segs: Vec<&str> = norm.split('/').collect();
+    let n = segs.len();
+    if n > 1 && segs[0] == "*" {
+        segs[0] = "**";
+    }
+    if n > 1 && segs[n - 1] == "*" {
+        segs[n - 1] = "**";
+    }
+    let p = segs.join("/");
+    let b = p.as_bytes();
+    let anchored = p.starts_with('/') || p.starts_with("**") || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':');
+    if anchored {
+        p
+    } else {
+        format!("**/{p}")
+    }
 }
 
 /// Split `a..b` (both sides non-empty).
