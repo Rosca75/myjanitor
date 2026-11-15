@@ -67,7 +67,7 @@ cargo build --release -p mj-cli               # target/release/myjanitor-cli
 
 The GUI accepts `--data-dir <dir>` (keep every MyJanitor folder under one root, handy for trying it out), `--optimise <path>` and `--duplicates <path>` (open with that folder as the scope; nothing runs until you press Scan).
 
-**The UI in a browser, on fake data.** The UI is plain ES modules. `node ui/dev/serve.mjs` serves it at `http://127.0.0.1:5173/?mock=1` with a mock backend and no real files. Useful query options: `scenario=empty|fresh|results|rich`, `speed=0.5`. The screenshots above were made this way (`ui/dev/screenshots.mjs`, which needs Playwright installed separately).
+**The UI in a browser, on fake data.** The UI is plain ES modules. `node ui/dev/serve.mjs` serves it at `http://127.0.0.1:5173/?mock=1` with a mock backend and no real files. Useful query options: `scenario=empty|fresh|results|rich`, `speed=0.5`, `dialog=cancel` or `dialog=<folder>` (what the stand-in for the operating system's file dialogs answers; by default it accepts the folder and file name it was offered). The screenshots above were made this way (`ui/dev/screenshots.mjs`, which needs Playwright installed separately).
 
 ## Test
 
@@ -216,7 +216,6 @@ Not exercised against the real Windows feature, only compiled, linted and unit-t
 - Similar-image detection does not decode HEIC, RAW or WebP.
 - Plan steps are reordered with arrow buttons, not by dragging.
 - Light theme only. The palette has no dark variant.
-- The in-app folder browser replaces the native folder dialog.
 - Undoing an archive leaves its sidecar index file behind.
 - Peak memory on a 200,000-file test was 1.6 GiB, inflated by the test's event recorder; it was not measured separately.
 

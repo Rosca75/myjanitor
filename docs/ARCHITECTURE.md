@@ -43,7 +43,7 @@ Two front ends share one engine:
 | `mj-optimise` | `crates/optimise` | core, platform, formats | Optimisers, archiver, external tool detection and process runner |
 | `mj-engine` | `crates/engine` | all of the above, serde_json | `Engine` facade + `api` (commands, events, types) |
 | `mj-cli` (bin `myjanitor-cli`) | `crates/cli` | engine | CLI with in-house argument parsing |
-| `myjanitor` (lib `myjanitor_lib`) | `src-tauri` | engine, tauri | GUI shell: one `#[tauri::command]` per engine command, events forwarding |
+| `myjanitor` (lib `myjanitor_lib`) | `src-tauri` | engine, tauri, rfd | GUI shell: one `#[tauri::command]` per engine command, events forwarding, and the two shell commands that open the operating system's file dialogs (`dialogs.rs`, `api::SHELL_COMMANDS`) |
 
 Rules:
 
@@ -146,6 +146,12 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
   Never hold a lock across I/O or while emitting an event.
 - **Panic isolation**: every detector, optimiser and action item runs inside
   `catch_unwind`; a panic becomes an `Error::Internal` for that item/output.
+- **Native file dialogs** (`dialog_pick_folder`, `dialog_save_file`, W6-A): the
+  dialog is created on the main thread through `run_on_main_thread` (GTK needs
+  it, and the owner window handle is read there), which returns at once; the
+  async command then awaits the dialog's future. Neither the main thread nor the
+  async runtime is blocked while the dialog is open, and at most one dialog is
+  open at a time (a second request fails with `conflict`).
 - **Allocator**: system allocator for now; measure mimalloc on Windows in
   Wave 4 if profiles show allocator contention (lessons file rule 13; would
   need a DEPENDENCIES.md entry).
@@ -327,6 +333,15 @@ Auto-purge after `quarantine_days`.
 - CSP: `default-src 'self'; style-src 'self'; img-src 'self' data:; connect-src
   'self' ipc: http://ipc.localhost`. No inline scripts, no inline `style`
   attributes (set dynamic sizes through the CSSOM, `el.style.setProperty`).
+- Folders and export targets are chosen in the operating system's own dialogs
+  (Windows: Explorer's `IFileOpenDialog` / `IFileSaveDialog`; Linux: the GTK
+  file chooser, or the desktop portal when sandboxed), opened by the shell
+  commands `dialog_pick_folder` / `dialog_save_file` and owned by the main
+  window. The webview has no dialog or filesystem permission (capability
+  `core:default`); it receives a path, or `null` on cancel, and acts on it only
+  through an engine command with its own checks. The mock backend answers both
+  commands deterministically (`ui/js/mock/dialogs.js`). Supersedes the in-app
+  folder browser of D-104 (W6-A D-6A1).
 - Colours only in `ui/styles/tokens.css` (a test enforces it). Light theme
   only (D-004). One scroll container per view.
 - Tests: `node --test ui/` (the `ui/package.json` main `test-all.js` imports
@@ -369,7 +384,7 @@ merge. Contract changes (anything frozen) are requested from the orchestrator.
 | **W3-A** optimisation framework, ZIP, OOXML | `crates/optimise/src/{framework.rs,zip_repack.rs}`, `crates/optimise/src/office/**`, `crates/formats/src/zip/write.rs`, `crates/formats/src/xml.rs`, `crates/formats/src/ooxml/**` |
 | **W3-B** PDF, archiving, FS compression | `crates/optimise/src/{pdf,archive,fs_compression}.rs`, `crates/formats/src/pdf/**`, `crates/platform/src/action/fs_compress/**` |
 | **W3-C** images, media, tools | `crates/optimise/src/{tools,external}.rs`, `crates/optimise/src/images/**`, `crates/optimise/src/media/**`, `crates/formats/src/png.rs`, `crates/formats/src/media/**`, `crates/engine/src/tools.rs` |
-| **W3-D** IPC wiring + derived screens | `src-tauri/src/**`, `crates/engine/src/{app,scope,fsbrowse,scan_ops,opportunities,results,steps,search,plan,apply,jobs,history,reports,disk}.rs`; UI files under `ui/js/views/{history,report,queue,search,disk}/**` (created in Wave 3) |
+| **W3-D** IPC wiring + derived screens | `src-tauri/src/**`, `crates/engine/src/{app,scope,scan_ops,opportunities,results,steps,search,plan,apply,jobs,history,reports,disk}.rs`; UI files under `ui/js/views/{history,report,queue,search,disk}/**` (created in Wave 3) |
 | **W3-E** settings, schedules, CLI | `crates/cli/**`, `crates/engine/src/{settings,schedules,presets,paths}.rs`; UI files under `ui/js/views/settings/**` (created in Wave 3); OS integration code (context menu) in new files under `crates/engine/src/settings/` |
 
 Living documents (`docs/PLAN.md`, `docs/STATUS.md`, `docs/FEATURE-STATUS.md`,
@@ -390,4 +405,4 @@ Additive changes (details and rationale in `docs/decisions/W3-D1.md`):
 | `mj_core::Error` | variants `NeedsElevation(PathBuf)` (`needs_elevation`), `Confidential(PathBuf)` (`confidential`). |
 | `mj_core::JournalEntry` | `original_mode`, `previous_compression`, `undo_of` (all optional). |
 | `mj_core::SavingsSummary` | `reclaimed` (serde default). |
-| `api::FsListDirResponse` | `omitted` (serde default). |
+| `api::FsListDirResponse` | `omitted` (serde default). The command and its types were removed in W6-A. |
