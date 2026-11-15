@@ -241,17 +241,20 @@ impl Engine {
                 current: p.current.clone(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
             };
-            {
+            // Later phases keep the file count of the walk: the event carries what the status
+            // holds, so the header never falls back to 0 after the walk (IPC-4).
+            let ev = {
                 let mut st = lock(&self.scan);
                 if st.status.generation != generation {
                     return;
                 }
-                let mut ev2 = ev.clone();
+                let mut ev = ev;
                 if !walking {
-                    ev2.files = st.status.progress.files;
+                    ev.files = st.status.progress.files;
                 }
-                st.status.progress = ev2;
-            }
+                st.status.progress = ev.clone();
+                ev
+            };
             self.emit(Event::ScanProgress(ev));
         };
         let sink = ThrottledSink::new(emit_progress);
