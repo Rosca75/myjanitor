@@ -561,9 +561,18 @@ fn act_retain(
             // same file) passes every re-stat. Read it again now, after the last re-stat:
             // a duplicate that is no longer the kept copy's content is not removed, and
             // the hash journalled for undo is the content actually moved.
+            // A read failure here is the skip `check_keep` makes of the same failure
+            // (gone, or locked by another program), not a failure of the run.
             if let Some(h) = known {
-                if fsops::hash_file(&item.path)?.sha256 != h.sha256 {
-                    return Err(Error::Changed(item.path.clone()));
+                match fsops::hash_file(&item.path) {
+                    Ok(now) if now.sha256 == h.sha256 => {}
+                    Ok(_) => return Err(Error::Changed(item.path.clone())),
+                    Err(_) => {
+                        return Err(Error::Conflict(format!(
+                            "skipped: {} cannot be read; nothing was removed",
+                            item.path.display()
+                        )))
+                    }
                 }
             }
         }

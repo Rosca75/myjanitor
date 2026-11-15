@@ -782,3 +782,21 @@ one side wholesale.
 - **Test:** `review3_fixes::a_duplicate_rewritten_after_the_comparison_is_not_removed` (the
   test platform's new `on_metadata` hook rewrites the file at the kept copy's act-time
   re-stat; it failed before the fix).
+
+## D-6A43 An unreadable duplicate at the act-time check is a skip (review finding)
+
+- **Finding:** the act-time read of a verified duplicate (D-6A42) passed its read error up
+  as an I/O error, so a duplicate removed or locked by another program (a share-deny lock
+  on Windows) between its re-stat and that read was reported and journalled as Failed. The
+  same read failing one step earlier, in the byte comparison of `check_keep`, is the skip
+  "cannot be read".
+- **Decision:** map it the same way: a read error there is the skip "skipped: <path> cannot
+  be read; nothing was removed". Nothing was touched at that point, so a skip is the true
+  outcome, and run outcomes and reports no longer count a failure for what is by design a
+  skip. A different content is still `Changed` (also a skip).
+- **Test:** `review3_fixes::a_duplicate_unreadable_at_the_act_time_check_is_skipped_not_failed`
+  (the `on_metadata` hook deletes the duplicate at the kept copy's act-time re-stat; it
+  reported `failed: 1` before the fix).
+- **Status record:** the W6-B SCAN-7 open item (disk view rebuilds totals per request,
+  unused `FolderTree` in `breakdown`, W6-B D-B6) was missing from the wave-6 entry of
+  docs/STATUS.md; added.

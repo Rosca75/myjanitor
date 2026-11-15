@@ -304,3 +304,42 @@ fn a_duplicate_rewritten_after_the_comparison_is_not_removed() {
     assert!(dup.exists(), "the rewritten file stays where it is");
     assert_eq!(std::fs::read(&dup).unwrap(), vec![b'x'; 28 * 1000]);
 }
+
+/// Reviewer note on the act-time check above: a duplicate that cannot be read at that
+/// point (removed, or locked by another program on Windows) is a deliberate skip, as the
+/// same read failing during the byte comparison is, never a failure of the run.
+#[test]
+fn a_duplicate_unreadable_at_the_act_time_check_is_skipped_not_failed() {
+    let f = Fixture::new("act8-unreadable");
+    let content = b"the same bytes in both files".repeat(1000);
+    let keeper = f.write("a/keep.bin", &content);
+    let dup = f.write("b/dup.bin", &content);
+    let mut item = f.item(&dup, Action::Quarantine { purge_after_days: 30 });
+    let md = mj_platform::ScanPlatform::metadata(&f.platform, &keeper).unwrap();
+    item.keep = Some(mj_core::KeepCopy {
+        path: keeper.clone(),
+        expected: md.stamp(),
+        expected_id: md.file_id,
+        identical: true,
+    });
+    // The second look at the kept copy is the act-time re-stat, right before the duplicate
+    // is read again: make the duplicate unreadable there.
+    let (k, d) = (keeper.clone(), dup.clone());
+    let mut calls = 0;
+    *f.platform.on_metadata.lock().unwrap() = Some(Box::new(move |p: &Path| {
+        if p == k {
+            calls += 1;
+            if calls == 2 {
+                std::fs::remove_file(&d).unwrap();
+            }
+        }
+    }));
+    let (run, out) = f.apply(&[item], &opts());
+    *f.platform.on_metadata.lock().unwrap() = None;
+    assert_eq!(out.succeeded, 0, "{out:?}");
+    assert_eq!(out.failed, 0, "{out:?}");
+    assert_eq!(out.skipped, 1, "{out:?}");
+    assert!(keeper.exists(), "the kept copy is untouched");
+    let e = f.journal.entries_of(run).pop();
+    assert!(e.map_or(true, |e| e.state != mj_core::JournalState::Failed), "journalled as a skip, not a failure");
+}
