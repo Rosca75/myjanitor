@@ -570,7 +570,10 @@ row on the volume that holds it), so the UI refetches it on `plan://changed`.
 `DiskUsageRequest` → `DiskNode`. Folder tree by size for the treemap and the
 size-sorted tree. Without `path`: a virtual root with one child per scan root.
 Children below `min_fraction` of their parent fold into `other`. Fails with
-`invalid_input` before the first scan.
+`invalid_input` before the first scan. `size` is the logical size of the files
+stored on this disk: online-only placeholders count in `files` but not in
+`size` or `allocated`, as in the scan summary (`ScanStats.bytes`), so the disk
+view and the scan say the same total (SCAN-7).
 
 ```json DiskUsageRequest
 {"path":"/home/me/Projects","depth":2,"min_fraction":0.01}
