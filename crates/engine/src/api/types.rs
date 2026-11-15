@@ -779,6 +779,20 @@ pub struct QuarantineInfo {
     pub purge_after_days: u32,
 }
 
+/// One item held in the quarantine (CLI `quarantine list`; not an IPC command).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuarantineItem {
+    #[serde(with = "mj_core::pathutil::serde_path")]
+    pub original: PathBuf,
+    #[serde(with = "mj_core::pathutil::serde_path")]
+    pub location: PathBuf,
+    pub bytes: u64,
+    pub quarantined: Timestamp,
+    /// When the automatic purge removes it.
+    pub expires: Timestamp,
+    pub run_id: mj_core::RunId,
+}
+
 /// `quarantine_purge` request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

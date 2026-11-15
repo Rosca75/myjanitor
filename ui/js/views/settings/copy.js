@@ -65,7 +65,7 @@ export const sc = {
     recycle_bin: 'Recycle Bin or Trash',
     recycle_binSub: 'The default. Restorable with the system tools and from History.',
     quarantine: 'MyJanitor quarantine',
-    quarantineSub: 'Kept in a MyJanitor folder and removed automatically after the retention time.',
+    quarantineSub: 'Kept in a MyJanitor folder and deleted automatically once the retention time has passed: at start-up, at the start of command-line actions and after each run.',
     backup_folder: 'A backup folder',
     backupSub: (p) => (p ? `Originals are moved under ${p}.` : 'Choose where originals are moved.'),
     chooseBackup: 'Choose folder',

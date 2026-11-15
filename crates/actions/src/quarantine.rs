@@ -124,6 +124,11 @@ pub fn summary(journal: &Journal, quarantine_dir: &Path) -> QuarantineSummary {
     s
 }
 
+/// The entries [`summary`] counts (held items in their own quarantine slot).
+pub fn held_entries(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
+    held(journal, quarantine_dir)
+}
+
 fn held(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
     journal
         .all_entries()

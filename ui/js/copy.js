@@ -253,7 +253,7 @@ export const copy = {
     action: 'Action',
     actions: {
       trash: { label: 'Recycle Bin', help: 'Default. Restore from History or the Recycle Bin.' },
-      quarantine: { label: 'Quarantine', help: 'Kept aside for 7 days, then removed.' },
+      quarantine: { label: 'Quarantine', help: 'Kept aside in MyJanitor\'s quarantine, then deleted automatically once its retention has passed (checked at start-up and after each run).' },
       move: { label: 'Move…', help: 'Move to a folder you choose.' },
       permanent_delete: { label: 'Delete permanently', help: 'Cannot be undone. Asks for confirmation.' },
     },

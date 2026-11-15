@@ -511,6 +511,8 @@ impl Engine {
             outcome.as_ref().map(|o| o.bytes_saved).unwrap_or(0)
         };
         self.reclaimed.fetch_add(saved, Ordering::Relaxed);
+        // CLN-ACT-04: expired quarantine items are purged after each completed step.
+        self.quarantine_auto_purge();
         self.emit(Event::HistoryChanged(HistoryChanged { run_id: Some(run.run_id) }));
         JobResult { outcome: outcome.or_else(|| Some(JobOutcome::default())), error, report: true }
     }

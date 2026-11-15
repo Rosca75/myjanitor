@@ -240,6 +240,48 @@ impl Engine {
         })
     }
 
+    /// CLN-ACT-04: the automatic purge: every quarantined item whose own retention (its
+    /// step's `purge_after_days`, else the `quarantine_days` setting) has passed is deleted
+    /// through the guarded purge. Runs at start-up, at the start of acting CLI commands and
+    /// after each applied step. Does nothing (returns 0) when files may not be changed.
+    pub fn quarantine_auto_purge(&self) -> u64 {
+        if self.require_writable().is_err() {
+            return 0;
+        }
+        let days = lock(&self.settings).general.quarantine_days;
+        let before = mj_actions::quarantine::summary(&self.journal, &self.cfg.quarantine_dir).items;
+        let freed =
+            mj_actions::quarantine::purge_expired(&self.journal, &self.cfg.quarantine_dir, Timestamp::now(), days)
+                .unwrap_or(0);
+        let after = mj_actions::quarantine::summary(&self.journal, &self.cfg.quarantine_dir).items;
+        if after != before {
+            self.emit(Event::HistoryChanged(HistoryChanged { run_id: None }));
+        }
+        freed
+    }
+
+    /// Every item held in the quarantine (CLI `quarantine list`), oldest first.
+    pub fn quarantine_items(&self) -> Vec<crate::api::QuarantineItem> {
+        let default_days = lock(&self.settings).general.quarantine_days;
+        let mut v: Vec<crate::api::QuarantineItem> =
+            mj_actions::quarantine::held_entries(&self.journal, &self.cfg.quarantine_dir)
+                .into_iter()
+                .map(|e| {
+                    let days = e.retention_days.unwrap_or(default_days);
+                    crate::api::QuarantineItem {
+                        original: e.original.clone(),
+                        location: e.retained_at.clone().unwrap_or_default(),
+                        bytes: e.bytes_before,
+                        quarantined: e.at,
+                        expires: e.at.add_days(i64::from(days)),
+                        run_id: e.run_id,
+                    }
+                })
+                .collect();
+        v.sort_by_key(|i| i.quarantined);
+        v
+    }
+
     /// Permanently delete quarantined items older than the given age (queued job).
     pub fn quarantine_purge(self: &Arc<Self>, req: QuarantinePurgeRequest) -> Result<Job> {
         self.require_writable()?;

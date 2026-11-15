@@ -240,3 +240,32 @@ fn scan_list_apply_undo_pipeline() {
     assert_ne!(unknown.code, 0, "an unknown detector is an error: {}", unknown.out);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before);
 }
+
+#[test]
+fn quarantine_list_and_purge() {
+    let (t, data, home) = sandbox("cli-quarantine");
+    let tree = t.mkdir("photos").unwrap();
+    let bytes: Vec<u8> = (0..50_000u32).map(|i| (i.wrapping_mul(2654435761) >> 24) as u8).collect();
+    t.write("photos/a.bin", &bytes).unwrap();
+    t.write("photos/b.bin", &bytes).unwrap();
+    let p = tree.to_str().unwrap();
+    assert_eq!(cli(&data, &home, &["quarantine", "list"]).code, 0);
+    assert_eq!(cli(&data, &home, &["scan", p]).code, 0);
+    assert_eq!(cli(&data, &home, &["plan", "add", "det:exact_duplicates", "--action", "quarantine"]).code, 0);
+    let apply = cli(&data, &home, &["apply", "--yes"]);
+    assert_eq!(apply.code, 0, "{}{}", apply.out, apply.err);
+    let list = cli(&data, &home, &["quarantine", "list", "--json"]);
+    assert_eq!(list.code, 0, "{}", list.err);
+    let v: serde_json::Value = serde_json::from_str(&list.out).unwrap();
+    assert_eq!(v.as_array().unwrap().len(), 1, "{v}");
+    // Not expired yet: the plain purge keeps it.
+    let purge = cli(&data, &home, &["quarantine", "purge"]);
+    assert_eq!(purge.code, 0, "{}{}", purge.out, purge.err);
+    assert!(purge.out.contains("1 item(s) remain"), "{}", purge.out);
+    // An explicit age needs --yes off a terminal.
+    assert_ne!(cli(&data, &home, &["quarantine", "purge", "--older-than", "0"]).code, 0);
+    let all = cli(&data, &home, &["quarantine", "purge", "--older-than", "0", "--yes"]);
+    assert_eq!(all.code, 0, "{}{}", all.out, all.err);
+    assert!(all.out.contains("0 item(s) remain"), "{}", all.out);
+    assert_eq!(mj_core::testutil::snapshot(&tree).unwrap().len(), 1, "the kept copy is untouched");
+}

@@ -239,6 +239,33 @@ pub const COMMANDS: &[CmdSpec] = &[
         &[]
     ),
     c!("settings", Some("set"), "Change one setting; VALUE is JSON or plain text", "<KEY> <VALUE>", 2, Some(2), &[]),
+    c!(
+        "quarantine",
+        Some("list"),
+        "List the items held in MyJanitor's quarantine and when each expires",
+        "",
+        0,
+        Some(0),
+        &[JSON]
+    ),
+    c!(
+        "quarantine",
+        Some("purge"),
+        "Delete quarantined items for good: the expired ones, or those older than --older-than DAYS",
+        "",
+        0,
+        Some(0),
+        &[
+            val(
+                "older-than",
+                None,
+                "DAYS",
+                "Every item older than DAYS (0 = everything); default: each item's own retention"
+            ),
+            YES,
+            JSON
+        ]
+    ),
     c!("cache", Some("info"), "Show the scan cache size", "", 0, Some(0), &[JSON]),
     c!("cache", Some("clear"), "Clear the scan cache", "", 0, Some(0), &[JSON]),
     c!("info", None, "Version, platform and folders (JSON)", "", 0, Some(0), &[]),
@@ -246,7 +273,7 @@ pub const COMMANDS: &[CmdSpec] = &[
 ];
 
 /// Commands that take a subcommand.
-const GROUPS: &[&str] = &["plan", "schedule", "context-menu", "settings", "cache"];
+const GROUPS: &[&str] = &["plan", "schedule", "context-menu", "settings", "cache", "quarantine"];
 
 /// A command line the user got wrong (exit code 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
