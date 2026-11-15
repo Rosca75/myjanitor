@@ -36,6 +36,9 @@ const ELECTRON: &[(&str, &str)] = &[
     ("Visual Studio Code", "Code"),
     ("Microsoft Teams (classic)", "Microsoft/Teams"),
 ];
+/// Its `AppData/Roaming` caches belong to `OfficeLeftovers` (office.rs), so only the
+/// `~/.config` rule is generated here: one file, one card.
+const TEAMS_CLASSIC: &str = "Microsoft/Teams";
 const ELECTRON_CACHES: &[&str] = &["Cache", "Code Cache", "GPUCache", "CachedData", "Service Worker/CacheStorage"];
 
 /// The built-in table. Order is priority: specific rules first, the generic `~/.cache/*` last.
@@ -84,7 +87,10 @@ pub fn builtin_rules() -> Vec<RuleDef> {
     ));
     for (app, dir) in ELECTRON {
         for sub in ELECTRON_CACHES {
-            v.push(rule(app, "App cache", "rebuilt on next start", format!("**/AppData/Roaming/{dir}/{sub}"), d));
+            // RF-8: on Windows the classic Teams caches are listed by the Office leftovers card.
+            if *dir != TEAMS_CLASSIC {
+                v.push(rule(app, "App cache", "rebuilt on next start", format!("**/AppData/Roaming/{dir}/{sub}"), d));
+            }
             v.push(rule(app, "App cache", "rebuilt on next start", format!("**/.config/{dir}/{sub}"), d));
         }
     }
@@ -309,6 +315,18 @@ mod tests {
         w("u/Documents/Cache/mine.txt"); // a user folder merely named Cache
         age(&t.join("u/AppData/Local/Temp/old.bin"), 3);
         t
+    }
+
+    /// RF-8: the classic Teams caches under `AppData/Roaming` belong to the Office leftovers
+    /// card; listing them here too counted them twice.
+    #[test]
+    fn teams_classic_roaming_caches_are_left_to_the_office_card() {
+        let t = TempDir::new("caches-teams").unwrap();
+        t.write("u/AppData/Roaming/Microsoft/Teams/Cache/data_0", b"cachedata").unwrap();
+        t.write("u/AppData/Roaming/Microsoft/Teams/GPUCache/data_1", b"cachedata").unwrap();
+        t.write("u/.config/Microsoft/Teams/Cache/data_0", b"cachedata").unwrap();
+        let out = run(&AppCaches, &index_of(t.path()), &Default::default());
+        assert_eq!(rel(&out, t.path()), vec!["u/.config/Microsoft/Teams/Cache"]);
     }
 
     #[test]
