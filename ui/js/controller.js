@@ -188,6 +188,17 @@ function coreActions(c) {
       const path = await c.pickFolder(copy.dialogs.addLocation);
       if (path) set({ scope: await api.scopeAddRoot({ path }) });
     }),
+    /**
+     * IPC-7: re-read the engine's scope after a scan. A scheduled run scans its own
+     * folders and the session scope becomes theirs; the chips follow so they always
+     * name the folders the results describe. A failed read keeps the chips as they are.
+     */
+    async refreshScope() {
+      try {
+        const scope = await api.scopeGet();
+        if (JSON.stringify(scope) !== JSON.stringify(get().scope)) set({ scope });
+      } catch { /* the next scan or scope change refreshes it */ }
+    },
 
     // ----------------------------------------------------------------- scan
     startScan: guard(async () => {

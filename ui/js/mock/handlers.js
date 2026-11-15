@@ -455,6 +455,8 @@ export function createHandlers(m, sim, emit) {
       const s = m.schedules.find((x) => x.id === req.id) ?? (() => { throw fail('invalid_input', `Unknown schedule ${req.id}`, 'Reload the list.'); })();
       if (m.plan.steps.length) throw fail('conflict', 'A plan is in progress: apply or clear it before running a schedule', 'Apply or clear the plan first.');
       s.last_run = m.nowNs();
+      // Like the engine: the run scans the schedule's folders, which become the session scope.
+      m.scope = { ...m.scope, roots: [...s.scope.roots] };
       return sim.startScheduleJob(s);
     },
     tools_list: () => m.tools,

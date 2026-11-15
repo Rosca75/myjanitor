@@ -77,3 +77,21 @@ test('progress events never re-render the controls (clicks would be swallowed)',
   assert.equal(env.$('[data-fk^="pause-"]'), pause, 'same element after a progress event');
   await env.actions.cancelJob(env.state().jobs[0].id);
 });
+
+test('after a scheduled run the scope chips name the folders its scan covered (IPC-7)', async () => {
+  const env = await makeEnv();
+  const before = env.state().scope.roots;
+  const sched = { id: '', name: 'Weekly downloads', enabled: true, cadence: { every: 'weekly', weekday: 1, hour: 9, minute: 13 }, scope: { roots: ['/home/me/Elsewhere'] }, steps: [{ opportunity: 'det:temp_files', action: { kind: 'trash' }, params: {} }], last_run: null, next_run: null };
+  await env.backend.call('plan_clear', {});
+  const [saved] = await env.backend.call('schedule_save', { schedule: sched });
+  await env.backend.call('schedule_run_now', { id: saved.id });
+  assert.deepEqual(env.state().scope.roots, before, 'nothing changes before the scan ends');
+  env.backend.emit('scan://done', { ...env.state().scan, state: 'done', generation: env.state().scan.generation + 1 });
+  await env.settle();
+  assert.deepEqual(env.state().scope.roots, ['/home/me/Elsewhere']);
+  // An unchanged scope is not replaced (no needless re-render).
+  const scope = env.state().scope;
+  env.backend.emit('scan://done', { ...env.state().scan, state: 'done', generation: env.state().scan.generation + 1 });
+  await env.settle();
+  assert.equal(env.state().scope, scope);
+});
