@@ -196,3 +196,23 @@ fn g09_an_archived_file_is_rechecked_before_its_source_goes() {
         assert_eq!(std::fs::read(&file).unwrap(), b"edited after it was archived", "{originals:?}");
     }
 }
+
+/// G-13: a quarantined item whose undo was refused stays visible and is purged in time.
+#[test]
+fn g13_undo_failed_quarantine_items_are_counted_and_purged() {
+    let f = Fixture::new("g13");
+    let file = f.write("old.log", b"quarantined content");
+    let (run, out) = f.apply(&[f.item(&file, Action::Quarantine { purge_after_days: 1 })], &opts());
+    assert_eq!(out.succeeded, 1);
+    // Something new now sits at the original place: the undo is refused.
+    std::fs::write(&file, b"a new file with the same name").unwrap();
+    let undo = f.undo_run(run);
+    assert_eq!(undo.failed, 1, "{undo:?}");
+    let s = mj_actions::quarantine::summary(&f.journal, &f.qdir);
+    assert_eq!(s.items, 1, "still held and shown");
+    let later = mj_core::Timestamp::now().add_days(5);
+    let freed = mj_actions::quarantine::purge_expired(&f.journal, &f.qdir, later, 30).unwrap();
+    assert!(freed > 0);
+    assert_eq!(mj_actions::quarantine::summary(&f.journal, &f.qdir).items, 0);
+    assert_eq!(std::fs::read(&file).unwrap(), b"a new file with the same name", "the user's file is untouched");
+}
