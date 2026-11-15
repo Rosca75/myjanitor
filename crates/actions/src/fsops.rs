@@ -31,9 +31,25 @@ pub struct ContentHash {
     pub sha256: String,
 }
 
+std::thread_local! {
+    static CONTENT_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of files this thread opened to read their whole content ([`hash_file`],
+/// [`compare_files`]). Diagnostics and tests (ACT-8: an item is read once, not three or four
+/// times); per thread so that tests running side by side do not disturb each other.
+pub fn content_reads_on_this_thread() -> u64 {
+    CONTENT_READS.with(|c| c.get())
+}
+
+fn count_content_reads(n: u64) {
+    CONTENT_READS.with(|c| c.set(c.get() + n));
+}
+
 /// Stream a file once, computing xxh64 and SHA-256.
 pub fn hash_file(path: &Path) -> Result<ContentHash> {
     let mut f = File::open(path).map_err(|e| Error::io(path, e))?;
+    count_content_reads(1);
     let mut x = Xxh64::new(0);
     let mut s = Sha256::new();
     let mut buf = vec![0u8; BUF];
@@ -52,14 +68,23 @@ pub fn hash_file(path: &Path) -> Result<ContentHash> {
 
 /// Byte-compare two files; returns `Some(sha256 of a)` when equal, `None` when not.
 pub fn compare_files(a: &Path, b: &Path) -> Result<Option<String>> {
+    Ok(compare_files_hashed(a, b)?.map(|h| h.sha256))
+}
+
+/// [`compare_files`] returning the full [`ContentHash`] of the (equal) content, computed in
+/// the same pass, so the caller need not read either file again (ACT-8).
+pub fn compare_files_hashed(a: &Path, b: &Path) -> Result<Option<ContentHash>> {
     let mut fa = File::open(a).map_err(|e| Error::io(a, e))?;
     let mut fb = File::open(b).map_err(|e| Error::io(b, e))?;
+    count_content_reads(2);
     let la = fa.metadata().map_err(|e| Error::io(a, e))?.len();
     let lb = fb.metadata().map_err(|e| Error::io(b, e))?.len();
     if la != lb {
         return Ok(None);
     }
     let mut s = Sha256::new();
+    let mut x = Xxh64::new(0);
+    let mut size = 0u64;
     let mut ba = vec![0u8; BUF];
     let mut bb = vec![0u8; BUF];
     loop {
@@ -69,9 +94,11 @@ pub fn compare_files(a: &Path, b: &Path) -> Result<Option<String>> {
             return Ok(None);
         }
         if n == 0 {
-            return Ok(Some(s.finish_hex()));
+            return Ok(Some(ContentHash { size, xxh64: x.finish(), sha256: s.finish_hex() }));
         }
         s.update(&ba[..n]);
+        x.update(&ba[..n]);
+        size += n as u64;
     }
 }
 

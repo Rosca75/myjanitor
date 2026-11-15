@@ -231,3 +231,33 @@ fn act9_zero_retention_quarantine_is_held_at_least_a_day() {
     assert_eq!(held.len(), 1, "purged at once");
     assert_eq!(f.journal.entries_of(run)[0].retention_days, Some(1));
 }
+
+/// ACT-8: removing a duplicate whose kept copy is verified reads the duplicate once (the
+/// byte comparison), not again for the audit hash and the quarantine manifest; the journal
+/// and the manifest still carry its SHA-256.
+#[test]
+fn act8_a_verified_duplicate_is_read_once() {
+    let f = Fixture::new("act8");
+    let content = b"the same bytes in both files".repeat(1000);
+    let keeper = f.write("a/keep.bin", &content);
+    let dup = f.write("b/dup.bin", &content);
+    let mut item = f.item(&dup, Action::Quarantine { purge_after_days: 30 });
+    let md = mj_platform::ScanPlatform::metadata(&f.platform, &keeper).unwrap();
+    item.keep = Some(mj_core::KeepCopy {
+        path: keeper.clone(),
+        expected: md.stamp(),
+        expected_id: md.file_id,
+        identical: true,
+    });
+    let before = mj_actions::fsops::content_reads_on_this_thread();
+    let (run, out) = f.apply(&[item], &opts());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    let reads = mj_actions::fsops::content_reads_on_this_thread() - before;
+    assert_eq!(reads, 2, "one byte comparison of the kept copy and the duplicate, nothing else");
+    let sha = mj_actions::fsops::hash_file(&keeper).unwrap().sha256;
+    let e = f.journal.entries_of(run).pop().unwrap();
+    assert_eq!(e.original_sha256.as_deref(), Some(sha.as_str()));
+    let m = mj_actions::quarantine::read_manifest(&f.qdir, run, e.id).unwrap();
+    assert_eq!(m.sha256.as_deref(), Some(sha.as_str()));
+    assert!(m.xxh64.is_some());
+}

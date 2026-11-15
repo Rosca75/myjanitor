@@ -335,7 +335,12 @@ fn removes_copy(action: &Action) -> bool {
 /// `full` compares content byte for byte for an identical group (else the scan stamp);
 /// without `full` (dry runs) the scan stamp and file id are compared only. Returns the
 /// kept copy's fresh metadata.
-fn check_keep(ctx: &ExecContext<'_>, item: &ActionItem, full: bool) -> Result<Option<mj_core::FileEntry>> {
+#[allow(clippy::type_complexity)]
+fn check_keep(
+    ctx: &ExecContext<'_>,
+    item: &ActionItem,
+    full: bool,
+) -> Result<Option<(mj_core::FileEntry, Option<fsops::ContentHash>)>> {
     let Some(keep) = item.keep.as_ref().filter(|_| removes_copy(&item.action)) else {
         return Ok(None);
     };
@@ -366,16 +371,17 @@ fn check_keep(ctx: &ExecContext<'_>, item: &ActionItem, full: bool) -> Result<Op
             return gone("is the same file (a hard link)");
         }
     }
+    let mut hash = None;
     if keep.identical && full {
-        match fsops::compare_files(&keep.path, &item.path) {
-            Ok(Some(_)) => {}
+        match fsops::compare_files_hashed(&keep.path, &item.path) {
+            Ok(Some(h)) => hash = Some(h),
             Ok(None) => return gone("no longer has the same content"),
             Err(_) => return gone("cannot be read"),
         }
     } else if !crate::guard::stamp_matches(keep.expected, &md) {
         return gone("changed since the scan");
     }
-    Ok(Some(md))
+    Ok(Some((md, hash)))
 }
 
 /// Re-stat of the kept copy right before acting: still the file verified by [`check_keep`].
@@ -413,6 +419,13 @@ impl KindLabel for ActionKind {
     }
 }
 
+/// What [`process`] verified about an item before acting: the kept copy's metadata (F-02)
+/// and the item's content hash when it was read (ACT-8: read once, reused by the manifest).
+struct PreChecked {
+    kept: Option<mj_core::FileEntry>,
+    hash: Option<fsops::ContentHash>,
+}
+
 /// One item. `Err` only for journal failures.
 fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: EntryId) -> Result<ItemOutcome> {
     let now = Timestamp::now();
@@ -427,31 +440,38 @@ fn process(ctx: &ExecContext<'_>, opts: &ExecOptions, item: &ActionItem, id: Ent
     }
     // F-02: never remove the last copy of a group; the copy kept is verified now (full
     // comparison) and re-stat'ed right before acting.
-    let kept = match check_keep(ctx, item, true) {
-        Ok(k) => k,
+    let (kept, mut known) = match check_keep(ctx, item, true) {
+        Ok(Some((k, h))) => (Some(k), h),
+        Ok(None) => (None, None),
         Err(err) => return skip(ctx, e, err),
     };
-    // Audit hash (before acting; link actions compute it while verifying).
+    // Audit hash (before acting; link actions compute it while verifying). ACT-8: a
+    // duplicate just byte-compared with its kept copy is not read again.
     if md.kind == EntryKind::File
+        && known.is_none()
         && md.size <= opts.audit_hash_limit
         && !matches!(item.action, Action::Hardlink | Action::Reflink)
     {
         match fsops::hash_file(&item.path) {
-            Ok(h) => e.original_sha256 = Some(h.sha256),
+            Ok(h) => known = Some(h),
             Err(err) => return skip(ctx, e, err),
         }
     }
+    if let Some(h) = &known {
+        e.original_sha256 = Some(h.sha256.clone());
+    }
+    let pre = PreChecked { kept, hash: known };
     let undo_until = Some(now.add_days(i64::from(ctx.settings.general.undo_days)));
     match &item.action {
         Action::Trash => match opts.trash_route {
-            TrashRoute::Platform => act_retain(ctx, item, e, RetainPlan::Trash, undo_until, kept.as_ref()),
+            TrashRoute::Platform => act_retain(ctx, item, e, RetainPlan::Trash, undo_until, &pre),
             TrashRoute::Quarantine => {
                 let days = ctx.settings.general.quarantine_days;
-                quarantine_item(ctx, item, e, days, now, kept.as_ref())
+                quarantine_item(ctx, item, e, days, now, &pre)
             }
         },
-        Action::Quarantine { purge_after_days } => quarantine_item(ctx, item, e, *purge_after_days, now, kept.as_ref()),
-        Action::PermanentDelete => act_retain(ctx, item, e, RetainPlan::Delete, None, kept.as_ref()),
+        Action::Quarantine { purge_after_days } => quarantine_item(ctx, item, e, *purge_after_days, now, &pre),
+        Action::PermanentDelete => act_retain(ctx, item, e, RetainPlan::Delete, None, &pre),
         Action::Move { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, true, undo_until),
         Action::Copy { dest, keep_structure } => move_or_copy(ctx, item, e, dest, *keep_structure, false, undo_until),
         Action::Hardlink | Action::Reflink => link_replace(ctx, item, e, undo_until),
@@ -529,11 +549,12 @@ fn act_retain(
     mut e: JournalEntry,
     plan: RetainPlan,
     undo_until: Option<Timestamp>,
-    kept: Option<&mj_core::FileEntry>,
+    pre: &PreChecked,
 ) -> Result<ItemOutcome> {
     retain::note_plan(&mut e, &plan);
+    let known = pre.hash.as_ref();
     run_acted(ctx, item, e, |e| {
-        if let Some(k) = kept {
+        if let Some(k) = &pre.kept {
             restat_keep(ctx, item, k)?;
         }
         recheck_tree(ctx, item)?;
@@ -546,7 +567,7 @@ fn act_retain(
                 let _ = mj_platform::action::sync_dir(parent);
             }
         } else {
-            retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now())?;
+            retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, &plan, Timestamp::now(), known)?;
         }
         e.bytes_after = 0;
         e.undo_deadline = if e.reversible { undo_until } else { None };
@@ -615,7 +636,7 @@ fn quarantine_item(
     mut e: JournalEntry,
     days: u32,
     now: Timestamp,
-    kept: Option<&mj_core::FileEntry>,
+    pre: &PreChecked,
 ) -> Result<ItemOutcome> {
     e.action = ActionKind::Quarantine;
     // ACT-9: a retention of 0 days would make this an unconfirmed permanent delete (the
@@ -637,7 +658,7 @@ fn quarantine_item(
     };
     // Undoable while the item is held: the shorter of the retention and the undo window.
     let until = now.add_days(i64::from(days.min(ctx.settings.general.undo_days)));
-    act_retain(ctx, item, e, plan, Some(until), kept)
+    act_retain(ctx, item, e, plan, Some(until), pre)
 }
 
 /// Destination of a move / copy, keeping the structure below the scan root when asked.
@@ -1055,7 +1076,9 @@ fn optimise(
                 e.reversible = false;
             }
             Some(p) => {
-                if let Err(err) = retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now()) {
+                if let Err(err) =
+                    retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now(), None)
+                {
                     cleanup();
                     return Err(err);
                 }
@@ -1189,7 +1212,8 @@ fn archive(
         // F-06: undo removes the archive only while it still has this content.
         e.output_sha256 = fsops::hash_file(&dst).ok().map(|h| h.sha256);
         if let Some(p) = &plan {
-            if let Err(err) = retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now()) {
+            if let Err(err) = retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now(), None)
+            {
                 // ACT-1: removing a folder is not atomic (a permanent delete or a platform
                 // trash can stop part-way). The archive is removed only while the sources are
                 // provably whole; otherwise it is the only complete copy of what is gone.
