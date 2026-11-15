@@ -102,3 +102,98 @@ fn act4_undo_of_a_copy_keeps_it_when_the_original_is_gone() {
     assert_eq!(std::fs::read(dest.join("c.txt")).unwrap(), b"will change");
     assert!(!dest.join("b.txt").exists(), "a copy of an unchanged original is still removed");
 }
+
+/// Writes the first half of the source.
+struct Halve;
+
+impl mj_core::Optimiser for Halve {
+    fn info(&self) -> mj_core::OptimiserInfo {
+        mj_core::OptimiserInfo {
+            id: mj_core::OptimiserId::PngLossless,
+            title: "halve".into(),
+            description: String::new(),
+            category: mj_core::Category::Optimise,
+            safety: mj_core::SafetyClass::Reversible,
+            default_action: mj_core::ActionKind::Optimise,
+            available_actions: vec![],
+            presets: vec![],
+            settings: vec![],
+            platform: mj_core::PlatformSupport::Both,
+            tools: vec![],
+            feature_ids: vec![],
+            unit: String::new(),
+        }
+    }
+    fn availability(&self, _: &[ExternalTool]) -> mj_core::Availability {
+        mj_core::Availability::Available
+    }
+    fn applies_to(&self, _: &mj_core::FileEntry) -> bool {
+        true
+    }
+    fn estimate(&self, e: &mj_core::FileEntry, _: &mj_core::ParamValues) -> mj_core::Result<mj_core::Estimate> {
+        Ok(mj_core::Estimate { files: 1, bytes_before: e.size, bytes_after: e.size / 2, ..Default::default() })
+    }
+    fn optimise(&self, job: &mj_core::OptimiseJob<'_>) -> mj_core::Result<mj_core::OptimiseOutput> {
+        let d = std::fs::read(job.src).unwrap();
+        std::fs::write(job.dst, &d[..d.len() / 2]).unwrap();
+        Ok(mj_core::OptimiseOutput { bytes_before: d.len() as u64, ..mj_core::OptimiseOutput::default() })
+    }
+    fn analyse(&self, _: &mj_core::DetectContext<'_>) -> mj_core::Result<mj_core::DetectorOutput> {
+        Ok(mj_core::DetectorOutput::default())
+    }
+}
+
+fn make_read_only(p: &Path) {
+    let mut perm = std::fs::metadata(p).unwrap().permissions();
+    perm.set_readonly(true);
+    std::fs::set_permissions(p, perm).unwrap();
+}
+
+fn mtime(p: &Path) -> std::time::SystemTime {
+    std::fs::metadata(p).unwrap().modified().unwrap()
+}
+
+/// ACT-3: a read-only file can be optimised (output read-only too, mtime kept), and a
+/// read-only duplicate replaced by a hard link separates again on undo. On Linux this only
+/// fails for a non-root user (root ignores the mode); on Windows the read-only attribute
+/// refuses a writable handle to anyone, so the Windows CI job checks it unconditionally.
+#[test]
+fn act3_read_only_files_can_be_optimised_and_unlinked() {
+    let f = Fixture::new("act3");
+    let photo = f.write("photo.png", b"0123456789abcdefghij");
+    make_read_only(&photo);
+    let before = mtime(&photo);
+    let optimisers: Vec<Box<dyn mj_core::Optimiser>> = vec![Box::new(Halve)];
+    let services = Services { optimisers: &optimisers, archiver: None, tools: &[] };
+    let action = Action::Optimise {
+        optimiser: mj_core::OptimiserId::PngLossless,
+        params: mj_core::ParamValues::default(),
+        output: mj_core::OutputMode::Replace,
+        originals: OriginalsPolicy::Quarantine,
+        keep_if_not_smaller: true,
+    };
+    let run = f.new_run(RunKind::Apply);
+    let out = mj_actions::execute_with(&f.ctx(run, services), &[f.item(&photo, action)], &confirmed()).unwrap();
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    assert_eq!(std::fs::read(&photo).unwrap(), b"0123456789");
+    assert!(std::fs::metadata(&photo).unwrap().permissions().readonly(), "permissions preserved");
+    assert_eq!(mtime(&photo), before, "mtime preserved");
+
+    let keeper = f.write("a/keep.txt", b"same text in both");
+    let dup = f.write("b/copy.txt", b"same text in both");
+    make_read_only(&dup);
+    let mut item = f.item(&dup, Action::Hardlink);
+    item.link_source = Some(keeper.clone());
+    let (run, out) = f.apply(std::slice::from_ref(&item), &confirmed());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    let undo = f.undo_run(run);
+    assert_eq!(undo.succeeded, 1, "{undo:?}");
+    assert_eq!(std::fs::read(&dup).unwrap(), b"same text in both");
+    assert!(std::fs::metadata(&dup).unwrap().permissions().readonly(), "mode restored");
+    // Separate again: an edit of the keeper no longer shows through the duplicate.
+    let mut perm = std::fs::metadata(&keeper).unwrap().permissions();
+    perm.set_readonly(false);
+    let _ = std::fs::set_permissions(&keeper, perm);
+    std::fs::write(&keeper, b"edited").unwrap();
+    assert_eq!(std::fs::read(&dup).unwrap(), b"same text in both");
+}

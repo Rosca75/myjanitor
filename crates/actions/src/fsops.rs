@@ -183,8 +183,43 @@ pub fn set_file_mode(path: &Path, mode: u32) -> Result<()> {
 
 /// Set a file's modification time.
 pub fn set_mtime(path: &Path, t: Timestamp) -> Result<()> {
-    let f = OpenOptions::new().write(true).open(path).map_err(|e| Error::io(path, e))?;
-    f.set_modified(t.to_system_time()).map_err(|e| Error::io(path, e))
+    with_write_handle(path, |f| f.set_modified(t.to_system_time()))
+}
+
+/// Run `op` on a writable handle of one of MyJanitor's own new files (an optimiser output,
+/// a link replacement, an archive). ACT-3: such a file may already carry the read-only
+/// permissions copied from the user's original, which refuse a writable handle (the
+/// read-only attribute on Windows, a mode without the owner's write bit on Unix for anyone
+/// but root). The file is then made owner-writable for the call and its permissions are put
+/// back afterwards (which changes neither its content nor its modification time).
+fn with_write_handle(path: &Path, op: impl Fn(&File) -> std::io::Result<()>) -> Result<()> {
+    let first = OpenOptions::new().write(true).open(path);
+    let err = match first {
+        Ok(f) => return op(&f).map_err(|e| Error::io(path, e)),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => e,
+        Err(e) => return Err(Error::io(path, e)),
+    };
+    let Ok(perms) = fs::metadata(path).map(|m| m.permissions()) else { return Err(Error::io(path, err)) };
+    fs::set_permissions(path, owner_writable(&perms)).map_err(|_| Error::io(path, err))?;
+    let r = OpenOptions::new().write(true).open(path).and_then(|f| op(&f));
+    let back = fs::set_permissions(path, perms);
+    r.map_err(|e| Error::io(path, e))?;
+    back.map_err(|e| Error::io(path, e))
+}
+
+#[cfg(unix)]
+fn owner_writable(p: &fs::Permissions) -> fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    fs::Permissions::from_mode(p.mode() | 0o200)
+}
+
+#[cfg(not(unix))]
+fn owner_writable(p: &fs::Permissions) -> fs::Permissions {
+    let mut w = p.clone();
+    // Windows: clears only the read-only attribute (no world-writable bits exist there).
+    #[allow(clippy::permissions_set_readonly_false)]
+    w.set_readonly(false);
+    w
 }
 
 /// A free sibling name: `name.ext`, `name (1).ext`, ... (lstat existence; Windows reserved
@@ -604,8 +639,7 @@ pub static SYNCED_OUTPUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// journal record. Failure is an error: the original then stays where it is.
 pub fn sync_output(path: &Path) -> Result<()> {
     // Opened for writing (never truncated): Windows flushes only a writable handle.
-    let f = OpenOptions::new().write(true).open(path).map_err(|e| Error::io(path, e))?;
-    f.sync_all().map_err(|e| Error::io(path, e))?;
+    with_write_handle(path, |f| f.sync_all())?;
     SYNCED_OUTPUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
