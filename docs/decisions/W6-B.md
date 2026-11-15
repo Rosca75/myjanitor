@@ -626,3 +626,18 @@ filesystem", so a run of permission-denied files (a non-admin scan of `C:\`) dro
 of the stage to one thread. Only retryable outcomes count now; denied, vanished, changed
 and panicked items are neutral (neither done nor failed for the verdict).
 
+
+## D-B46 CI builds with --locked; no long benchmark in CI (XC-5)
+
+Every cargo invocation in `ci.yml` that builds (clippy, test, `cargo build -p mj-cli`, and
+`cargo tauri build ... -- --locked`) now passes `--locked`, so a dependency edit that forgets
+`Cargo.lock` fails the build instead of being re-resolved silently on the runner (`cargo fmt`
+and `cargo install --locked` needed nothing). `cargo metadata --locked` passes at this commit.
+The ignored large-tree benchmarks stay out of CI on purpose: they take minutes on shared
+runners and wall-time budgets there would be flaky; they remain a manual pre-release check.
+
+## D-B47 System language (XC-1): already fixed by RF-9
+
+`c2d7505` (RF-9) made the engine supply the OS language (`crates/platform/src/locale.rs`,
+`SYSTEM_LANGUAGE` env param) and the detector add a diagnostics note when the language is
+unknown. Verified by reading `language.rs` and its tests; no change.
