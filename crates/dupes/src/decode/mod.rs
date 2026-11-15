@@ -11,6 +11,7 @@
 //! additionally isolate each file with `catch_unwind`).
 
 pub mod png;
+pub mod thumb;
 
 use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;

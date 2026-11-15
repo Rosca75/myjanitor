@@ -62,66 +62,119 @@ pub fn header(buf: &[u8]) -> Option<Header> {
 
 /// Decode a whole PNG file and fingerprint it.
 pub fn decode(buf: &[u8]) -> Result<Decoded, DecodeError> {
-    let hdr = header(buf).ok_or_else(|| DecodeError::Corrupt("missing IHDR".into()))?;
-    if !within_limits(hdr.width, hdr.height) {
-        return Err(DecodeError::TooLarge);
-    }
-    if hdr.interlaced {
-        return Err(DecodeError::Unsupported("interlaced PNG"));
-    }
-    let channels = hdr.channels().ok_or_else(|| DecodeError::Corrupt("invalid colour type / depth".into()))?;
-    let (w, h) = (hdr.width as usize, hdr.height as usize);
-    let bits_per_pixel = channels * hdr.bit_depth as usize;
-    let row_bytes = (w * bits_per_pixel).div_ceil(8);
-    let expected = (row_bytes + 1).checked_mul(h).ok_or(DecodeError::TooLarge)?;
-
-    // Collect IDAT and PLTE.
-    let mut pos = 8usize;
-    let mut idat = Vec::new();
-    let mut palette: Vec<[u8; 3]> = Vec::new();
-    loop {
-        let len = buf.get(pos..pos + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
-        let Some(len) = len else { break };
-        let typ = buf.get(pos + 4..pos + 8).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
-        let data_end = pos.checked_add(8 + len).ok_or_else(|| DecodeError::Corrupt("chunk length".into()))?;
-        let data = buf.get(pos + 8..data_end).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
-        match typ {
-            b"IDAT" => {
-                if idat.len() + data.len() > expected.saturating_mul(2) + 1024 * 1024 {
-                    return Err(DecodeError::Corrupt("IDAT larger than the image".into()));
-                }
-                idat.extend_from_slice(data);
-            }
-            b"PLTE" => palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
-            b"IEND" => break,
-            _ => {}
-        }
-        pos = data_end + 4; // skip CRC
-    }
-    if hdr.color_type == 3 && palette.is_empty() {
-        return Err(DecodeError::Corrupt("palette image without PLTE".into()));
-    }
-    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected)
-        .map_err(|e| DecodeError::Corrupt(format!("inflate: {:?}", e.status)))?;
-    if raw.len() < expected {
-        return Err(DecodeError::Corrupt("image data truncated".into()));
-    }
-
-    let bpp = bits_per_pixel.div_ceil(8).max(1);
-    let mut prev = vec![0u8; row_bytes];
-    let mut cur = vec![0u8; row_bytes];
+    let img = Prepared::new(buf, super::MAX_PIXELS)?;
+    let (w, h) = (img.hdr.width as usize, img.hdr.height as usize);
     let mut gray = vec![0u8; w];
     let mut acc = GridAccumulator::new(w, h);
-    for y in 0..h {
-        let line = &raw[y * (row_bytes + 1)..(y + 1) * (row_bytes + 1)];
-        cur.copy_from_slice(&line[1..]);
-        unfilter(line[0], &mut cur, &prev, bpp)?;
-        row_to_gray(&hdr, channels, &cur, &palette, &mut gray);
+    img.for_each_row(|row| {
+        row_to_gray(&img.hdr, img.channels, row, &img.palette, &mut gray);
         acc.push_row(&gray);
-        std::mem::swap(&mut prev, &mut cur);
-    }
+    })?;
     let g = acc.finish();
-    Ok(Decoded { width: hdr.width, height: hdr.height, dhash: dhash(&g.g9), phash: phash(&g.g32) })
+    Ok(Decoded { width: img.hdr.width, height: img.hdr.height, dhash: dhash(&g.g9), phash: phash(&g.g32) })
+}
+
+/// A PNG whose image data is inflated and checked, ready to be unfiltered row by row
+/// (shared by the fingerprint and the thumbnail decoders).
+pub(crate) struct Prepared {
+    pub hdr: Header,
+    pub channels: usize,
+    pub palette: Vec<[u8; 3]>,
+    /// Palette alpha (`tRNS` of a palette image); missing entries are opaque.
+    pub palette_alpha: Vec<u8>,
+    raw: Vec<u8>,
+    row_bytes: usize,
+    bpp: usize,
+}
+
+impl Prepared {
+    /// Check the header against `max_pixels` (and [`within_limits`]) before inflating.
+    pub fn new(buf: &[u8], max_pixels: u64) -> Result<Prepared, DecodeError> {
+        let hdr = header(buf).ok_or_else(|| DecodeError::Corrupt("missing IHDR".into()))?;
+        if !within_limits(hdr.width, hdr.height) || hdr.width as u64 * hdr.height as u64 > max_pixels {
+            return Err(DecodeError::TooLarge);
+        }
+        if hdr.interlaced {
+            return Err(DecodeError::Unsupported("interlaced PNG"));
+        }
+        let channels = hdr.channels().ok_or_else(|| DecodeError::Corrupt("invalid colour type / depth".into()))?;
+        let (w, h) = (hdr.width as usize, hdr.height as usize);
+        let bits_per_pixel = channels * hdr.bit_depth as usize;
+        let row_bytes = (w * bits_per_pixel).div_ceil(8);
+        let expected = (row_bytes + 1).checked_mul(h).ok_or(DecodeError::TooLarge)?;
+
+        // Collect IDAT, PLTE and tRNS.
+        let mut pos = 8usize;
+        let mut idat = Vec::new();
+        let mut palette: Vec<[u8; 3]> = Vec::new();
+        let mut palette_alpha: Vec<u8> = Vec::new();
+        loop {
+            let len = buf.get(pos..pos + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+            let Some(len) = len else { break };
+            let typ = buf.get(pos + 4..pos + 8).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
+            let data_end = pos.checked_add(8 + len).ok_or_else(|| DecodeError::Corrupt("chunk length".into()))?;
+            let data = buf.get(pos + 8..data_end).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
+            match typ {
+                b"IDAT" => {
+                    if idat.len() + data.len() > expected.saturating_mul(2) + 1024 * 1024 {
+                        return Err(DecodeError::Corrupt("IDAT larger than the image".into()));
+                    }
+                    idat.extend_from_slice(data);
+                }
+                b"PLTE" => palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+                b"tRNS" if hdr.color_type == 3 => palette_alpha = data.iter().take(256).copied().collect(),
+                b"IEND" => break,
+                _ => {}
+            }
+            pos = data_end + 4; // skip CRC
+        }
+        if hdr.color_type == 3 && palette.is_empty() {
+            return Err(DecodeError::Corrupt("palette image without PLTE".into()));
+        }
+        let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected)
+            .map_err(|e| DecodeError::Corrupt(format!("inflate: {:?}", e.status)))?;
+        if raw.len() < expected {
+            return Err(DecodeError::Corrupt("image data truncated".into()));
+        }
+        let bpp = bits_per_pixel.div_ceil(8).max(1);
+        Ok(Prepared { hdr, channels, palette, palette_alpha, raw, row_bytes, bpp })
+    }
+
+    /// Unfilter every row in order and hand it to `f` (raw samples at the file's depth).
+    pub fn for_each_row(&self, mut f: impl FnMut(&[u8])) -> Result<(), DecodeError> {
+        let rb = self.row_bytes;
+        let mut prev = vec![0u8; rb];
+        let mut cur = vec![0u8; rb];
+        for y in 0..self.hdr.height as usize {
+            let line = &self.raw[y * (rb + 1)..(y + 1) * (rb + 1)];
+            cur.copy_from_slice(&line[1..]);
+            unfilter(line[0], &mut cur, &prev, self.bpp)?;
+            f(&cur);
+            std::mem::swap(&mut prev, &mut cur);
+        }
+        Ok(())
+    }
+
+    /// One unfiltered row as 8-bit RGBA (palette alpha from `tRNS`).
+    pub fn row_to_rgba(&self, row: &[u8], out: &mut [u8]) {
+        let d = self.hdr.bit_depth;
+        let ch = self.channels;
+        for (x, o) in out.chunks_exact_mut(4).enumerate() {
+            let s = |i: usize| (sample(row, d, x * ch + i) >> 8) as u8;
+            let px = match self.hdr.color_type {
+                0 => [s(0), s(0), s(0), 255],
+                4 => [s(0), s(0), s(0), s(1)],
+                2 => [s(0), s(1), s(2), 255],
+                6 => [s(0), s(1), s(2), s(3)],
+                _ => {
+                    let i = index(row, d, x);
+                    let p = self.palette.get(i).copied().unwrap_or([0, 0, 0]);
+                    [p[0], p[1], p[2], self.palette_alpha.get(i).copied().unwrap_or(255)]
+                }
+            };
+            o.copy_from_slice(&px);
+        }
+    }
 }
 
 fn unfilter(filter: u8, cur: &mut [u8], prev: &[u8], bpp: usize) -> Result<(), DecodeError> {
