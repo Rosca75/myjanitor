@@ -257,3 +257,15 @@ presets gained `kind:file`. Rejected: ageing a folder by the newest file in its 
 (`totals().newest_modified`); it would need index access inside the evaluator and is a
 feature, not a fix. `testutil::set_mtime` now also sets a folder's mtime (used by the
 regression test).
+
+## D-B19 The fast index keeps an entry only below an entered folder (SCAN-1)
+
+`walker::fast::try_fast` no longer assumes a subtree directly follows its folder in key
+order (`skip.zip` and `skip - Copy` sort between `skip` and `skip/x`). It keeps a set of
+the folders it admitted and entered (seeded with the root) and considers an entry only when
+its parent is in that set; sorting still guarantees a parent comes before its children.
+The directory walk and the fast path now share one rule, "only an entered folder's
+children are seen", so excluded, hidden, other-volume and link-target content is dropped
+the same way on both. Chosen over a component-wise sort because it does not depend on any
+ordering property beyond "parent first". `Admitted::Dropped` lost its `subtree` flag,
+which nothing reads any more.

@@ -72,8 +72,8 @@ pub struct DirJob {
 
 /// Result of [`admit`].
 pub enum Admitted {
-    /// Not indexed. `subtree` = a directory whose content must be skipped too.
-    Dropped { subtree: bool },
+    /// Not indexed (nor anything below it).
+    Dropped,
     /// Indexed; nothing below it to walk.
     Leaf,
     /// An indexed directory; `enter` = path to list next (None: depth limit).
@@ -83,16 +83,15 @@ pub enum Admitted {
 /// Apply the scope rules to one stat'ed entry and record it. Shared by the
 /// directory walk and the MFT fast path, so both index exactly the same things.
 pub fn admit(ctx: &WalkCtx<'_>, out: &mut Collected, mut e: FileEntry, depth: u32, job: &DirJob) -> Admitted {
-    let is_dir = e.kind == EntryKind::Dir;
     if ctx.filter.skips_hidden(&e) {
-        return Admitted::Dropped { subtree: is_dir };
+        return Admitted::Dropped;
     }
     if let (Some(dev), Some(id)) = (job.root_dev, e.file_id) {
         if id.volume != dev && e.kind != EntryKind::Link {
             // Another filesystem mounted below the root: not entered, not indexed
             // (an empty-looking mount point must never become a removal candidate).
             out.stats.excluded += 1;
-            return Admitted::Dropped { subtree: is_dir };
+            return Admitted::Dropped;
         }
     }
     e.depth = depth;
@@ -102,7 +101,7 @@ pub fn admit(ctx: &WalkCtx<'_>, out: &mut Collected, mut e: FileEntry, depth: u3
             if let Some(id) = e.file_id {
                 if !out.visited.insert(id) {
                     out.stats.excluded += 1;
-                    return Admitted::Dropped { subtree: true };
+                    return Admitted::Dropped;
                 }
             }
             out.stats.dirs += 1;
@@ -112,7 +111,7 @@ pub fn admit(ctx: &WalkCtx<'_>, out: &mut Collected, mut e: FileEntry, depth: u3
         }
         EntryKind::File => {
             if !ctx.filter.includes_file(&e.path) {
-                return Admitted::Dropped { subtree: false };
+                return Admitted::Dropped;
             }
             let s = &mut out.stats;
             s.files += 1;

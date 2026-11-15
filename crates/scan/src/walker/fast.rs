@@ -3,13 +3,16 @@
 //!
 //! The platform returns the whole subtree at once, so exclusions, hidden
 //! entries, the depth limit and other filesystems are applied afterwards: the
-//! entries are sorted by `path_key`, which makes every subtree contiguous, and
-//! a dropped directory skips its whole range. Any platform error (no access,
+//! entries are sorted by `path_key` (a parent before its children) and an entry
+//! is kept only when its parent directory was admitted and entered, so a dropped
+//! directory drops everything below it. Any platform error (no access,
 //! not NTFS, a failure midway) makes the caller walk instead: nothing from a
 //! failed enumeration is kept.
 
+use std::collections::HashSet;
+
 use mj_core::pathutil::{is_within, normalize_lexical, path_key};
-use mj_core::{EntryKind, Error, FileEntry, Result};
+use mj_core::{Error, FileEntry, Result};
 
 use super::parallel::{admit, Admitted, Collected, DirJob, WalkCtx};
 
@@ -32,40 +35,37 @@ pub fn try_fast(ctx: &WalkCtx<'_>, root: &DirJob, out: &mut Collected) -> Result
         .collect();
     keyed.sort_by(|a, b| a.0.cmp(&b.0));
     keyed.dedup_by(|a, b| a.0 == b.0);
-    let mut skip: Option<String> = None;
+    // SCAN-1: an entry is considered only when its parent folder was admitted and entered.
+    // Sorting by key puts a parent before its children, but not a subtree right after its
+    // folder: `skip.zip` and `skip - Copy` sort between `skip` and `skip/x`, so a "skip
+    // everything that follows with this prefix" scan let an excluded folder's content in.
+    let mut entered: HashSet<String> = HashSet::new();
+    entered.insert(root_key.trim_end_matches('/').to_string());
     for (n, (key, e)) in keyed.into_iter().enumerate() {
         if n % 4096 == 0 {
             ctx.cancel.checkpoint()?;
         }
-        if let Some(prefix) = &skip {
-            if key.starts_with(prefix.as_str()) {
-                continue;
-            }
-            skip = None;
+        let parent = key.rfind('/').map(|i| &key[..i]);
+        if !parent.is_some_and(|p| entered.contains(p)) {
+            continue;
         }
         let depth = (normalize_lexical(&e.path).components().count().saturating_sub(root_depth)) as u32;
-        let is_dir = e.kind == EntryKind::Dir;
-        let subtree = |key: &str| Some(if key.ends_with('/') { key.to_string() } else { format!("{key}/") });
         let name = e.path.file_name().unwrap_or(e.path.as_os_str()).to_owned();
         if ctx.filter.skips_hidden_name(&name) {
-            skip = subtree(&key);
             continue;
         }
         if ctx.filter.excludes(&e.path, &name) {
             out.stats.excluded += 1;
-            skip = subtree(&key);
             continue;
         }
         if ctx.opts.max_depth.is_some_and(|m| depth > m) {
-            skip = subtree(&key);
             continue;
         }
         ctx.reporter.tick(e.size, &e.path);
-        match admit(ctx, out, e, depth, root) {
-            Admitted::Dropped { subtree: true } => skip = subtree(&key),
-            // A link's target is never part of the scan, whatever the platform returned.
-            Admitted::Leaf | Admitted::Dropped { subtree: false } if !is_dir => skip = subtree(&key),
-            _ => {}
+        // A link's target is never part of the scan, whatever the platform returned: only
+        // an admitted directory with something to list opens its children.
+        if let Admitted::Dir { enter: Some(_) } = admit(ctx, out, e, depth, root) {
+            entered.insert(key.trim_end_matches('/').to_string());
         }
     }
     Ok(true)

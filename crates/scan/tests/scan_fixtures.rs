@@ -322,3 +322,30 @@ fn freshly_written_files_are_never_cache_hits() {
     assert_eq!(ix.get(&t.join("new.txt")).unwrap().stamp(), st);
     assert_eq!(ix.stats.cache_hits, 0);
 }
+
+/// SCAN-1: a sibling whose name extends a dropped folder's name with a character that
+/// sorts below `/` (`skip.zip`, `skip - Copy`, `.hidden.bak`) sits between `skip` and
+/// `skip/x.jpg` in key order; the fast path must still drop the folder's content.
+#[test]
+fn fast_index_drops_excluded_content_next_to_a_lookalike_sibling() {
+    let t = TempDir::new("it-fast-sib").unwrap();
+    small_tree(&t);
+    write_old(&t, ".hidden/secret.txt", b"s");
+    write_old(&t, ".hidden.bak", b"b");
+    write_old(&t, "photos/skip/x.jpg", b"x");
+    write_old(&t, "photos/skip/sub/y.jpg", b"y");
+    write_old(&t, "photos/skip.zip", b"z");
+    write_old(&t, "photos/skip - Copy/y.jpg", b"c");
+    let mut s = scope(&[t.path()]);
+    s.exclude = vec![t.join("photos/skip").to_string_lossy().into_owned()];
+    s.options.include_hidden = false;
+    let walked = run(&s, &NativePlatform::new()).unwrap();
+    let fast = run(&s, &TestPlatform { fast: Fast::Works, ..Default::default() }).unwrap();
+    assert!(fast.stats.used_fast_index);
+    assert_eq!(paths(&fast, t.path()), paths(&walked, t.path()));
+    assert!(fast.get(&t.join("photos/skip/x.jpg")).is_none());
+    assert!(fast.get(&t.join("photos/skip/sub/y.jpg")).is_none());
+    assert!(fast.get(&t.join(".hidden/secret.txt")).is_none());
+    assert!(fast.get(&t.join("photos/skip - Copy/y.jpg")).is_some());
+    assert!(fast.get(&t.join("photos/skip.zip")).is_some());
+}
