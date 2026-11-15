@@ -204,7 +204,32 @@ pub fn expand_vars(s: &str, env: &HashMap<String, String>) -> Option<String> {
 
 /// An environment map from the process environment (the default when the caller supplies none).
 pub fn process_env() -> HashMap<String, String> {
-    std::env::vars().collect()
+    with_ccleaner_vars(std::env::vars().collect())
+}
+
+/// RF-12: winapp2 files use CCleaner's own variables, which are never process environment
+/// variables; derive them from the ones they stand for (an existing value wins).
+pub fn with_ccleaner_vars(mut env: HashMap<String, String>) -> HashMap<String, String> {
+    let get = |env: &HashMap<String, String>, k: &str| {
+        env.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.trim_end_matches(['\\', '/']).to_string())
+    };
+    let profile = get(&env, "USERPROFILE");
+    let derived = [
+        ("CommonAppData", get(&env, "ProgramData")),
+        ("LocalLowAppData", profile.as_ref().map(|p| format!("{p}\\AppData\\LocalLow"))),
+        ("Documents", profile.as_ref().map(|p| format!("{p}\\Documents"))),
+        ("Pictures", profile.as_ref().map(|p| format!("{p}\\Pictures"))),
+        ("Music", profile.as_ref().map(|p| format!("{p}\\Music"))),
+        ("Video", profile.as_ref().map(|p| format!("{p}\\Videos"))),
+    ];
+    for (k, v) in derived {
+        if let Some(v) = v {
+            if get(&env, k).is_none() {
+                env.insert(k.to_string(), v);
+            }
+        }
+    }
+    env
 }
 
 fn norm(p: &str) -> String {
@@ -242,7 +267,12 @@ pub fn resolve(
             diag.skip("winapp2_app_not_detected");
             continue;
         }
-        let excludes = compile_excludes(entry, env);
+        // RF-12: an exclusion that cannot be resolved fails closed: the whole entry is
+        // skipped, instead of proposing what the exclusion was written to keep.
+        let Some(excludes) = compile_excludes(entry, env) else {
+            diag.skip("winapp2_unknown_variable");
+            continue;
+        };
         let note = entry.warning.clone().unwrap_or_else(|| "from your winapp2.ini".into());
         for fk in &entry.file_keys {
             let Some(dir) = expand_vars(&fk.path, env).map(|d| norm(&d)) else {
@@ -250,7 +280,7 @@ pub fn resolve(
                 continue;
             };
             let whole_folder =
-                fk.remove_self && fk.recurse && fk.patterns.iter().all(|p| p == "*") && excludes.is_empty();
+                fk.remove_self && fk.recurse && fk.patterns.iter().all(|p| p == "*") && entry.exclude_keys.is_empty();
             let key_hits = resolve_key(index, &dir, fk, &excludes, whole_folder);
             for pos in key_hits {
                 hits.push(Hit {
@@ -292,27 +322,52 @@ fn detected(index: &FileIndex, entry: &Winapp2Entry, env: &HashMap<String, Strin
 
 struct Exclude {
     dir: String,
+    /// The folder as a path glob when it holds wildcards (`%App%\\*\\Saves`).
+    dir_glob: Option<Glob>,
     pattern: Option<Glob>,
 }
 
-fn compile_excludes(entry: &Winapp2Entry, env: &HashMap<String, String>) -> Vec<Exclude> {
+impl Exclude {
+    fn new(dir: String, pattern: Option<Glob>) -> Exclude {
+        let dir_glob = dir.contains(['*', '?']).then(|| Glob::new(&dir, GlobMode::Path, true));
+        Exclude { dir, dir_glob, pattern }
+    }
+
+    /// `path` is the excluded folder itself (a wildcard folder: any folder it matches).
+    fn is_dir(&self, path: &Path) -> bool {
+        match &self.dir_glob {
+            Some(g) => g.matches(&path.to_string_lossy()),
+            None => path_key(path) == path_key(Path::new(&self.dir)),
+        }
+    }
+
+    /// `path` is the excluded folder or lies below it.
+    fn covers(&self, path: &Path) -> bool {
+        match &self.dir_glob {
+            Some(_) => path.ancestors().any(|a| self.is_dir(a)),
+            None => is_within(Path::new(&self.dir), path),
+        }
+    }
+}
+
+/// `None` when an exclusion names a variable that is not known (RF-12: fail closed).
+fn compile_excludes(entry: &Winapp2Entry, env: &HashMap<String, String>) -> Option<Vec<Exclude>> {
     entry
         .exclude_keys
         .iter()
-        .filter_map(|x| match x {
-            ExcludeKey::File { path, pattern } => Some(Exclude {
-                dir: norm(&expand_vars(path, env)?),
-                pattern: Some(Glob::new(pattern, GlobMode::Name, true)),
-            }),
-            ExcludeKey::Path(path) => Some(Exclude { dir: norm(&expand_vars(path, env)?), pattern: None }),
+        .map(|x| match x {
+            ExcludeKey::File { path, pattern } => {
+                Some(Exclude::new(norm(&expand_vars(path, env)?), Some(Glob::new(pattern, GlobMode::Name, true))))
+            }
+            ExcludeKey::Path(path) => Some(Exclude::new(norm(&expand_vars(path, env)?), None)),
         })
         .collect()
 }
 
 fn excluded(path: &Path, name: &str, ex: &[Exclude]) -> bool {
     ex.iter().any(|x| match &x.pattern {
-        None => is_within(Path::new(&x.dir), path),
-        Some(g) => path.parent().is_some_and(|p| path_key(p) == path_key(Path::new(&x.dir))) && g.matches(name),
+        None => x.covers(path),
+        Some(g) => path.parent().is_some_and(|p| x.is_dir(p)) && g.matches(name),
     })
 }
 
@@ -455,6 +510,53 @@ FileKey2=%MISSING%\\x|*.*\r\n";
         assert_eq!(names, vec!["app/cache/a.bin", "app/cache/deep/b.bin", "app/logs/x.log", "whole"]);
         assert!(!hits.iter().find(|h| h.app == "Chrome Cache").unwrap().select, "Default=False");
         assert_eq!(diag.skipped["winapp2_unknown_variable"], 1);
+    }
+
+    #[test]
+    fn rf12_ccleaner_variables_are_derived() {
+        let mut env = HashMap::new();
+        env.insert("USERPROFILE".to_string(), "C:\\Users\\me\\".to_string());
+        env.insert("ProgramData".to_string(), "C:\\ProgramData".to_string());
+        env.insert("Music".to_string(), "D:\\Music".to_string());
+        let env = with_ccleaner_vars(env);
+        assert_eq!(expand_vars("%CommonAppData%\\x", &env).unwrap(), "C:\\ProgramData\\x");
+        assert_eq!(expand_vars("%LocalLowAppData%", &env).unwrap(), "C:\\Users\\me\\AppData\\LocalLow");
+        assert_eq!(expand_vars("%Documents%", &env).unwrap(), "C:\\Users\\me\\Documents");
+        assert_eq!(expand_vars("%Music%", &env).unwrap(), "D:\\Music", "an existing value wins");
+        assert_eq!(expand_vars("%Video%", &env).unwrap(), "C:\\Users\\me\\Videos");
+    }
+
+    /// RF-12: an exclusion that cannot be resolved makes the whole entry skipped (it used
+    /// to vanish and the whole folder was proposed), and a wildcard exclusion folder works.
+    #[test]
+    fn rf12_excludes_fail_closed_and_take_wildcards() {
+        let t = TempDir::new("winapp2_rf12").unwrap();
+        t.write("whole/keep/a.bin", b"1").unwrap();
+        t.write("whole/b.bin", b"2").unwrap();
+        t.write("app/p1/keep/a.bin", b"3").unwrap();
+        t.write("app/p1/cache/b.bin", b"4").unwrap();
+        t.write("app/p2/Saves/s.sav", b"5").unwrap();
+        t.write("app/p2/Saves/s.tmp", b"6").unwrap();
+        let ix = index_of(t.path());
+        let mut env = HashMap::new();
+        env.insert("FIX".into(), t.path().to_string_lossy().into_owned());
+        let names = |hits: &[Hit]| {
+            let mut v: Vec<String> = hits
+                .iter()
+                .map(|h| ix.entry(h.pos).path.strip_prefix(t.path()).unwrap().to_string_lossy().replace('\\', "/"))
+                .collect();
+            v.sort();
+            v
+        };
+        let ini = "[Whole *]\nFileKey1=%FIX%\\whole|*.*|RECURSE|REMOVESELF\nExcludeKey1=PATH|%NOPE%\\x\\\n";
+        let mut diag = Diagnostics::default();
+        let hits = resolve(&ix, &parse(ini), &env, &mut diag);
+        assert!(hits.is_empty(), "{:?}", names(&hits));
+        assert_eq!(diag.skipped["winapp2_unknown_variable"], 1);
+        let ini = "[App *]\nFileKey1=%FIX%\\app|*.*|RECURSE\nExcludeKey1=PATH|%FIX%\\app\\*\\keep\\\nExcludeKey2=FILE|%FIX%\\app\\*\\Saves|*.sav\n";
+        let mut diag = Diagnostics::default();
+        let hits = resolve(&ix, &parse(ini), &env, &mut diag);
+        assert_eq!(names(&hits), vec!["app/p1/cache/b.bin", "app/p2/Saves/s.tmp"]);
     }
 
     #[test]

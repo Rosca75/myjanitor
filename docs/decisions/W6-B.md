@@ -420,3 +420,17 @@ error-report rule, rotated and old logs, the four temp-folder rules, and every w
 mark it an owned tree, and the scan's badger (now per candidate, not per card) badges a
 folder holding a repository `protected`, as on any other card. Caches proper (browser,
 shader, package, thumbnails, Office file cache, Teams) keep the badge and the exemption.
+
+## D-B31 winapp2 exclusions fail closed (RF-12)
+
+An `ExcludeKey` whose variable is unknown used to disappear (`filter_map`), and
+`whole_folder` was decided from the compiled list, so a `RECURSE|REMOVESELF` key proposed
+the entire folder, pre-selected, as if nothing had been excluded; an exclusion folder with
+`*` never matched. Now: an entry with any unresolvable exclusion is skipped whole
+(`winapp2_unknown_variable`); `whole_folder` needs the parsed exclusion list to be empty;
+an exclusion folder with `*` or `?` is a path glob (`PATH`: that folder or anything below
+it; `FILE`: files in a matching folder). CCleaner's own variables (`%CommonAppData%`,
+`%LocalLowAppData%`, `%Documents%`, `%Pictures%`, `%Music%`, `%Video%`) are derived from
+`ProgramData` and `USERPROFILE` when not set, so real rule files resolve instead of being
+skipped. Wildcards in `ExcludeKey` folders are taken as valid syntax from the format as
+commonly written; no published specification was checked.
