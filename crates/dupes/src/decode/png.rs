@@ -4,11 +4,14 @@
 //! depth (1, 2, 4, 8, 16), non-interlaced. Interlaced (Adam7) files are
 //! reported as unsupported (skipped for perceptual matching, still
 //! exact-matched). Alpha is ignored and CRCs are not verified (a corrupt
-//! stream fails inflate or the size checks). Rows are unfiltered one at a time
-//! and fed straight into the grid accumulator, so no full-size grey buffer is
-//! kept. Hardened: chunk lengths are bounds-checked, the inflated size is
+//! stream fails inflate or the size checks). The IDAT stream is inflated one
+//! scanline at a time, unfiltered and fed straight into the grid accumulator, so
+//! memory is O(width): neither the raw image nor a grey buffer is ever kept. Hardened: chunk lengths are bounds-checked, the inflated size is
 //! limited to exactly what the header implies, and dimensions are checked
 //! against [`super::within_limits`] before inflating.
+
+use miniz_oxide::inflate::stream::{inflate, InflateState};
+use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 
 use super::{luma16, within_limits, DecodeError, Decoded};
 use crate::perceptual::{dhash, phash, GridAccumulator};
@@ -75,9 +78,10 @@ pub fn decode(buf: &[u8]) -> Result<Decoded, DecodeError> {
     let row_bytes = (w * bits_per_pixel).div_ceil(8);
     let expected = (row_bytes + 1).checked_mul(h).ok_or(DecodeError::TooLarge)?;
 
-    // Collect IDAT and PLTE.
+    // Locate the IDAT chunks (no copy) and the palette.
     let mut pos = 8usize;
-    let mut idat = Vec::new();
+    let mut idat: Vec<&[u8]> = Vec::new();
+    let mut idat_len = 0usize;
     let mut palette: Vec<[u8; 3]> = Vec::new();
     loop {
         let len = buf.get(pos..pos + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
@@ -87,10 +91,11 @@ pub fn decode(buf: &[u8]) -> Result<Decoded, DecodeError> {
         let data = buf.get(pos + 8..data_end).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
         match typ {
             b"IDAT" => {
-                if idat.len() + data.len() > expected.saturating_mul(2) + 1024 * 1024 {
+                idat_len += data.len();
+                if idat_len > expected.saturating_mul(2) + 1024 * 1024 {
                     return Err(DecodeError::Corrupt("IDAT larger than the image".into()));
                 }
-                idat.extend_from_slice(data);
+                idat.push(data);
             }
             b"PLTE" => palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
             b"IEND" => break,
@@ -101,24 +106,50 @@ pub fn decode(buf: &[u8]) -> Result<Decoded, DecodeError> {
     if hdr.color_type == 3 && palette.is_empty() {
         return Err(DecodeError::Corrupt("palette image without PLTE".into()));
     }
-    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected)
-        .map_err(|e| DecodeError::Corrupt(format!("inflate: {:?}", e.status)))?;
-    if raw.len() < expected {
-        return Err(DecodeError::Corrupt("image data truncated".into()));
-    }
 
+    // DUP-5: inflate one scanline at a time and unfilter it against the previous one,
+    // so memory is O(width) however large the raw image is (it was the whole raw
+    // image, 8 bytes a pixel for RGBA16, from a file that compresses ~1000:1).
     let bpp = bits_per_pixel.div_ceil(8).max(1);
     let mut prev = vec![0u8; row_bytes];
-    let mut cur = vec![0u8; row_bytes];
+    let mut line = vec![0u8; row_bytes + 1];
     let mut gray = vec![0u8; w];
     let mut acc = GridAccumulator::new(w, h);
-    for y in 0..h {
-        let line = &raw[y * (row_bytes + 1)..(y + 1) * (row_bytes + 1)];
-        cur.copy_from_slice(&line[1..]);
-        unfilter(line[0], &mut cur, &prev, bpp)?;
-        row_to_gray(&hdr, channels, &cur, &palette, &mut gray);
-        acc.push_row(&gray);
-        std::mem::swap(&mut prev, &mut cur);
+    let mut state = InflateState::new_boxed(DataFormat::Zlib);
+    let (mut filled, mut y, mut ended) = (0usize, 0usize, false);
+    let mut chunks = idat.into_iter();
+    let mut input: &[u8] = chunks.next().unwrap_or(&[]);
+    while y < h && !ended {
+        let r = inflate(&mut state, input, &mut line[filled..], MZFlush::None);
+        input = &input[r.bytes_consumed..];
+        filled += r.bytes_written;
+        if filled == line.len() {
+            let (filter, cur) = line.split_at_mut(1);
+            unfilter(filter[0], cur, &prev, bpp)?;
+            row_to_gray(&hdr, channels, cur, &palette, &mut gray);
+            acc.push_row(&gray);
+            prev.copy_from_slice(cur);
+            filled = 0;
+            y += 1;
+        }
+        match r.status {
+            Ok(MZStatus::StreamEnd) => ended = true,
+            Ok(_) | Err(MZError::Buf) => {}
+            Err(e) => return Err(DecodeError::Corrupt(format!("inflate: {e:?}"))),
+        }
+        if r.bytes_consumed == 0 && r.bytes_written == 0 {
+            if !input.is_empty() {
+                return Err(DecodeError::Corrupt("inflate made no progress".into()));
+            }
+            // Everything buffered is out: feed the next chunk, or stop.
+            match chunks.next() {
+                Some(c) => input = c,
+                None => break,
+            }
+        }
+    }
+    if y < h {
+        return Err(DecodeError::Corrupt("image data truncated".into()));
     }
     let g = acc.finish();
     Ok(Decoded { width: hdr.width, height: hdr.height, dhash: dhash(&g.g9), phash: phash(&g.g32) })
@@ -252,6 +283,45 @@ mod tests {
 
     fn scene(w: usize, h: usize) -> Vec<u8> {
         (0..w * h).map(|i| (((i % w) * 255 / w) as u8) ^ (((i / w) * 7) as u8 & 0x30)).collect()
+    }
+
+    /// Re-chunk the IDAT stream of `file` into pieces of `n` bytes.
+    fn split_idat(file: &[u8], n: usize) -> Vec<u8> {
+        let mut pos = 8;
+        let (mut head, mut z, mut tail) = (file[..8].to_vec(), Vec::new(), Vec::new());
+        while pos + 8 <= file.len() {
+            let len = u32::from_be_bytes(file[pos..pos + 4].try_into().unwrap()) as usize;
+            let chunk = &file[pos..pos + 12 + len];
+            match &file[pos + 4..pos + 8] {
+                b"IDAT" => z.extend_from_slice(&chunk[8..8 + len]),
+                _ if z.is_empty() => head.extend_from_slice(chunk),
+                _ => tail.extend_from_slice(chunk),
+            }
+            pos += 12 + len;
+        }
+        for part in z.chunks(n) {
+            head.extend_from_slice(&(part.len() as u32).to_be_bytes());
+            head.extend_from_slice(b"IDAT");
+            head.extend_from_slice(part);
+            head.extend_from_slice(&[0; 4]);
+        }
+        head.extend_from_slice(&tail);
+        head
+    }
+
+    #[test]
+    fn idat_split_anywhere_decodes_the_same() {
+        let (w, h) = (70, 50);
+        let g = scene(w, h);
+        let file = encode(w as u32, h as u32, 1, &g, true);
+        let whole = decode(&file).unwrap();
+        for n in [1, 7, 100, 4096] {
+            assert_eq!(decode(&split_idat(&file, n)).unwrap(), whole, "chunks of {n}");
+        }
+        // A stream cut short is corrupt, never a panic or a hang.
+        let cut = split_idat(&file, 7);
+        let short: Vec<u8> = cut[..cut.len() / 2].to_vec();
+        assert!(matches!(decode(&short), Err(DecodeError::Corrupt(_))));
     }
 
     #[test]

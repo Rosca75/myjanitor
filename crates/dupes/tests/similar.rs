@@ -294,3 +294,14 @@ fn flat_images_of_different_colours_never_match_in_any_mode() {
         assert_eq!(out.diagnostics.skipped.get("flat_image"), Some(&3), "mode {mode}");
     }
 }
+
+#[test]
+fn a_thumbnail_decode_is_bounded_before_any_pixel() {
+    // DUP-5: an EXIF "thumbnail" declaring a huge frame is refused from its header
+    // (EXIF thumbnails are 160x120), the main picture is decoded instead.
+    let a = fixture("scene_a_q92.jpg");
+    assert_eq!(decode::jpeg_limited(a, 320 * 240 - 1), Err(decode::DecodeError::TooLarge));
+    assert!(decode::jpeg_limited(a, 320 * 240).is_ok());
+    const { assert!(320 * 240 <= mj_dupes::similar_images::MAX_THUMBNAIL_PIXELS) };
+    const { assert!(8000 * 8000 > mj_dupes::similar_images::MAX_THUMBNAIL_PIXELS) };
+}

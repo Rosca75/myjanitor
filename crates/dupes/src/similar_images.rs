@@ -53,6 +53,8 @@ pub const THUMB_WINDOW: u64 = 1024 * 1024;
 pub const MAX_FULL_READ: u64 = 64 * 1024 * 1024;
 /// Images above this many pixels decode one or two at a time (memory bound).
 pub const BIG_IMAGE_PIXELS: u64 = 16_000_000;
+/// Files above this size are read and decoded one or two at a time (memory bound).
+pub const BIG_FILE_BYTES: u64 = 16 * 1024 * 1024;
 /// Largest EXIF thumbnail decoded (EXIF thumbnails are 160x120 by the
 /// standard): a bigger "thumbnail" is ignored and the image decoded in full.
 pub const MAX_THUMBNAIL_PIXELS: u64 = 1024 * 1024;
@@ -466,9 +468,13 @@ fn fingerprint_file(
         if h.interlaced {
             return Ok(Outcome::Skipped(skip::UNSUPPORTED, None));
         }
-        let data = if e.size as usize == head.len() { head } else { read_whole(e)? };
-        let big = h.width as u64 * h.height as u64 > BIG_IMAGE_PIXELS;
-        let r = if big { gate.run(|| png::decode(&data)) } else { png::decode(&data) };
+        // The decode itself keeps O(width) memory (DUP-5): only a big file is gated,
+        // for the bytes read into memory.
+        let run = || -> std::result::Result<_, ReadError> {
+            let data = if e.size as usize == head.len() { head } else { read_whole(e)? };
+            Ok(png::decode(&data))
+        };
+        let r = if e.size > BIG_FILE_BYTES { gate.run(run)? } else { run()? };
         return Ok(match r {
             Ok(d) => hashed(d, None, None, None, false),
             Err(err) => failed(&err, Some(h.width), Some(h.height), None),
@@ -528,10 +534,14 @@ fn fingerprint_file(
             return Ok(Outcome::Skipped(skip::TOO_LARGE, None));
         }
     }
-    let data = if e.size as usize == head.len() { head } else { read_whole(e)? };
-    // A frame header outside the window gives no size: decode it as a big one (DUP-5).
-    let big = w.zip(h).is_none_or(|(a, b)| a as u64 * b as u64 > BIG_IMAGE_PIXELS);
-    let r = if big { gate.run(|| decode::jpeg(&data)) } else { decode::jpeg(&data) };
+    // A frame header outside the window gives no size: decode it as a big one, and
+    // a big file is read inside the gate too (DUP-5).
+    let big = e.size > BIG_FILE_BYTES || w.zip(h).is_none_or(|(a, b)| a as u64 * b as u64 > BIG_IMAGE_PIXELS);
+    let run = || -> std::result::Result<_, ReadError> {
+        let data = if e.size as usize == head.len() { head } else { read_whole(e)? };
+        Ok(decode::jpeg(&data))
+    };
+    let r = if big { gate.run(run)? } else { run()? };
     Ok(match r {
         Ok(d) => hashed(d, w, h, exif_summary, false),
         Err(err) => failed(&err, w, h, exif_summary),
