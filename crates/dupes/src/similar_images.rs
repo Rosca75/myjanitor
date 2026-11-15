@@ -193,7 +193,7 @@ impl Detector for SimilarImages {
         let (owners, flat, clusters) = loop {
             let (items, owners, flat) = usable_items(&fps, mode);
             ctx.cancel.checkpoint()?;
-            let clusters = perceptual::group(&items, mode, radius);
+            let clusters = perceptual::group_cancellable(&items, mode, radius, ctx.cancel)?;
             let mut pending: Vec<usize> = clusters
                 .iter()
                 .flat_map(|c| c.members.iter().map(|&m| owners[m]))

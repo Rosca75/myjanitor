@@ -13,6 +13,8 @@
 
 use std::sync::OnceLock;
 
+use mj_core::{CancelToken, Result};
+
 /// dHash grid: 9 columns x 8 rows.
 pub const DHASH_COLS: usize = 9;
 pub const DHASH_ROWS: usize = 8;
@@ -20,6 +22,10 @@ pub const DHASH_ROWS: usize = 8;
 pub const PHASH_SIZE: usize = 32;
 /// Candidate sets larger than this take their first member as leader (avoids O(n^3)).
 pub const LEADER_SCAN_LIMIT: usize = 256;
+/// Clusters up to this size get their exact diameter (O(m²) distances); a larger one
+/// reports the bound `2t` (every member is within `t` of the leader), which only ever
+/// lowers the confidence and so never adds a pre-selection (DUP-8).
+pub const DIAMETER_EXACT_LIMIT: usize = 2048;
 
 /// Box-averages greyscale rows into the 9x8 and 32x32 grids in one pass.
 /// Feed `height` rows of `width` luma bytes with [`GridAccumulator::push_row`].
@@ -406,6 +412,16 @@ impl Cluster {
 /// Group `items` (given in sorted path order, so index order is deterministic).
 /// Unusable items (a zero hash for the mode) never participate.
 pub fn group(items: &[Fp], mode: MatchMode, radius: HammingBits) -> Vec<Cluster> {
+    group_cancellable(items, mode, radius, &CancelToken::new()).unwrap_or_default()
+}
+
+/// [`group`], checking `cancel` for every item searched and every leader (DUP-8).
+pub fn group_cancellable(
+    items: &[Fp],
+    mode: MatchMode,
+    radius: HammingBits,
+    cancel: &CancelToken,
+) -> Result<Vec<Cluster>> {
     let t = radius.0;
     let usable: Vec<usize> = (0..items.len()).filter(|&i| mode.usable(items[i])).collect();
     let mut tree = BkTree::new();
@@ -415,6 +431,7 @@ pub fn group(items: &[Fp], mode: MatchMode, radius: HammingBits) -> Vec<Cluster>
     let mut uf = UnionFind::new(items.len());
     let mut found = Vec::new();
     for &i in &usable {
+        cancel.checkpoint()?;
         tree.search(mode.key(items[i]), t, &mut found);
         for &j in &found {
             if j != i && mode.distance(items[i], items[j]) <= t {
@@ -429,17 +446,25 @@ pub fn group(items: &[Fp], mode: MatchMode, radius: HammingBits) -> Vec<Cluster>
     }
     let mut out = Vec::new();
     for set in sets.into_values().filter(|s| s.len() >= 2) {
-        refine(items, mode, t, set, &mut out);
+        refine(items, mode, t, set, &mut out, cancel)?;
     }
     out.sort_by(|a, b| b.members.len().cmp(&a.members.len()).then(a.members[0].cmp(&b.members[0])));
-    out
+    Ok(out)
 }
 
 /// Leader refinement of one candidate set (research §5.4).
-fn refine(items: &[Fp], mode: MatchMode, t: u32, mut remaining: Vec<usize>, out: &mut Vec<Cluster>) {
+fn refine(
+    items: &[Fp],
+    mode: MatchMode,
+    t: u32,
+    mut remaining: Vec<usize>,
+    out: &mut Vec<Cluster>,
+    cancel: &CancelToken,
+) -> Result<()> {
     remaining.sort_unstable();
     let dist = |a: usize, b: usize| mode.distance(items[a], items[b]);
     while remaining.len() >= 2 {
+        cancel.checkpoint()?;
         let leader = if remaining.len() > LEADER_SCAN_LIMIT {
             remaining[0]
         } else {
@@ -453,20 +478,26 @@ fn refine(items: &[Fp], mode: MatchMode, t: u32, mut remaining: Vec<usize>, out:
             }
             best.1
         };
-        let mut members = vec![leader];
-        members.extend(remaining.iter().copied().filter(|&p| p != leader && dist(leader, p) <= t));
-        members.sort_unstable();
-        remaining.retain(|p| !members.contains(p));
+        // One pass splits `remaining` (sorted) into the leader's members (sorted) and the rest.
+        let (members, rest): (Vec<usize>, Vec<usize>) =
+            remaining.iter().partition(|&&p| p == leader || dist(leader, p) <= t);
+        remaining = rest;
         if members.len() >= 2 {
-            let mut diameter = 0;
-            for (i, &a) in members.iter().enumerate() {
-                for &b in &members[i + 1..] {
-                    diameter = diameter.max(dist(a, b));
+            let diameter = if members.len() > DIAMETER_EXACT_LIMIT {
+                2 * t
+            } else {
+                let mut d = 0;
+                for (i, &a) in members.iter().enumerate() {
+                    for &b in &members[i + 1..] {
+                        d = d.max(dist(a, b));
+                    }
                 }
-            }
+                d
+            };
             out.push(Cluster { members, diameter });
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -618,6 +649,27 @@ mod tests {
         let b = Fp { dhash: b.dhash | 1 << 50, ..b };
         assert_eq!(group(&[a, b], MatchMode::DHash, HammingBits(6)).len(), 1);
         assert!(group(&[a, b], MatchMode::Both, HammingBits(6)).is_empty());
+    }
+
+    /// DUP-8: a huge near-identical set (time-lapse frames) is refined in near-linear
+    /// time, its diameter is the 2t bound past [`DIAMETER_EXACT_LIMIT`] members, and a
+    /// cancelled scan stops the grouping.
+    #[test]
+    fn huge_sets_are_bounded_and_cancellable() {
+        let n = DIAMETER_EXACT_LIMIT + 500;
+        let items: Vec<Fp> = (0..n).map(|i| fp((1 << 62) | (1 << 40) | (i as u64 & 0x3))).collect();
+        let cancel = CancelToken::new();
+        let g = group_cancellable(&items, MatchMode::DHash, HammingBits(2), &cancel).unwrap();
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].members.len(), n);
+        assert_eq!(g[0].diameter, 4, "upper bound 2t, never an underestimate");
+        let small = &items[..100];
+        assert_eq!(group(small, MatchMode::DHash, HammingBits(2))[0].diameter, 2, "exact below the limit");
+        cancel.cancel();
+        assert!(matches!(
+            group_cancellable(&items, MatchMode::DHash, HammingBits(2), &cancel),
+            Err(mj_core::Error::Cancelled)
+        ));
     }
 
     #[test]
