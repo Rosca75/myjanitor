@@ -55,9 +55,18 @@ pub fn seven_zip_test_args(archive: &Path) -> Vec<OsString> {
     vec!["t".into(), "-bd".into(), "-y".into(), "--".into(), path_arg(archive)]
 }
 
-/// `7z l -slt` (technical listing with CRCs).
+/// `7z l -slt` (technical listing with CRCs). On Windows 7-Zip writes its console output
+/// in the OEM code page, which turns `résumé 日本.txt` into another name and the archive
+/// into "file missing": `-sccUTF-8` asks for UTF-8 (elsewhere the output follows the
+/// locale, and older p7zip builds do not know the switch).
 pub fn seven_zip_list_args(archive: &Path) -> Vec<OsString> {
-    vec!["l".into(), "-slt".into(), "-bd".into(), "-scsUTF-8".into(), "--".into(), path_arg(archive)]
+    let mut a: Vec<OsString> = vec!["l".into(), "-slt".into(), "-bd".into(), "-scsUTF-8".into()];
+    if cfg!(windows) {
+        a.push("-sccUTF-8".into());
+    }
+    a.push("--".into());
+    a.push(path_arg(archive));
+    a
 }
 
 /// `7z e -so` of one entry.

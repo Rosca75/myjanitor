@@ -102,6 +102,10 @@ fn scan_plan_dry_run_apply_and_undo_restore_the_tree() {
     for kept in
         ["photos/a.bin", "contracts/signed.pdf", "downloads/signed.pdf", "proj/package.json", "photos/link-to-a"]
     {
+        // The fixture link is made on Unix only (see `standard_tree`).
+        if kept.ends_with("link-to-a") && !cfg!(unix) {
+            continue;
+        }
         assert!(exists(&f.tree.join(kept)), "{kept} removed");
     }
     // Items went to the test's quarantine (Trash route), never to the real Trash.

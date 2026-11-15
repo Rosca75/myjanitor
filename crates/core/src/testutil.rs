@@ -102,6 +102,9 @@ pub fn dir_links(target: &Path, link: &Path) -> io::Result<Vec<PathBuf>> {
             Err(e) if e.raw_os_error() == Some(1314) => {}
             Err(e) => return Err(e),
         }
+        // `cmd`'s `mklink` takes backslashes only.
+        let bs = |p: &Path| PathBuf::from(p.to_string_lossy().replace('/', "\\"));
+        let (target, link) = (bs(target), bs(link));
         let mut j = link.as_os_str().to_os_string();
         j.push("-junction");
         let j = PathBuf::from(j);
@@ -110,7 +113,7 @@ pub fn dir_links(target: &Path, link: &Path) -> io::Result<Vec<PathBuf>> {
             .arg("mklink")
             .arg("/J")
             .arg(&j)
-            .arg(target)
+            .arg(&target)
             .stdout(std::process::Stdio::null())
             .status()?;
         if !st.success() || fs::symlink_metadata(&j).is_err() {

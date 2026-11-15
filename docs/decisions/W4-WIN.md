@@ -67,3 +67,11 @@ the handle was still open and the file stayed behind. The handle is now dropped 
 - The scan's fast index (MFT) is legitimately used on an elevated Windows runner, and a
   whole-volume read can outlast the 2 s cache trust window: the tests assert the Linux
   expectation only on Linux, and re-write the "fresh" file right before the second scan.
+
+## D-W7 7-Zip listings are read as UTF-8 on Windows (product bug)
+
+7-Zip for Windows writes `7z l` output in the OEM code page, so a stored
+`résumé 日本.txt` was listed under another name and verification reported it missing.
+The listing asks for UTF-8 with `-sccUTF-8` on Windows only (elsewhere the output follows
+the locale, and older p7zip builds do not know the switch). The archive itself was
+correct; only the check read it wrongly, and it failed safe (the original was kept).
