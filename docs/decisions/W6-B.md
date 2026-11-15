@@ -329,3 +329,15 @@ prune under it), and the scan fails with that error when no walked root remains.
 really deleted is pruned at the next scan, when it is no longer listed at all. Chosen over
 counting every vanished entry as unreadable, which would make ordinary temp-file churn
 show up as errors.
+
+## D-B24 Settings > Scanning are the session scope's options (SCAN-5)
+
+The app scans the session scope, whose `options` were `ScanOptions::default()` forever:
+the four Scanning switches (fast index, scan cache, hidden files, one drive per location)
+changed `settings.scan` and nothing read it except the CLI. The engine now owns the link:
+the scope's options are copied from `settings.scan` at start-up (and for a launch-path
+scope) and again whenever `settings_set` changes that section. An explicit `scope_set`
+(CLI `--no-cache`, a schedule's scope) still replaces them for its scan, until the next
+change of the setting. With the cache off, detectors get no fingerprint store either, so
+"off" means hashes are neither reused nor stored. The `threads` fallback in `run_scan` is
+unchanged.

@@ -277,6 +277,10 @@ impl Engine {
         self.apply_side_effects(&old, &s)?;
         self.save_settings(&s)?;
         *lock(&self.settings) = s.clone();
+        if old.scan != s.scan {
+            // SCAN-5: the next scan from the app follows Settings > Scanning.
+            lock(&self.scope).options = s.scan.clone();
+        }
         Ok(s)
     }
 

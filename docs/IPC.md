@@ -99,7 +99,10 @@ scope is already that path and the UI opens the Optimise or Clean view; nothing 
 scanned or applied automatically.
 
 ### `scope_get`
-No request → `ScanScope`. The session scope (scope chips).
+No request → `ScanScope`. The session scope (scope chips). Its `options` are
+Settings > Scanning (`settings.scan`): copied at start-up and whenever
+`settings_set` changes that section; a `scope_set` replaces them until then.
+With `use_cache` off, detectors neither reuse nor store fingerprints either.
 
 ### `scope_set`
 `ScopeSetRequest` → `ScanScope`. Roots must be absolute; nested roots collapse

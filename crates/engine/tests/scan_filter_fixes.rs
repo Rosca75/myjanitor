@@ -81,3 +81,28 @@ fn rf1_custom_search_never_takes_a_folder_on_file_conditions() {
     assert_eq!(r.len(), 1);
     assert!(r[0].candidate.default_selected);
 }
+
+/// SCAN-5: Settings > Scanning reaches scans started from the app (no explicit scope).
+#[test]
+fn scan5_scanning_settings_apply_to_app_scans() {
+    let t = TempDir::new("scan5").unwrap();
+    t.write("a.txt", b"a").unwrap();
+    t.write(".hidden/x.txt", b"x").unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    assert_eq!(scan(e).stats.unwrap().files, 2);
+    let mut s = e.settings_get().unwrap();
+    s.scan.include_hidden = false;
+    s.scan.use_cache = false;
+    e.settings_set(SettingsSetRequest { settings: s }).unwrap();
+    assert!(!e.scope_get().unwrap().options.include_hidden);
+    let st = scan(e).stats.unwrap();
+    assert_eq!(st.files, 1, "hidden files are left out");
+    assert_eq!((st.cache_hits, st.cache_misses), (0, 0), "the cache is not used");
+    // Adding a location keeps the options; a new engine on the same data starts with them.
+    e.scope_add_root(ScopePathRequest { path: f.app.path().to_path_buf() }).unwrap();
+    assert!(!e.scope_get().unwrap().options.include_hidden);
+    let again = mj_engine::Engine::new(config(&f.app, std::sync::Arc::new(TimedSink::default()))).unwrap();
+    let o = again.scope_get().unwrap().options;
+    assert!(!o.include_hidden && !o.use_cache);
+}

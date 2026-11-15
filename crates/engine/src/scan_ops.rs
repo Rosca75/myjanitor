@@ -345,6 +345,10 @@ impl Engine {
         cancel: &CancelToken,
     ) -> Result<OpportunityRecord> {
         let settings = lock(&self.settings).clone();
+        // SCAN-5: with the scan cache turned off, detectors neither reuse nor store hashes.
+        let no_cache = mj_core::NoFingerprintStore;
+        let fingerprints: &dyn mj_core::FingerprintStore =
+            if lock(&self.scope).options.use_cache { &self.cache } else { &no_cache };
         if let Availability::Disabled { reason } = &card.availability {
             return Ok(disabled_record(self, card.clone(), reason.clone()));
         }
@@ -354,7 +358,7 @@ impl Engine {
             index,
             params: &full,
             now: Timestamp::now(),
-            fingerprints: &self.cache,
+            fingerprints,
             cancel,
             progress: &NullProgress,
             threads: settings.performance.threads as usize,

@@ -191,6 +191,9 @@ impl Engine {
             cfg,
         };
         engine.load_state();
+        // SCAN-5: Settings > Scanning are the session scope's options (an explicit
+        // `scope_set` from the CLI or a schedule still replaces them for its own scan).
+        mj_core::lock(&engine.scope).options = mj_core::lock(&engine.settings).scan.clone();
         // Recovery settles dangling intents; only the process holding the lock may do it
         // (another live process's intents are in flight, not dangling).
         if engine.instance_error.is_none() {
@@ -203,7 +206,8 @@ impl Engine {
         }
         if let Some(l) = engine.cfg.launch.clone() {
             // Preselect the scope only; an invalid path is dropped (the app opens normally).
-            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], ..mj_core::ScanScope::default() };
+            let options = mj_core::lock(&engine.settings).scan.clone();
+            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], options, ..mj_core::ScanScope::default() };
             let exists = std::fs::symlink_metadata(&l.path).is_ok();
             if !exists || engine.scope_set(crate::api::ScopeSetRequest { scope }).is_err() {
                 let mut e = engine;
