@@ -327,7 +327,17 @@ impl Engine {
     /// choice is reported at once (the guard checks it again, per item, before acting):
     /// absolute, not protected (also in its canonical spelling), not one of MyJanitor's
     /// folders, and not inside a scanned location.
-    pub(crate) fn check_action_destination(&self, action: &Action) -> Result<()> {
+    /// ACT-9: a quarantine retention is checked here too, against the same bounds as the
+    /// `quarantine_days` setting (0 days would be a permanent delete classed reversible).
+    pub(crate) fn check_action(&self, action: &Action) -> Result<()> {
+        if let Action::Quarantine { purge_after_days } = action {
+            if !(1..=crate::settings::MAX_DAYS).contains(purge_after_days) {
+                return Err(Error::InvalidInput(format!(
+                    "a quarantine keeps items 1 to {} days, not {purge_after_days}",
+                    crate::settings::MAX_DAYS
+                )));
+            }
+        }
         let (Action::Move { dest, .. } | Action::Copy { dest, .. }) = action else { return Ok(()) };
         if !dest.is_absolute() {
             return Err(Error::InvalidInput(format!("the destination must be an absolute folder: {}", dest.display())));
@@ -370,7 +380,7 @@ impl Engine {
         if !matches!(action, Action::None) && !o.available_actions.contains(&action.kind()) {
             return Err(Error::InvalidInput(format!("{title} cannot use the action `{:?}`", action.kind())));
         }
-        self.check_action_destination(&action)?;
+        self.check_action(&action)?;
         // One source of truth for an optimiser's parameters: the step's. Values given inside
         // the action win over the card's, then the request's `params` win over both; the
         // action carries the merged set so the optimiser really runs with what the user chose.
@@ -427,7 +437,7 @@ impl Engine {
             }
         }
         if let Some(a) = &req.action {
-            self.check_action_destination(a)?;
+            self.check_action(a)?;
         }
         {
             let mut st = lock(&self.plan);

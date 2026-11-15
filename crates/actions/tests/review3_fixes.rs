@@ -216,3 +216,18 @@ fn act11_link_replacement_rechecks_the_kept_copy() {
     let err = out.errors[0].error.as_ref().unwrap();
     assert!(err.message.contains("kept copy changed"), "{err:?}");
 }
+
+/// ACT-9: a quarantine with a retention of 0 days would be a permanent delete without the
+/// confirmation one needs; the action layer holds the item for at least one day.
+#[test]
+fn act9_zero_retention_quarantine_is_held_at_least_a_day() {
+    let f = Fixture::new("act9");
+    let p = f.write("a.txt", b"keep me a while");
+    let (run, out) = f.apply(&[f.item(&p, Action::Quarantine { purge_after_days: 0 })], &opts());
+    assert_eq!(out.succeeded, 1, "{out:?}");
+    let now = mj_core::Timestamp::now();
+    mj_actions::quarantine::purge_expired(&f.journal, &f.qdir, now.add_days(0), 30).unwrap();
+    let held = mj_actions::quarantine::held_entries(&f.journal, &f.qdir);
+    assert_eq!(held.len(), 1, "purged at once");
+    assert_eq!(f.journal.entries_of(run)[0].retention_days, Some(1));
+}

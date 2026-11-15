@@ -618,6 +618,10 @@ fn quarantine_item(
     kept: Option<&mj_core::FileEntry>,
 ) -> Result<ItemOutcome> {
     e.action = ActionKind::Quarantine;
+    // ACT-9: a retention of 0 days would make this an unconfirmed permanent delete (the
+    // automatic purge runs right after the step); this layer does not trust its caller, so
+    // an item is held at least one day, like the `quarantine_days` setting's lower bound.
+    let days = days.max(1);
     // F-15: the purge honours this item's own retention.
     e.retention_days = Some(days);
     let plan = match retain::plan(
