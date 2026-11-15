@@ -481,7 +481,7 @@ pub fn write_export_replacing(
         d.with_file_name(format!(".{name}.{}-{n}.mjtmp", std::process::id()))
     })?;
     let (bytes, rows) = fill(&tmp, file, write)?;
-    if let Err(e) = std::fs::rename(&tmp, dest) {
+    if let Err(e) = crate::fsops::rename_replacing(&tmp, dest) {
         let _ = std::fs::remove_file(&tmp);
         return Err(Error::io(dest, e));
     }

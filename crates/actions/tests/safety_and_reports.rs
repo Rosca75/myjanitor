@@ -252,6 +252,32 @@ fn audit_and_report_from_a_real_run_and_exports_never_overwrite() {
 
 /// W6-A D-6A4: the replacing export is for a target the user confirmed in the OS save
 /// dialog. It replaces a regular file atomically and nothing else.
+/// A replace the user confirmed must also work over a read-only file (Windows refuses a
+/// plain rename over one; the Windows CI job runs this for real).
+#[test]
+fn replacing_export_replaces_a_read_only_file() {
+    let t = mj_core::testutil::TempDir::new("export-replace-ro").unwrap();
+    let dest = t.join("report.csv");
+    std::fs::write(&dest, b"old").unwrap();
+    let mut perms = std::fs::metadata(&dest).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&dest, perms).unwrap();
+    let r = report::write_export_replacing(&dest, |w| {
+        w.write_all(b"new export")?;
+        Ok(1)
+    });
+    let (written, bytes, _) = r.expect("a confirmed replace of a read-only export succeeds");
+    assert_eq!((written.as_path(), bytes), (dest.as_path(), 10));
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new export");
+    let entries = std::fs::read_dir(t.path()).unwrap().count();
+    assert_eq!(entries, 1, "no temporary file stays behind");
+    // Let the temp dir clean up on every platform.
+    let mut perms = std::fs::metadata(&dest).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    let _ = std::fs::set_permissions(&dest, perms);
+}
+
 #[test]
 fn replacing_export_swaps_a_regular_file_and_nothing_else() {
     let t = mj_core::testutil::TempDir::new("export-replace").unwrap();
