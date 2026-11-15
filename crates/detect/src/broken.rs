@@ -1,6 +1,8 @@
 //! Broken / corrupted files (CLN-DET-08) by cheap structural checks only: a handful of bytes at the
 //! head and tail of each file (PNG signature and IEND, JPEG SOI/EOI, PDF header and `%%EOF`, ZIP
-//! end-of-central-directory) plus a streaming-free gzip completeness check (see `inflate`).
+//! end-of-central-directory) plus a streaming-free gzip completeness check (see `inflate`), and for
+//! audio: WAV/RIFF size consistency, FLAC magic + STREAMINFO, MP3 frame sync after any ID3v2 tag,
+//! Ogg page magic (the in-house media prober then has to read the container's header too).
 //!
 //! These are heuristics for *obvious* damage (truncated downloads, interrupted copies). A file that
 //! passes is not proven healthy, and everything flagged is review-only and never pre-selected.
@@ -33,7 +35,7 @@ pub enum Check {
     Failed,
 }
 
-/// Broken files: Damaged images, documents and archives
+/// Broken files: Damaged images, documents, archives and audio
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BrokenFiles;
 
@@ -42,7 +44,7 @@ impl Detector for BrokenFiles {
         DetectorInfo {
             id: DetectorId::BrokenFiles,
             title: "Broken files".into(),
-            description: "Damaged images, documents and archives".into(),
+            description: "Damaged images, documents, archives and audio".into(),
             category: Category::Clean,
             safety: SafetyClass::ReviewOnly,
             default_action: ActionKind::None,
@@ -104,6 +106,10 @@ pub enum Kind {
     Pdf,
     Zip,
     Gzip,
+    Wav,
+    Flac,
+    Mp3,
+    Ogg,
 }
 
 impl Kind {
@@ -117,6 +123,10 @@ impl Kind {
                 Kind::Zip
             }
             "gz" | "tgz" => Kind::Gzip,
+            "wav" => Kind::Wav,
+            "flac" => Kind::Flac,
+            "mp3" => Kind::Mp3,
+            "ogg" | "oga" | "opus" => Kind::Ogg,
             _ => return None,
         })
     }
@@ -128,6 +138,10 @@ impl Kind {
             Kind::Pdf => "PDF document",
             Kind::Zip => "ZIP archive",
             Kind::Gzip => "gzip archive",
+            Kind::Wav => "WAV audio",
+            Kind::Flac => "FLAC audio",
+            Kind::Mp3 => "MP3 audio",
+            Kind::Ogg => "Ogg audio",
         }
     }
 }
@@ -213,6 +227,63 @@ fn check_io(path: &Path, size: u64, kind: Kind, max_gz: u64) -> std::io::Result<
                 GzipVerdict::Broken(why) => Check::Broken(format!("gzip archive is truncated or corrupt: {why}")),
             });
         }
+        Kind::Wav | Kind::Flac | Kind::Mp3 | Kind::Ogg => return check_audio(path, size, kind),
+    }
+    Ok(Check::Healthy)
+}
+
+/// CLN-DET-08 audio: obvious truncation or a wrong signature, from at most a few KiB.
+fn check_audio(path: &Path, size: u64, kind: Kind) -> std::io::Result<Check> {
+    let broken = |s: &str| Ok(Check::Broken(s.to_string()));
+    let head = fsio::read_head(path, 64)?;
+    match kind {
+        Kind::Wav => {
+            if head.len() < 12 || &head[..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+                return broken("Not a valid WAV file: the RIFF/WAVE header is missing");
+            }
+            let riff = u64::from(u32::from_le_bytes([head[4], head[5], head[6], head[7]]));
+            // 0 and 0xFFFFFFFF are used by streaming writers (size unknown): not judged.
+            if riff != 0 && riff != 0xFFFF_FFFF && riff + 8 > size {
+                return broken("WAV file is shorter than its header says; the recording is cut short");
+            }
+        }
+        Kind::Flac => {
+            if head.len() < 8 || &head[..4] != b"fLaC" {
+                return broken("Not a valid FLAC file: the fLaC signature is missing");
+            }
+            let len = u32::from_be_bytes([0, head[5], head[6], head[7]]);
+            if head[4] & 0x7f != 0 || len != 34 {
+                return broken("FLAC file has no STREAMINFO block; it is damaged");
+            }
+            if size < 8 + 34 {
+                return broken("FLAC file is cut short inside its STREAMINFO block");
+            }
+        }
+        Kind::Mp3 => {
+            let mut at = 0u64;
+            if head.len() >= 10 && &head[..3] == b"ID3" {
+                let syncsafe = |b: &[u8]| b.iter().fold(0u64, |a, &x| (a << 7) | u64::from(x & 0x7f));
+                at = 10 + syncsafe(&head[6..10]) + if head[5] & 0x10 != 0 { 10 } else { 0 };
+                if at >= size {
+                    return broken("MP3 file ends inside its ID3 tag; there is no audio");
+                }
+            }
+            let mut f = std::fs::File::open(path)?;
+            let b = fsio::read_at(&mut f, at, 4)?;
+            if b.len() < 4 || b[0] != 0xff || b[1] & 0xe0 != 0xe0 {
+                return broken("MP3 file has no audio frame where it should start; it is damaged");
+            }
+        }
+        Kind::Ogg => {
+            if head.len() < 27 || &head[..4] != b"OggS" {
+                return broken("Not a valid Ogg file: the OggS page signature is missing");
+            }
+        }
+        _ => {}
+    }
+    // The in-house prober reads the container's own header (format chunk, stream headers).
+    if mj_formats::media::probe(path).is_err() {
+        return broken("The audio container's header cannot be read; the file is damaged");
     }
     Ok(Check::Healthy)
 }
@@ -286,6 +357,30 @@ mod tests {
         assert_eq!(out.diagnostics.skipped["encrypted_or_legacy_office"], 1);
         let gz = out.candidates.iter().find(|c| c.path.ends_with("cut.gz")).unwrap();
         assert_eq!(gz.columns["type"], "gzip archive");
+    }
+
+    #[test]
+    fn cln_det_08_audio_structural_checks() {
+        use mj_formats::media::build;
+        let t = TempDir::new("broken-audio").unwrap();
+        let wav = build::wav(8000, 1, 1, None);
+        t.write("good.wav", &wav).unwrap();
+        t.write("cut.wav", &wav[..wav.len() / 2]).unwrap();
+        let flac = build::build_flac(44100, 2, 16, 1000, Some("t"), 0);
+        t.write("good.flac", &flac).unwrap();
+        let mut bad = flac.clone();
+        bad[4] = 4; // first block is not STREAMINFO
+        t.write("nostream.flac", &bad).unwrap();
+        let mp3 = build::build_mp3(Some("t"), 100, 4, 9);
+        t.write("good.mp3", &mp3).unwrap();
+        let id3_len = 10 + mp3[6..10].iter().fold(0usize, |a, &x| (a << 7) | usize::from(x & 0x7f));
+        t.write("tagonly.mp3", &mp3[..id3_len.min(mp3.len())]).unwrap();
+        let ogg = build::build_opus(2, 48000, 0);
+        t.write("good.opus", &ogg).unwrap();
+        t.write("junk.ogg", b"definitely not an ogg stream, just text here").unwrap();
+        let out = run(&BrokenFiles, &index_of(t.path()), &Default::default());
+        assert_eq!(rel(&out, t.path()), vec!["cut.wav", "junk.ogg", "nostream.flac", "tagonly.mp3"]);
+        assert!(out.candidates.iter().all(|c| !c.default_selected));
     }
 
     #[test]
