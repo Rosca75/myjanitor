@@ -54,6 +54,7 @@ pub mod size;
 pub mod testutil;
 pub mod time;
 pub mod tools;
+pub mod users;
 
 pub use action::{
     Action, ActionItem, ActionKind, ArchiveFormat, FsCompressAlgo, KeepCopy, OriginalsPolicy, OutputMode,

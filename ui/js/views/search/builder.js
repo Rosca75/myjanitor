@@ -46,7 +46,7 @@ function valueEditor(n, path, s, actions) {
         const next = st === 'any' ? 'set' : st === 'set' ? 'clear' : 'any';
         return h('button', { type: 'button', class: ['attr', `attr--${st}`], 'data-state': st, 'aria-label': `${copy.search.attrs[a]}: ${copy.search.attrStates[st]}`, title: copy.search.attrHelp, 'data-fk': key(path, `attr-${a}`), on: { click: () => set({ attrs: { ...n.attrs, [a]: next === 'any' ? undefined : next } }) } }, `${copy.search.attrs[a]} `, h('span', { class: 'attr__state' }, copy.search.attrStates[st]));
       }));
-    case 'owner': return input('text', n, path, 'value', copy.search.ownerLabel, actions, { placeholder: 'uid:1000' });
+    case 'owner': return input('text', n, path, 'value', copy.search.ownerLabel, actions, { placeholder: 'alice or uid:1000' });
     case 'depth': case 'path_length': return [cmpSel(copy.search.numCmps), input('number', n, path, 'value', copy.search.valueLabel, actions, { min: '0', step: '1' })];
     case 'kind': return select({ label: copy.search.valueLabel, value: n.kind_value, options: opts(ENTRY_KINDS, copy.search.kinds), fk: key(path, 'kind'), onChange: (v) => set({ kind_value: v }) });
     case 'content_contains':

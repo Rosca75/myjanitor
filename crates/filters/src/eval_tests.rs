@@ -135,6 +135,13 @@ fn owner_depth_path_length_kind_and_invalid_names() {
     assert!(matches(&cond(Condition::Owner { value: "alice".into() }), &e));
     assert!(!matches(&cond(Condition::Owner { value: "bob".into() }), &e));
     assert!(!matches(&cond(Condition::Owner { value: "alice".into() }), &file("/r/x", 1)), "no owner never matches");
+    // CLN-FLT-06: a numeric Linux owner matches its user name from /etc/passwd.
+    if let Some(root) = mj_core::users::name_of_uid(0) {
+        let mut r = file("/r/y", 1);
+        r.owner = Some("uid:0".into());
+        assert!(matches(&cond(Condition::Owner { value: root.to_uppercase() }), &r));
+        assert!(matches(&cond(Condition::Owner { value: "uid:0".into() }), &r));
+    }
     assert!(matches(&cond(Condition::Depth { cmp: Cmp::Ge, value: 3 }), &e));
     assert!(!matches(&cond(Condition::Depth { cmp: Cmp::Gt, value: 3 }), &e));
     assert!(matches(&cond(Condition::PathLength { cmp: Cmp::Eq, value: 12 }), &e));
