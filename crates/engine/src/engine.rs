@@ -143,6 +143,9 @@ impl Engine {
                 std::fs::create_dir_all(d).map_err(|e| mj_core::Error::io(d, e))?;
             }
         }
+        if cfg.persist {
+            mj_core::diag::init(&cfg.data_dir); // XC-3: panic hook and the log file
+        }
         // F-13: one acting process per data folder (GUI, CLI and scheduled runs alike).
         let (instance, instance_error) = if cfg.persist {
             match crate::instance::acquire(&cfg.data_dir) {
@@ -258,6 +261,13 @@ impl Engine {
     }
 
     /// Emit an event (never while holding a lock).
+    /// One line in the data folder's log (XC-3); nothing when the engine does not persist.
+    pub(crate) fn log(&self, level: &str, message: &str) {
+        if self.cfg.persist {
+            mj_core::diag::LogFile::in_dir(&self.cfg.data_dir).log(level, message);
+        }
+    }
+
     pub(crate) fn emit(&self, event: Event) {
         self.cfg.events.emit(&event);
     }

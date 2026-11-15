@@ -26,6 +26,7 @@ pub mod badge;
 pub mod cancel;
 pub mod candidate;
 pub mod detector;
+pub mod diag;
 pub mod entry;
 pub mod error;
 pub mod estimate;

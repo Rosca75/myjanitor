@@ -189,9 +189,10 @@ impl Engine {
             me.emit(Event::JobProgress(ev));
         });
         let ctx = JobCtx { job_id: id, cancel: &token, progress: &progress };
-        let result = catch_unwind(AssertUnwindSafe(|| work(self, &ctx))).unwrap_or_else(|_| JobResult {
-            error: Some(Error::Internal("the job stopped unexpectedly".into())),
-            ..Default::default()
+        let result = catch_unwind(AssertUnwindSafe(|| work(self, &ctx))).unwrap_or_else(|p| {
+            let text = mj_core::diag::panic_text(&*p);
+            self.log("ERROR", &format!("job {} stopped unexpectedly: {text}", id.0));
+            JobResult { error: Some(Error::Internal(format!("the job stopped unexpectedly: {text}"))), ..Default::default() }
         });
         let job = {
             let mut st = lock(&self.jobs);

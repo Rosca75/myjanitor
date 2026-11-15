@@ -190,10 +190,16 @@ fn a_panicking_detector_becomes_a_disabled_card_and_the_scan_survives() {
     let list = fx.engine.opportunities_list(OpportunitiesRequest::default()).unwrap();
     let card = list.items.iter().find(|o| o.id.0 == "det:temp_files").expect("card listed");
     match &card.availability {
-        Availability::Disabled { reason } => assert!(reason.contains("failed"), "{reason}"),
+        Availability::Disabled { reason } => {
+            // XC-3: the card says which analysis failed and why.
+            assert!(reason.contains("failed") && reason.contains("det:temp_files") && reason.contains("detector bug"), "{reason}");
+        }
         a => panic!("{a:?}"),
     }
     assert!(list.items.iter().any(|o| o.id.0 == "opt:video" && o.availability.is_available()));
+    // ... and the log file in the data folder keeps the payload for a bug report.
+    let log = std::fs::read_to_string(fx._app.join("data").join(mj_core::diag::LOG_NAME)).unwrap();
+    assert!(log.contains("ERROR") && log.contains("det:temp_files") && log.contains("detector bug"), "{log}");
 }
 
 #[test]

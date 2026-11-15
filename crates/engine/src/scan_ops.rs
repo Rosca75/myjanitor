@@ -304,8 +304,11 @@ impl Engine {
             }
             Ok(Err(Error::Cancelled)) => (ScanRunState::Cancelled, None, None),
             Ok(Err(e)) => (ScanRunState::Failed, Some(e.info()), None),
-            Err(_) => {
-                (ScanRunState::Failed, Some(Error::Internal("the scan stopped unexpectedly".into()).info()), None)
+            Err(p) => {
+                let text = mj_core::diag::panic_text(&*p);
+                self.log("ERROR", &format!("scan {generation} stopped unexpectedly: {text}"));
+                let e = Error::Internal(format!("the scan stopped unexpectedly: {text}"));
+                (ScanRunState::Failed, Some(e.info()), None)
             }
         };
         let status = {
@@ -378,7 +381,12 @@ impl Engine {
                 return Ok(disabled_record(self, card, e.to_string()))
             }
             Ok(Err(e)) => return Ok(disabled_record(self, card, format!("The analysis failed: {e}"))),
-            Err(_) => return Ok(disabled_record(self, card, "The analysis failed (internal error)".into())),
+            Err(p) => {
+                let text = mj_core::diag::panic_text(&*p);
+                self.log("ERROR", &format!("analysis {} panicked: {text}", card.id.0));
+                let reason = format!("The analysis failed (internal error in {}: {text})", card.id.0);
+                return Ok(disabled_record(self, card, reason));
+            }
         };
         let owned = card.safety == mj_core::SafetyClass::Rebuildable;
         let badges = self.badger(index, &output, owned, cancel);
