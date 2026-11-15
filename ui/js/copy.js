@@ -189,6 +189,7 @@ export const copy = {
     summary: (saved, files) => `${saved} reclaimed from ${files} ${plural(files, 'file')}.`,
     errors: (n) => `${n} ${plural(n, 'item')} could not be changed. The report lists them.`,
     undo: 'Undo',
+    undoNone: 'Nothing in this run can be undone',
     report: 'View report',
     dismiss: 'Dismiss',
     undoHint: 'Everything is logged. You can restore it from History.',

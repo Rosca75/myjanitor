@@ -219,8 +219,10 @@ test('job queue: per-job progress, current file, errors, summary with Undo and V
   await env.click(env.$('[data-fk="queue-report"]'));
   assert.equal(last(env, 'report_get').run_id, s.completed.run_id);
   await env.click(env.$('[data-fk="report-close"]'));
+  const runId = s.completed.run_id;
   await env.click(env.$('[data-fk="queue-undo"]'));
-  assert.equal(env.sent('undo_last').length, 1);
+  assert.equal(env.sent('undo_last').length, 0); // UI-2: that run, not the newest undoable one
+  assert.deepEqual(last(env, 'undo_run'), { run_id: runId });
 });
 
 test('job queue: reorder queued jobs sends jobs_reorder with the new order; cancel sends job_cancel', async () => {

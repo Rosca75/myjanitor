@@ -408,7 +408,7 @@ test('Undo last action sends undo_last once a run exists', async () => {
   assert.ok(env.$('[data-fk="undo-last"]').disabled);
 });
 
-test('Undo on the completed summary sends undo_last; View report sends report_get', async () => {
+test('Undo on the completed summary sends undo_run for that run; View report sends report_get', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
   await env.click(env.byText('button', 'Apply plan  ·  25.1 GB'));
@@ -420,7 +420,8 @@ test('Undo on the completed summary sends undo_last; View report sends report_ge
   await env.click(env.$('[data-fk="report-close"]'));
   assert.equal(env.$('[role="dialog"]'), null);
   await env.click(env.$('[data-fk="done-undo"]'));
-  assert.equal(env.sent('undo_last').length, 1);
+  assert.equal(env.sent('undo_last').length, 0);
+  assert.deepEqual(last(env, 'undo_run'), { run_id: runId });
   assert.equal(env.$('[data-role="completed"]'), null);
 });
 

@@ -127,6 +127,18 @@ export const findOpp = (s, id) => s.opps.items.find((o) => o.id === id) ?? null;
 /** @param {any} s */
 export const hasResults = (s) => s.scan.state !== 'scanning' && (s.opps.generation > 0 || s.opps.items.length > 0 || !!s.opps.scanned_at);
 
+/**
+ * Can the run that just finished (`s.completed`) be undone? (UI-2) The history list says so
+ * once it is refreshed (history://changed follows every run); until then, a run that changed
+ * no file has nothing to undo. @param {any} s
+ */
+export function completedUndoable(s) {
+  const c = s.completed;
+  if (!c) return false;
+  const run = s.history.runs.find((r) => r.run_id === c.run_id);
+  return run ? !!run.undoable : c.files > 0;
+}
+
 /** @param {any} s */
 export const isScanning = (s) => ['scanning', 'paused', 'stopping'].includes(s.scan.state);
 

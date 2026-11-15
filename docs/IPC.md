@@ -80,7 +80,7 @@ CLI does not have them; the mock backend answers them with a stand-in (§7).
 | B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `candidate_thumbnails`, `results_export`, `dialog_pick_folder` (move/copy destination, preferred folder), `dialog_save_file` | |
 | Confirmation dialog | `plan_confirmation_info`, `plan_apply` | |
 | Action running | `jobs_list`, `job_pause`, `job_resume`, `job_cancel`, `jobs_reorder` | `job://progress`, `job://state`, `job://done` |
-| Completed | `report_last`, `report_get`, `report_export`, `dialog_save_file`, `undo_last` | `history://changed` |
+| Completed | `report_last`, `report_get`, `report_export`, `dialog_save_file`, `undo_run` (Undo on the finished run), `undo_last` (strip) | `history://changed` |
 | History | `history_list`, `history_run_detail`, `undo_run`, `restore_entries`, `quarantine_info`, `quarantine_purge` | `history://changed` |
 | Custom search | `search_parse`, `search_suggest`, `search_run`, `presets_list`, `preset_save`, `preset_delete` | |
 | Settings drawer | `settings_get`, `settings_set`, `protected_paths_get`, `protected_paths_set`, `cache_info`, `cache_clear`, `schedules_list`, `schedule_save`, `schedule_delete`, `schedule_run_now`, `tools_refresh` | |
@@ -447,13 +447,14 @@ says so and disables Restore for them before the user clicks.
 ```
 
 ### `undo_last`
-No request → `Job` (`kind: "undo"`). *Spawns.* "Undo last action": undoes every
+No request → `Job` (`kind: "undo"`). *Spawns.* The strip's "Undo last action": undoes every
 undoable entry of the newest run that has one. Undo jobs run in the same queue
 as apply jobs, in their own undo run (`job.run_id` is set when it starts). `invalid_input` when nothing
 can be undone.
 
 ### `undo_run`
-`RunRequest` → `Job`. *Spawns.* History → Restore for a whole run.
+`RunRequest` → `Job`. *Spawns.* History → Restore for a whole run, and "Undo" on the
+summary of a run that just finished (that run, never another one).
 
 ```json RunRequest
 {"run_id":1794582245123}
