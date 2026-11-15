@@ -8,13 +8,19 @@
 //!    twice (the exact detector reports the copies).
 //! 3. Fingerprints come from the cache, else from the pixels, cheapest first:
 //!    the EXIF embedded thumbnail found in a bounded 128 KiB header window
-//!    (widened to 1 MiB when the IFD points just past it), then, when allowed
+//!    (widened to 1 MiB when the IFD points just past it; only a thumbnail
+//!    inside the APP1 segment, at most [`MAX_THUMBNAIL_PIXELS`], with the main
+//!    frame's shape), then, when allowed
 //!    (`decode_full`, on by default, D-2B04), a full decode bounded by
 //!    [`MAX_FULL_READ`] bytes and `decode::MAX_PIXELS`. Both fingerprints are
 //!    always computed and cached with the dimensions, the EXIF summary (only
 //!    when really read) and the source flag; the match mode is applied only
 //!    when grouping.
-//! 4. Files that yield no fingerprint are counted in `Diagnostics::skipped`
+//! 4. A thumbnail fingerprint is a hint, never a verdict (DUP-1): every
+//!    thumbnail-sourced image that would join a group is decoded in full and
+//!    the grouping redone. A group whose member could not be checked that way
+//!    is shown with nothing selected.
+//! 5. Files that yield no fingerprint are counted in `Diagnostics::skipped`
 //!    (`no_thumbnail`, `decode_failed`, `too_large`, `unsupported`,
 //!    `flat_image`): they stay exact-matched only, and the UI says so.
 
@@ -47,6 +53,9 @@ pub const THUMB_WINDOW: u64 = 1024 * 1024;
 pub const MAX_FULL_READ: u64 = 64 * 1024 * 1024;
 /// Images above this many pixels decode one or two at a time (memory bound).
 pub const BIG_IMAGE_PIXELS: u64 = 16_000_000;
+/// Largest EXIF thumbnail decoded (EXIF thumbnails are 160x120 by the
+/// standard): a bigger "thumbnail" is ignored and the image decoded in full.
+pub const MAX_THUMBNAIL_PIXELS: u64 = 1024 * 1024;
 /// Groups whose diameter is at most this many bits are pre-selected (re-saves,
 /// resizes); wider groups are shown for review with nothing selected (D-2B05).
 pub const PRESELECT_MAX_DIAMETER: u32 = 3;
@@ -170,22 +179,50 @@ impl Detector for SimilarImages {
         let images: Vec<&FileEntry> =
             images.iter().enumerate().filter(|(i, _)| !copies.contains(i)).map(|(_, e)| *e).collect();
 
-        let fps = fingerprint_all(ctx, &images, decode_full, &mut diag)?;
-        let mut items = Vec::new();
-        let mut owners = Vec::new();
-        for (i, fp) in fps.iter().enumerate() {
-            if let Some(f) = fp {
-                let p = Fp { dhash: f.dhash.unwrap_or(0), phash: f.phash.unwrap_or(0) };
-                if mode.usable(p) {
-                    items.push(p);
-                    owners.push(i);
-                } else {
-                    diag.skip(skip::FLAT);
+        let mut fps = fingerprint_all(ctx, &images, decode_full, &mut diag)?;
+        let gate = Gate::new(2);
+        // A thumbnail fingerprint is only a hint (DUP-1): an editor that copies EXIF
+        // verbatim leaves the old picture's thumbnail in a retouched file. Every
+        // thumbnail-sourced image that would join a group is decoded in full and the
+        // grouping is redone, until no unchecked thumbnail is part of a group. An
+        // image whose main picture cannot be decoded keeps its thumbnail
+        // fingerprint, but its group is never pre-selected.
+        let mut unchecked: HashSet<usize> = HashSet::new();
+        let (owners, flat, clusters) = loop {
+            let (items, owners, flat) = usable_items(&fps, mode);
+            ctx.cancel.checkpoint()?;
+            let clusters = perceptual::group(&items, mode, radius);
+            let mut pending: Vec<usize> = clusters
+                .iter()
+                .flat_map(|c| c.members.iter().map(|&m| owners[m]))
+                .filter(|&i| from_thumbnail(&fps[i]) && !unchecked.contains(&i))
+                .collect();
+            if pending.is_empty() {
+                break (owners, flat, clusters);
+            }
+            pending.sort_unstable();
+            let results =
+                staged::read_all(ctx, &pending, &images, &mut diag, |e| fingerprint_file(e, true, false, &gate))?;
+            for (&i, r) in pending.iter().zip(results) {
+                match r {
+                    Ok(Outcome::Hashed(mut fp)) => {
+                        fp.flags |= FingerprintFlags::MAIN_DECODED;
+                        ctx.fingerprints.put(&images[i].path, images[i].stamp(), fp.clone());
+                        fps[i] = Some(fp);
+                    }
+                    Ok(Outcome::Skipped(..)) => {
+                        unchecked.insert(i);
+                    }
+                    Err(err) => {
+                        staged::report(&mut diag, &images[i].path, &err);
+                        unchecked.insert(i);
+                    }
                 }
             }
+        };
+        for _ in 0..flat {
+            diag.skip(skip::FLAT);
         }
-        ctx.cancel.checkpoint()?;
-        let clusters = perceptual::group(&items, mode, radius);
 
         let mut out = DetectorOutput::default();
         for (n, c) in clusters.iter().enumerate() {
@@ -211,8 +248,10 @@ impl Detector for SimilarImages {
                     m
                 })
                 .collect();
+            // Only fingerprints of the decoded main pictures justify a pre-selection.
+            let checked = idx.iter().all(|&i| !from_thumbnail(&fps[i]));
             let selection =
-                if c.diameter <= PRESELECT_MAX_DIAMETER { Selection::AllButKeeper } else { Selection::None };
+                if c.diameter <= PRESELECT_MAX_DIAMETER && checked { Selection::AllButKeeper } else { Selection::None };
             let others = members.len() - 1;
             keep::emit(
                 GroupSpec {
@@ -240,6 +279,29 @@ impl Detector for SimilarImages {
     }
 }
 
+/// Fingerprints usable in `mode`, their owners (indices into `fps`) and how many were flat.
+fn usable_items(fps: &[Option<Fingerprints>], mode: MatchMode) -> (Vec<Fp>, Vec<usize>, usize) {
+    let (mut items, mut owners, mut flat) = (Vec::new(), Vec::new(), 0);
+    for (i, fp) in fps.iter().enumerate() {
+        if let Some(f) = fp {
+            let p = Fp { dhash: f.dhash.unwrap_or(0), phash: f.phash.unwrap_or(0) };
+            if mode.usable(p) {
+                items.push(p);
+                owners.push(i);
+            } else {
+                flat += 1;
+            }
+        }
+    }
+    (items, owners, flat)
+}
+
+fn from_thumbnail(fp: &Option<Fingerprints>) -> bool {
+    fp.as_ref().is_some_and(|f| {
+        f.flags.contains(FingerprintFlags::FROM_THUMBNAIL) && !f.flags.contains(FingerprintFlags::MAIN_DECODED)
+    })
+}
+
 /// Fingerprints for every image (cache first), `None` when skipped or unreadable.
 pub fn fingerprint_all(
     ctx: &DetectContext<'_>,
@@ -261,7 +323,7 @@ pub fn fingerprint_all(
         }
     }
     let gate = Gate::new(2);
-    let results = staged::read_all(ctx, &need, images, diag, |e| fingerprint_file(e, decode_full, &gate))?;
+    let results = staged::read_all(ctx, &need, images, diag, |e| fingerprint_file(e, decode_full, true, &gate))?;
     for (&i, r) in need.iter().zip(results) {
         let e = images[i];
         match r {
@@ -374,8 +436,26 @@ fn failed(e: &DecodeError, w: Option<u32>, h: Option<u32>, exif: Option<ExifSumm
     }
 }
 
-/// Fingerprint one image file (bounded reads; full decode only when allowed and within limits).
-fn fingerprint_file(e: &FileEntry, decode_full: bool, gate: &Gate) -> std::result::Result<Outcome, ReadError> {
+/// True when a `tw x th` thumbnail has the main frame's shape (within 3 %). A
+/// crop, a lossless rotation or a padded thumbnail fails, and the image is then
+/// decoded in full instead (DUP-1).
+pub fn same_shape(tw: u32, th: u32, w: u32, h: u32) -> bool {
+    if tw == 0 || th == 0 || w == 0 || h == 0 {
+        return false;
+    }
+    let (a, b) = (tw as u64 * h as u64, th as u64 * w as u64);
+    a.abs_diff(b) * 100 <= a.max(b) * 3
+}
+
+/// Fingerprint one image file (bounded reads; full decode only when allowed and
+/// within limits). `use_thumbnail` false skips the EXIF thumbnail (the check of
+/// a thumbnail match).
+fn fingerprint_file(
+    e: &FileEntry,
+    decode_full: bool,
+    use_thumbnail: bool,
+    gate: &Gate,
+) -> std::result::Result<Outcome, ReadError> {
     let mut f = staged::open_checked(&e.path, e.size)?;
     let mut head = read_prefix(&mut f, HEADER_WINDOW)?;
     if png::is_png(&head) {
@@ -398,17 +478,17 @@ fn fingerprint_file(e: &FileEntry, decode_full: bool, gate: &Gate) -> std::resul
     let (w, h) = hdr.frame.map(|fr| (Some(fr.width as u32), Some(fr.height as u32))).unwrap_or((None, None));
 
     // EXIF from the bytes already in memory; widen once if the thumbnail lies just past the window.
-    let mut parsed = hdr.exif.clone().and_then(|r| head.get(r.clone()).map(|t| (r.start, exif::parse(t).ok())));
-    if let Some((start, Some(x))) = &parsed {
+    let mut parsed = hdr.exif.clone().and_then(|r| head.get(r.clone()).map(|t| (r, exif::parse(t).ok())));
+    if let Some((r, Some(x))) = &parsed {
         if let Some(t) = x.thumbnail {
-            let end = start + t.offset + t.len;
+            let end = r.start + t.offset + t.len;
             if end > head.len() && (end as u64) <= THUMB_WINDOW && head.len() as u64 == HEADER_WINDOW {
                 drop(f);
                 let mut f2 = File::open(&e.path)?;
                 head = read_prefix(&mut f2, THUMB_WINDOW)?;
                 parsed = jpeg::walk(&head)
                     .and_then(|h2| h2.exif)
-                    .and_then(|r| head.get(r.clone()).map(|t| (r.start, exif::parse(t).ok())));
+                    .and_then(|r| head.get(r.clone()).map(|t| (r, exif::parse(t).ok())));
             }
         }
     }
@@ -418,11 +498,14 @@ fn fingerprint_file(e: &FileEntry, decode_full: bool, gate: &Gate) -> std::resul
         None if hdr.reached_scan => Some(ExifSummary::default()),
         _ => None,
     };
-    if let Some((start, Some(x))) = &parsed {
-        if let Some(thumb) = head.get(*start..).and_then(|tiff| x.thumbnail_bytes(tiff)) {
-            if let Ok(d) = decode::jpeg(thumb) {
-                if d.dhash != 0 {
-                    return Ok(hashed(d, w.or(x.width), h.or(x.height), exif_summary, true));
+    if let (true, Some((r, Some(x)))) = (use_thumbnail, &parsed) {
+        // Only a thumbnail inside the APP1 segment belongs to this EXIF block.
+        if let Some(thumb) = head.get(r.clone()).and_then(|tiff| x.thumbnail_bytes(tiff)) {
+            if let Ok(d) = decode::jpeg_limited(thumb, MAX_THUMBNAIL_PIXELS) {
+                let (fw, fh) = (w.or(x.width), h.or(x.height));
+                let shape_ok = fw.zip(fh).is_some_and(|(fw, fh)| same_shape(d.width, d.height, fw, fh));
+                if d.dhash != 0 && shape_ok {
+                    return Ok(hashed(d, fw, fh, exif_summary, true));
                 }
             }
         }
@@ -446,10 +529,26 @@ fn fingerprint_file(e: &FileEntry, decode_full: bool, gate: &Gate) -> std::resul
         }
     }
     let data = if e.size as usize == head.len() { head } else { read_whole(e)? };
-    let big = w.zip(h).is_some_and(|(a, b)| a as u64 * b as u64 > BIG_IMAGE_PIXELS);
+    // A frame header outside the window gives no size: decode it as a big one (DUP-5).
+    let big = w.zip(h).is_none_or(|(a, b)| a as u64 * b as u64 > BIG_IMAGE_PIXELS);
     let r = if big { gate.run(|| decode::jpeg(&data)) } else { decode::jpeg(&data) };
     Ok(match r {
         Ok(d) => hashed(d, w, h, exif_summary, false),
         Err(err) => failed(&err, w, h, exif_summary),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::same_shape;
+
+    #[test]
+    fn thumbnail_shape_check() {
+        assert!(same_shape(160, 120, 4000, 3000));
+        assert!(same_shape(160, 107, 6000, 4000), "rounding of a 3:2 thumbnail");
+        assert!(!same_shape(160, 120, 6000, 4000), "padded 4:3 thumbnail of a 3:2 photo");
+        assert!(!same_shape(160, 120, 3000, 4000), "lossless rotation that kept the old thumbnail");
+        assert!(!same_shape(160, 120, 3000, 3000), "square crop");
+        assert!(!same_shape(0, 120, 3000, 3000));
+    }
 }

@@ -51,6 +51,13 @@ pub fn within_limits(w: u32, h: u32) -> bool {
 
 /// Decode a JPEG (whole file or embedded thumbnail) to luma and fingerprint it.
 pub fn jpeg(bytes: &[u8]) -> Result<Decoded, DecodeError> {
+    jpeg_limited(bytes, MAX_PIXELS)
+}
+
+/// [`jpeg`] refusing frames over `max_pixels` (checked from the frame header,
+/// before any pixel is decoded): an embedded thumbnail is bounded far tighter
+/// than a main picture.
+pub fn jpeg_limited(bytes: &[u8], max_pixels: u64) -> Result<Decoded, DecodeError> {
     let opts = DecoderOptions::default()
         .jpeg_set_out_colorspace(ColorSpace::Luma)
         .set_max_width(MAX_SIDE as usize)
@@ -60,7 +67,7 @@ pub fn jpeg(bytes: &[u8]) -> Result<Decoded, DecodeError> {
     d.decode_headers().map_err(|e| DecodeError::Corrupt(format!("{e:?}")))?;
     let info = d.info().ok_or_else(|| DecodeError::Corrupt("no frame header".into()))?;
     let (w, h) = (info.width as u32, info.height as u32);
-    if !within_limits(w, h) {
+    if !within_limits(w, h) || w as u64 * h as u64 > max_pixels {
         return Err(DecodeError::TooLarge);
     }
     let px = d.decode().map_err(|e| DecodeError::Corrupt(format!("{e:?}")))?;
