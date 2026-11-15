@@ -233,6 +233,7 @@ fn reverse(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
                 return Ok(());
             }
             verify_copy(e, copy)?;
+            original_still_holds_the_copy(e, copy)?;
             fsops::remove_item(copy)?;
             fsops::remove_empty_dirs(&e.created[1..]);
             Ok(())
@@ -274,6 +275,30 @@ fn verify_copy(e: &JournalEntry, copy: &Path) -> Result<()> {
                 e.original.display()
             )));
         }
+    }
+    Ok(())
+}
+
+/// ACT-4: undoing a copy deletes it permanently, so a file copy goes only while its
+/// original is still there with the same content; otherwise the copy may be the last one.
+/// (A folder copy is compared with the current original by [`verify_copy`] already.)
+fn original_still_holds_the_copy(e: &JournalEntry, copy: &Path) -> Result<()> {
+    if !std::fs::symlink_metadata(copy).is_ok_and(|m| m.is_file()) {
+        return Ok(());
+    }
+    let kept = |why: &str| {
+        Error::Conflict(format!(
+            "{} {why}; the copy at {} was kept because it may be the only one",
+            e.original.display(),
+            copy.display()
+        ))
+    };
+    if !std::fs::symlink_metadata(&e.original).is_ok_and(|m| m.is_file()) {
+        return Err(kept("is no longer there"));
+    }
+    let (a, b) = (fsops::hash_file(&e.original)?, fsops::hash_file(copy)?);
+    if a.sha256 != b.sha256 {
+        return Err(kept("changed since the copy"));
     }
     Ok(())
 }

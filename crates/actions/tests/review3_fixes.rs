@@ -76,3 +76,29 @@ fn act1_archive_is_removed_when_the_sources_are_untouched() {
     assert!(!f.root().join("proj.zip").exists());
     assert_eq!(snapshot(&dir), before);
 }
+
+/// ACT-4: undoing a file copy whose original is gone (or changed) keeps the copy: it may be
+/// the only one left.
+#[test]
+fn act4_undo_of_a_copy_keeps_it_when_the_original_is_gone() {
+    let f = Fixture::new("act4");
+    let a = f.write("a.txt", b"only data");
+    let b = f.write("b.txt", b"still here");
+    let c = f.write("c.txt", b"will change");
+    let dest = f.t.join("backup");
+    let items: Vec<_> =
+        [&a, &b, &c].iter().map(|p| f.item(p, Action::Copy { dest: dest.clone(), keep_structure: false })).collect();
+    let (run, out) = f.apply(&items, &opts());
+    assert_eq!(out.succeeded, 3, "{out:?}");
+    std::fs::remove_file(&a).unwrap();
+    std::fs::write(&c, b"changed later").unwrap();
+    let undo = f.undo_run(run);
+    assert_eq!(undo.succeeded, 1, "{undo:?}");
+    assert_eq!(undo.errors.len(), 2, "{undo:?}");
+    for e in &undo.errors {
+        assert_eq!(e.error.as_ref().unwrap().code, "conflict", "{e:?}");
+    }
+    assert_eq!(std::fs::read(dest.join("a.txt")).unwrap(), b"only data");
+    assert_eq!(std::fs::read(dest.join("c.txt")).unwrap(), b"will change");
+    assert!(!dest.join("b.txt").exists(), "a copy of an unchanged original is still removed");
+}
