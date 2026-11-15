@@ -26,7 +26,14 @@ export function createStore(initial) {
       const changed = Object.keys(p).filter((k) => !Object.is(/** @type {any} */ (state)[k], /** @type {any} */ (p)[k]));
       if (!changed.length) return;
       state = { ...state, ...p };
-      for (const s of [...subs]) if (!s.keys || s.keys.some((k) => changed.includes(k))) s.fn(state, changed);
+      // UI-11: one failing region never stops the others from showing the new state; the
+      // first error still reaches the caller.
+      let failure = null;
+      for (const s of [...subs]) {
+        if (s.keys && !s.keys.some((k) => changed.includes(k))) continue;
+        try { s.fn(state, changed); } catch (e) { failure ??= { e }; }
+      }
+      if (failure) throw failure.e;
     },
     /**
      * @param {(s: T, changed: string[]) => void} fn

@@ -186,3 +186,84 @@ test('Clean: "+ Add" turns the card into an in-plan card at once, and a rescan r
   await env.settle();
   assert.ok(env.sent('opportunities_list').some((c) => c.req.tab === 'clean'), 'the Clean list is read again');
 });
+
+// ---------------------------------------------------------------- UI-9 the text box being typed in survives
+
+test('typing in "Filter these results" keeps the very same input element focused', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const box = env.$('[data-fk="filter-input"]');
+  box.focus();
+  env.clearCalls();
+  box.setValue('one');
+  await env.settle();
+  assert.equal(last(env, 'candidates_page').filter, 'one');
+  assert.ok(env.doc.activeElement === box, 'the focused node is the one typed in');
+  assert.ok(env.root.contains(box), 'and it is in the document');
+  assert.ok(env.$('[data-fk="filter-input"]') === box, 'the only filter box');
+  box.setValue('');
+  await env.settle();
+  assert.equal(last(env, 'candidates_page').filter, undefined, 'the kept box sends with the new handlers');
+  assert.ok(env.doc.activeElement === box);
+});
+
+test('the Custom-search box keeps its node while its attributes follow the state', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  env.actions.navigate('clean');
+  await env.settle();
+  const box = env.$('[data-fk="custom-query"]');
+  box.focus();
+  box.setValue('si');
+  await env.settle();
+  assert.ok(env.doc.activeElement === box);
+  assert.equal(box.getAttribute('aria-expanded'), 'true', 'the suggestions are announced on the kept box');
+  assert.ok(env.$('#query-suggestions'), 'the list next to it is the new one');
+});
+
+test('input events of an IME composition send nothing until the composition ends', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const box = env.$('[data-fk="filter-input"]');
+  box.focus();
+  env.clearCalls();
+  box.dispatchEvent({ type: 'compositionstart' });
+  box.value = 'o';
+  box.dispatchEvent({ type: 'input', isComposing: true });
+  await env.settle();
+  assert.equal(env.sent('candidates_page').length, 0);
+  box.value = 'one';
+  box.dispatchEvent({ type: 'compositionend' });
+  await env.settle();
+  assert.equal(last(env, 'candidates_page').filter, 'one');
+  assert.ok(env.doc.activeElement === box);
+});
+
+// ---------------------------------------------------------------- UI-11 focus keys are not CSS
+
+test('focus survives a re-render for keys with backslashes and quotes', async () => {
+  const { installFakeDom } = await import('./testing/fakedom.js');
+  const { h, replaceKeepingFocus } = await import('./dom.js');
+  const doc = installFakeDom();
+  const host = h('div', {});
+  doc.body.append(host);
+  for (const key of ['rm-C:\\Users\\Michel', 'rm-/home/u/My "Stuff"', "x-it's ]"]) {
+    const view = () => h('div', {}, h('button', { 'data-fk': 'other' }, 'o'), h('button', { 'data-fk': key }, 'x'));
+    replaceKeepingFocus(host, view());
+    host.querySelectorAll('button')[1].focus();
+    replaceKeepingFocus(host, view());
+    assert.equal(doc.activeElement.getAttribute('data-fk'), key);
+    assert.ok(host.contains(doc.activeElement));
+  }
+});
+
+test('one failing subscriber does not stop the others, and the error still surfaces', async () => {
+  const { createStore } = await import('./state.js');
+  const store = createStore({ a: 0 });
+  const seen = [];
+  store.subscribe(() => { throw new Error('boom'); });
+  store.subscribe((s) => seen.push(s.a));
+  assert.throws(() => store.set({ a: 1 }), /boom/);
+  assert.deepEqual(seen, [1]);
+});

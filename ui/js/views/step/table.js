@@ -10,7 +10,7 @@
  * column and "Keep groups together": the engine then orders, filters and pages
  * whole groups and every group gets a header row with its totals.
  */
-import { h, icon, fk } from '../../dom.js';
+import { h, icon, fk, typing } from '../../dom.js';
 import { copy } from '../../copy.js';
 import { basename, dirname, formatBytes, displayPath, middleEllipsis, formatCount } from '../../format.js';
 import { button, checkbox, select } from '../../components/controls.js';
@@ -151,7 +151,7 @@ export function renderTable(st, ops, o = {}) {
   return h('div', { class: 'tablewrap' },
     h('div', { class: 'table-tools' },
       h('label', { class: 'filter' }, h('span', { class: 'filter__label' }, copy.search.filterLabel),
-        h('input', { type: 'search', class: 'input', value: st.filter ?? '', placeholder: copy.search.filterPlaceholder, 'aria-describedby': `${o.filterId ?? 'filter'}-help`, 'data-fk': `${o.filterId ?? 'filter'}-input`, on: { input: (e) => ops.setFilter(e.target.value) } })),
+        h('input', { type: 'search', class: 'input', value: st.filter ?? '', placeholder: copy.search.filterPlaceholder, 'aria-describedby': `${o.filterId ?? 'filter'}-help`, 'data-fk': `${o.filterId ?? 'filter'}-input`, on: typing((e) => ops.setFilter(e.target.value)) })),
       ops.setMinSize && select({ label: copy.groups.minSize, fk: `${fid}-min-size`, value: String(st.minSize ?? 0), options: MIN_SIZES.map((b) => ({ value: String(b), label: b ? `${copy.groups.minSize} ${formatBytes(b)}` : copy.groups.minSizeAny })), onChange: (v) => ops.setMinSize(Number(v)) }),
       hasGroups && ops.setKeepGroups && h('label', { class: 'groups-toggle', title: copy.groups.keepTogetherHelp },
         checkbox({ checked: grouped, label: copy.groups.keepTogether, fk: `${fid}-keep-groups`, onChange: (on) => ops.setKeepGroups(on) }),

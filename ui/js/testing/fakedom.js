@@ -160,6 +160,16 @@ export class FakeElement {
   setAttribute(k, v) { this.attributes.set(k, String(v)); }
   getAttribute(k) { return this.attributes.has(k) ? this.attributes.get(k) : null; }
   hasAttribute(k) { return this.attributes.has(k); }
+  getAttributeNames() { return [...this.attributes.keys()]; }
+  insertBefore(n, ref) {
+    if (!ref) return this.appendChild(n);
+    if (n.parentNode) n.parentNode.removeChild(n);
+    const i = this.childNodes.indexOf(ref);
+    if (i < 0) throw new Error('insertBefore: the reference is not a child');
+    n.parentNode = this;
+    this.childNodes.splice(i, 0, n);
+    return n;
+  }
   removeAttribute(k) { this.attributes.delete(k); }
   appendChild(n) {
     if (n.parentNode) n.parentNode.removeChild(n);

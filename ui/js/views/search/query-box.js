@@ -1,6 +1,6 @@
 // @ts-check
 /** Quick-query box (CLN-ENG-05): autocomplete from search_suggest, parse errors with position. */
-import { h } from '../../dom.js';
+import { h, typing } from '../../dom.js';
 import { copy } from '../../copy.js';
 import { segments, columnOf } from '../../lib/query.js';
 import { button } from '../../components/controls.js';
@@ -18,6 +18,7 @@ export function renderQueryBox(s, actions) {
   const open = c.suggestions.length > 0;
   /** @param {any} e */
   const onKey = (e) => {
+    if (e.isComposing) return; // the IME owns Enter, Tab and the arrows while it composes (UI-9)
     if (open && e.key === 'ArrowDown') { e.preventDefault(); actions.moveSuggestion(1); }
     else if (open && e.key === 'ArrowUp') { e.preventDefault(); actions.moveSuggestion(-1); }
     else if (open && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); actions.acceptSuggestion(); }
@@ -30,7 +31,7 @@ export function renderQueryBox(s, actions) {
           type: 'search', class: ['input', bad && 'input--invalid'], value: c.query, placeholder: copy.category.customPlaceholder, autocomplete: 'off', spellcheck: 'false',
           role: 'combobox', 'aria-expanded': String(open), 'aria-controls': 'query-suggestions', 'aria-autocomplete': 'list', 'aria-activedescendant': open && c.suggestIndex >= 0 ? `sugg-${c.suggestIndex}` : undefined,
           'aria-label': copy.category.customLabel, 'aria-invalid': bad ? 'true' : undefined, 'aria-describedby': 'custom-help', 'data-fk': 'custom-query',
-          on: { input: (e) => actions.setQuery(e.target.value, e.target.selectionStart ?? undefined), keydown: onKey },
+          on: { ...typing((e) => actions.setQuery(e.target.value, e.target.selectionStart ?? undefined)), keydown: onKey },
         }),
         open && h('ul', { class: 'suggest', id: 'query-suggestions', role: 'listbox', 'aria-label': copy.search.suggestions },
           c.suggestions.map((sg, i) => h('li', { class: ['suggest__item', i === c.suggestIndex && 'suggest__item--on'], role: 'option', id: `sugg-${i}`, 'aria-selected': String(i === c.suggestIndex), 'data-fk': `sugg-${i}`, on: { mousedown: (e) => { e.preventDefault(); actions.acceptSuggestion(i); } } }, sg.label)))),
