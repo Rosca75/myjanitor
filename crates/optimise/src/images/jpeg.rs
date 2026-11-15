@@ -101,9 +101,23 @@ fn presets() -> Vec<StepPreset> {
     ]
 }
 
-fn ends_with_eoi(b: &[u8]) -> bool {
-    let end = b.len() - b.iter().rev().take_while(|&&x| x == 0).count();
-    b[..end].ends_with(&[0xFF, 0xD9])
+/// Accept `jpegtran`'s output `cand` for the in-house result `best` only when it is the same picture
+/// with the same kept markers, and it holds everything `best` holds after its image. libjpeg stops at
+/// the EOI, so data appended after it (a motion photo's video, a vendor trailer) is never in `cand`:
+/// it is re-appended byte for byte (OPT-1). Returns the bytes to use, or `None` to ignore the tool.
+fn accept_jpegtran(best: &[u8], cand: Vec<u8>) -> Option<Vec<u8>> {
+    let same = header_signature(&cand).zip(header_signature(best)).is_some_and(|((fa, sa), (fb, sb))| {
+        (fa.width, fa.height, fa.components, fa.precision) == (fb.width, fb.height, fb.components, fb.precision)
+            && sa == sb
+    });
+    let trailer = &best[mj_formats::jpeg::image_end(best)?..];
+    // The tool's output must be exactly one complete image: nothing of its own after the EOI.
+    if !same || mj_formats::jpeg::image_end(&cand)? != cand.len() {
+        return None;
+    }
+    let mut out = cand;
+    out.extend_from_slice(trailer);
+    (out.len() < best.len() && out.ends_with(trailer)).then_some(out)
 }
 
 impl Optimiser for JpegLossless {
@@ -175,14 +189,9 @@ impl Optimiser for JpegLossless {
             )?;
             if o.success() {
                 let cand = std::fs::read(&stage2).map_err(|e| Error::io(&stage2, e))?;
-                // Same image, same kept markers, complete stream: otherwise the tool's output is ignored.
-                let same = header_signature(&cand).zip(header_signature(&best)).is_some_and(|((fa, sa), (fb, sb))| {
-                    (fa.width, fa.height, fa.components, fa.precision)
-                        == (fb.width, fb.height, fb.components, fb.precision)
-                        && sa == sb
-                });
-                if same && ends_with_eoi(&cand) && cand.len() < best.len() {
-                    best = cand;
+                // Same image, same kept markers, complete stream, trailer kept: otherwise ignored.
+                if let Some(out) = accept_jpegtran(&best, cand) {
+                    best = out;
                     notes.push("jpegtran optimised the entropy coding".into());
                 }
             }
@@ -339,6 +348,35 @@ mod tests {
         let tools = mk("printf '\\377\\330\\377\\331' > \"$out\"");
         let bad = run_job(&src, &d.join("b.jpg"), &d, &ParamValues::new(), &tools);
         assert_eq!(bad.bytes_after, plain.bytes_after);
+    }
+
+    /// OPT-1: jpegtran (libjpeg) stops at the EOI, so a motion photo's video appended after it is not
+    /// in the tool's output. The trailer must survive (re-appended) or the tool's output be ignored.
+    #[cfg(unix)]
+    #[test]
+    fn jpegtran_output_never_drops_data_after_eoi() {
+        use std::os::unix::fs::PermissionsExt;
+        let d = TempDir::new("jpg-trailer").unwrap();
+        let trailer: Vec<u8> = b"MOTIONPHOTO-VIDEO".iter().copied().cycle().take(200 * 1024).collect();
+        let src = d.write("PXL_1.MP.jpg", &[photo(), trailer.clone()].concat()).unwrap();
+        let exe = d.join("jpegtran");
+        // Like libjpeg: the image only (500 scan bytes smaller), nothing after its EOI.
+        let body = format!(
+            "head -c $(( $(wc -c < \"$in\") - {} - 502 )) \"$in\" > \"$out\"; printf '\\377\\331' >> \"$out\"",
+            trailer.len()
+        );
+        std::fs::write(&exe, format!("#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"-outfile\" ]; then out=\"$2\"; fi; in=\"$1\"; shift; done\n{body}\n")).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let tools = vec![crate::tools::tool_at("jpegtran", exe)];
+        let plain =
+            run_job(&src, &d.join("p.jpg"), &d, &ParamValues::new().with("optimise_huffman", spec::b(false)), &tools);
+        let dst = d.join("w.jpg");
+        let with = run_job(&src, &dst, &d, &ParamValues::new(), &tools);
+        let out = std::fs::read(&dst).unwrap();
+        assert!(out.ends_with(&trailer), "the data after the EOI was dropped");
+        assert_eq!(with.bytes_after, out.len() as u64);
+        assert_eq!(with.bytes_after + 500, plain.bytes_after);
+        assert_eq!(mj_formats::jpeg::image_end(&out), Some(out.len() - trailer.len()));
     }
 
     #[test]

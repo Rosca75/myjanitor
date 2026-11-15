@@ -34,6 +34,7 @@ The full list is in [`docs/FEATURE-STATUS.md`](docs/FEATURE-STATUS.md): 163 cata
 - **Find.** Filters on name, path, size, dates, attributes, owner, depth and path length; true file type versus extension; a quick-query syntax such as `ext:mp4 size:>1GB modified:<2024`; an AND/OR rule builder; saved presets; global exclusions.
 - **Detectors.** Exact duplicates (size, partial hash, full hash and SHA-256), similar images (perceptual hash on JPEG and PNG), version chains, derived files, empty files and folders, zeroed and broken files, temporary files, app caches, developer artefacts, old installers, orphan sidecars, language packs, stale files, inactive project folders, duplicate fonts.
 - **Actions.** Trash, quarantine with restore and automatic purge once the retention time has passed, move and copy (with or without the folder structure), permanent delete (confirmed), hard-link and reflink replacement of duplicates (the GUI duplicates step and the CLI), undo of every operation, run reports and results exported as CSV, HTML or PDF, and an audit CSV.
+- **Review.** Each step lists its files with sorting, a path filter and an "At least" size filter. Duplicate steps keep each group together under a header (sorted by the group's largest file, filtered and paged as whole groups, the kept copy first; a checkbox switches to the flat list) and show a small thumbnail of every JPEG, PNG, GIF, WebP or BMP copy; other files show a type icon. Online-only files are never read for a thumbnail.
 - **Optimise.** Lossless PNG and JPEG rewrites; PowerPoint, Excel and Word package optimisation (duplicate media and thumbnails by default; unused layouts and masters, custom XML, notes, hidden slides, used ranges and more are opt-in); lossless PDF structural optimisation; ZIP repack for EPUB, CBZ, JAR and ODF; ZIP archiving of cold folders with a mandatory integrity test and a searchable index; file-system compression (NTFS WOF and Btrfs zstd); video, screen-recording and audio optimisation through ffmpeg.
 - **Automate.** The CLI, scheduled profiles (reversible steps only), file-manager context-menu entries, portable mode, and the thread count and temporary folder settings.
 
@@ -67,7 +68,7 @@ cargo build --release -p mj-cli               # target/release/myjanitor-cli
 
 The GUI accepts `--data-dir <dir>` (keep every MyJanitor folder under one root, handy for trying it out), `--optimise <path>` and `--duplicates <path>` (open with that folder as the scope; nothing runs until you press Scan).
 
-**The UI in a browser, on fake data.** The UI is plain ES modules. `node ui/dev/serve.mjs` serves it at `http://127.0.0.1:5173/?mock=1` with a mock backend and no real files. Useful query options: `scenario=empty|fresh|results|rich`, `speed=0.5`. The screenshots above were made this way (`ui/dev/screenshots.mjs`, which needs Playwright installed separately).
+**The UI in a browser, on fake data.** The UI is plain ES modules. `node ui/dev/serve.mjs` serves it at `http://127.0.0.1:5173/?mock=1` with a mock backend and no real files. Useful query options: `scenario=empty|fresh|results|rich`, `speed=0.5`, `dialog=cancel` or `dialog=<folder>` (what the stand-in for the operating system's file dialogs answers; by default it accepts the folder and file name it was offered). The screenshots above were made this way (`ui/dev/screenshots.mjs`, which needs Playwright installed separately).
 
 ## Test
 
@@ -154,6 +155,7 @@ Only ffmpeg (in the build session) and 7z (in CI, both platforms) were run for r
 
 | | Windows | Linux |
 |---|---|---|
+| Diagnostics log (`myjanitor.log`, panics and internal errors only, no file contents; attach it to a bug report) | the data folder, next to `settings.json` | the data folder |
 | Settings, presets, schedules, journal, quarantine | `%LOCALAPPDATA%\MyJanitor` | `$XDG_DATA_HOME/myjanitor` or `~/.local/share/myjanitor` |
 | Scan cache and scratch files | `%LOCALAPPDATA%\MyJanitor\cache` | `$XDG_CACHE_HOME/myjanitor` or `~/.cache/myjanitor` |
 
@@ -216,7 +218,6 @@ Not exercised against the real Windows feature, only compiled, linted and unit-t
 - Similar-image detection does not decode HEIC, RAW or WebP.
 - Plan steps are reordered with arrow buttons, not by dragging.
 - Light theme only. The palette has no dark variant.
-- The in-app folder browser replaces the native folder dialog.
 - Undoing an archive leaves its sidecar index file behind.
 - Peak memory on a 200,000-file test was 1.6 GiB, inflated by the test's event recorder; it was not measured separately.
 

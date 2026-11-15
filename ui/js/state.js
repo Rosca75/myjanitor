@@ -26,7 +26,14 @@ export function createStore(initial) {
       const changed = Object.keys(p).filter((k) => !Object.is(/** @type {any} */ (state)[k], /** @type {any} */ (p)[k]));
       if (!changed.length) return;
       state = { ...state, ...p };
-      for (const s of [...subs]) if (!s.keys || s.keys.some((k) => changed.includes(k))) s.fn(state, changed);
+      // UI-11: one failing region never stops the others from showing the new state; the
+      // first error still reaches the caller.
+      let failure = null;
+      for (const s of [...subs]) {
+        if (s.keys && !s.keys.some((k) => changed.includes(k))) continue;
+        try { s.fn(state, changed); } catch (e) { failure ??= { e }; }
+      }
+      if (failure) throw failure.e;
     },
     /**
      * @param {(s: T, changed: string[]) => void} fn
@@ -65,6 +72,7 @@ export function initialState() {
 
     scope: { roots: [], include: [], exclude: [] },
     scan: { state: 'idle', generation: 0, cached: false },
+    scanDoneGen: 0, // newest generation whose scan://done arrived (UI-4)
     scanProgress: null, // kept apart from `scan` so 50 ms progress never re-renders the controls
     jobProgress: {}, // job id -> progress, for the same reason
     detectors: {}, // opportunity_id -> DetectorTotalsEvent (live cards while scanning)
@@ -110,8 +118,6 @@ export function initialState() {
     queueOpen: false,
     /** Step review. */
     step: null,
-    /** Folder browser modal, or null. */
-    browser: null,
     /** Confirmation dialog sequence, or null. */
     dialog: null,
     /** Custom search state (Clean view). */
@@ -128,6 +134,18 @@ export const findOpp = (s, id) => s.opps.items.find((o) => o.id === id) ?? null;
 
 /** @param {any} s */
 export const hasResults = (s) => s.scan.state !== 'scanning' && (s.opps.generation > 0 || s.opps.items.length > 0 || !!s.opps.scanned_at);
+
+/**
+ * Can the run that just finished (`s.completed`) be undone? (UI-2) The history list says so
+ * once it is refreshed (history://changed follows every run); until then, a run that changed
+ * no file has nothing to undo. @param {any} s
+ */
+export function completedUndoable(s) {
+  const c = s.completed;
+  if (!c) return false;
+  const run = s.history.runs.find((r) => r.run_id === c.run_id);
+  return run ? !!run.undoable : c.files > 0;
+}
 
 /** @param {any} s */
 export const isScanning = (s) => ['scanning', 'paused', 'stopping'].includes(s.scan.state);

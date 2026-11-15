@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use mj_core::{EntryKind, Error, FileIndex, Result, Timestamp};
 
-use crate::{effective_roots, ScanRequest};
+use crate::{effective_roots_on, ScanRequest};
 use filter::ScopeFilter;
 use parallel::{Collected, DirJob, WalkCtx};
 use progress::Reporter;
@@ -53,7 +53,7 @@ pub struct WalkOutcome {
 /// Run the walk.
 pub fn run(req: &ScanRequest<'_>) -> Result<WalkOutcome> {
     let started = Instant::now();
-    let roots = effective_roots(req.scope);
+    let roots = effective_roots_on(req.scope, req.platform);
     if roots.is_empty() {
         return Err(Error::InvalidInput("the scan scope has no location".into()));
     }
@@ -113,6 +113,24 @@ pub fn run(req: &ScanRequest<'_>) -> Result<WalkOutcome> {
     }
 
     parallel::walk(&ctx, frontier, &mut out)?;
+
+    // SCAN-4: entries that vanished between listing and reading are normal one at a time
+    // (a temp file deleted), but a drive unplugged or a share dropped mid-scan makes every
+    // later call "not found" and would leave a partial index that looks complete. When
+    // anything vanished, each walked root is checked again: one that is gone now is
+    // reported unreadable and its records are kept by the cache.
+    if out.vanished {
+        for (root, state) in roots.iter().zip(states.iter_mut()) {
+            if *state != RootState::Walked {
+                continue;
+            }
+            if let Err(err) = req.platform.metadata(root) {
+                out.unreadable(root.clone(), Some(&err), true);
+                *state = RootState::Unreadable;
+                first_error.get_or_insert(err);
+            }
+        }
+    }
 
     if !states.contains(&RootState::Walked) {
         return Err(first_error.unwrap_or_else(|| Error::InvalidInput("every scan location is excluded".into())));

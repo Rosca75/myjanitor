@@ -1,22 +1,29 @@
-//! Opportunity building and the overview list. Owner: W3-D.
+//! Opportunity building and the overview list. Owner: W3-D; numbers: W6-B.
 //!
 //! Ranking (frozen default): "Biggest saving first" orders by `saving` desc, then
 //! title; `rank` = saving in bytes as f64. Disabled cards (unavailable optimiser,
 //! detector not implemented here) are listed with their reason and never counted in
-//! the hero summary; available cards with no candidate are hidden. The hero summary
-//! buckets each selected row by its own safety class (`columns["safety"]`), so a card
-//! mixing classes is split correctly.
+//! the hero summary; available cards with no candidate are hidden.
+//!
+//! Numbers (W6-B): every byte figure comes from [`crate::savings::tally`]. A record keeps
+//! its own figures (each row on its own, with the card's default action) for the step
+//! review; `opportunities_list` replaces them with the card's share of the hero total,
+//! computed over every available card at once so that a file several cards list is
+//! counted once. `summary.total` is therefore exactly the sum of the cards' `saving`,
+//! and of its three buckets (each counted row in the bucket of its own safety class,
+//! `columns["safety"]`, so a card mixing classes is split correctly).
 
 use std::collections::BTreeMap;
 
 use mj_core::{
     Action, ActionKind, Availability, Badges, Category, Confidence, DetectorInfo, DetectorOutput, GroupId,
-    OpportunityId, OptimiserInfo, ParamValues, Result, SafetyClass, SavingsBucket, SavingsSummary, SelectionOverrides,
-    Source, SubGroup,
+    OpportunityId, OptimiserInfo, ParamValues, Result, SafetyClass, SavingsSummary, SelectionOverrides, Source,
+    SubGroup,
 };
 
 use crate::api::{OpportunitiesList, OpportunitiesRequest, OpportunitySort, OpportunityTab, TabCounts};
-use crate::results::{candidate_safety, is_selected, severity, skip_badges, OpportunityRecord};
+use crate::results::{skip_badges, OpportunityRecord, Results};
+use crate::savings::{tally, Part, Tally};
 use crate::Engine;
 
 /// Static card data shared by detectors and optimisers.
@@ -167,6 +174,9 @@ pub(crate) fn build_record(
         unit: card.unit,
         candidates: 0,
         selected: 0,
+        overlap: 0,
+        to_review: 0,
+        to_review_count: 0,
         badges: Badges::empty(),
         default_action: action,
         available_actions: card.available_actions,
@@ -198,49 +208,102 @@ pub(crate) fn disabled_record(engine: &Engine, mut card: CardInfo, reason: Strin
     build_record(engine, card, DetectorOutput::default(), params, &|_| Badges::empty())
 }
 
-/// Recompute the card numbers from candidates and the current selection. Online-only
-/// rows never count towards savings (SCAN-09).
+/// Recompute the record's own numbers from its candidates and the current selection:
+/// every row on its own, with the card's default action (what the step review shows).
+/// Online-only rows never count towards savings (SCAN-09).
 pub(crate) fn recompute(rec: &mut OpportunityRecord, skip: Badges) {
-    let (mut before, mut saving, mut selected, mut badges) = (0u64, 0u64, 0u64, Badges::empty());
-    let mut conf = Confidence::Exact;
+    let action = rec.opportunity.default_action.clone();
+    let t = tally(&[Part { rec, action: &action }], skip, false).remove(0);
+    let mut badges = Badges::empty();
     let mut subs: BTreeMap<String, u64> = BTreeMap::new();
     for c in &rec.candidates {
         badges |= c.badges;
         if let Some(s) = &c.sub_group {
             *subs.entry(s.clone()).or_default() += 1;
         }
-        if is_selected(rec, c, skip) {
-            selected += 1;
-            if !c.badges.contains(Badges::ONLINE_ONLY) {
-                before += c.size;
-                saving += c.saving();
-            }
-            conf = conf.max(c.confidence);
-        }
     }
     let o = &mut rec.opportunity;
     o.candidates = rec.candidates.len() as u64;
-    o.selected = selected;
-    o.count = selected;
-    o.size_before = before;
-    o.saving = saving;
-    o.confidence = if selected == 0 { Confidence::Exact } else { conf };
     o.badges = badges;
-    o.rank = saving as f64;
     o.sub_groups = subs.into_iter().map(|(key, count)| SubGroup { label: key.replace('_', " "), key, count }).collect();
+    put_numbers(o, &CardShare::of(&t));
 }
 
-/// Savings of one record split by the class of each selected row.
-pub(crate) fn split_by_safety(rec: &OpportunityRecord, skip: Badges) -> BTreeMap<u8, (SafetyClass, u64)> {
-    let mut m: BTreeMap<u8, (SafetyClass, u64)> = BTreeMap::new();
-    for c in &rec.candidates {
-        if is_selected(rec, c, skip) && !c.badges.contains(Badges::ONLINE_ONLY) {
-            let s = candidate_safety(rec, c);
-            m.entry(severity(s)).or_insert((s, 0)).1 += c.saving();
+/// The numbers of one card, as [`tally`] counted them.
+#[derive(Debug, Clone)]
+pub(crate) struct CardShare {
+    selected: u64,
+    size_before: u64,
+    saving: u64,
+    overlap: u64,
+    to_review: u64,
+    to_review_count: u64,
+    confidence: Confidence,
+    by_class: Vec<(SafetyClass, u64)>,
+}
+
+impl CardShare {
+    fn of(t: &Tally) -> CardShare {
+        CardShare {
+            selected: t.selected,
+            size_before: t.bytes_before,
+            saving: t.saving(),
+            overlap: t.overlap,
+            to_review: t.to_review,
+            to_review_count: t.to_review_rows,
+            confidence: if t.selected == 0 { Confidence::Exact } else { t.confidence },
+            by_class: t.by_class.values().copied().collect(),
         }
     }
-    m
 }
+
+/// Write a share into a card.
+fn put_numbers(o: &mut mj_core::Opportunity, s: &CardShare) {
+    o.selected = s.selected;
+    o.count = s.selected;
+    o.size_before = s.size_before;
+    o.saving = s.saving;
+    o.overlap = s.overlap;
+    o.to_review = s.to_review;
+    o.to_review_count = s.to_review_count;
+    o.confidence = s.confidence;
+    o.rank = s.saving as f64;
+}
+
+/// `(shares_key, shares)` of the last [`Engine::card_shares`] computation.
+pub(crate) type SharesCache = (u64, std::sync::Arc<Vec<Option<CardShare>>>);
+
+/// True for the cards the hero counts: available, with at least one candidate.
+fn counted_card(rec: &OpportunityRecord) -> bool {
+    rec.opportunity.availability.is_available() && !rec.candidates.is_empty()
+}
+
+/// Everything the shares depend on, hashed: the safety settings, and per counted card its
+/// action, every row (id, size, estimate, badges, default), the selection and the groups'
+/// kept copies. Paths never change under an id, so they are not hashed.
+fn shares_key(results: &Results, actions: &[Option<&Action>], skip: Badges) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    skip.bits().hash(&mut h);
+    results.generation.hash(&mut h);
+    for (rec, action) in results.opportunities.iter().zip(actions) {
+        let Some(action) = action else { continue };
+        rec.opportunity.id.hash(&mut h);
+        format!("{action:?}").hash(&mut h);
+        rec.candidates.len().hash(&mut h);
+        for c in &rec.candidates {
+            (c.id, c.size, c.size_after, c.badges.bits(), c.default_selected).hash(&mut h);
+        }
+        rec.selection.include.hash(&mut h);
+        rec.selection.exclude.hash(&mut h);
+        for g in &rec.groups {
+            (g.id, g.members.len()).hash(&mut h);
+            g.keeper.hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
 fn safety_order(s: SafetyClass) -> u8 {
     match s {
         SafetyClass::Reversible => 0,
@@ -263,35 +326,72 @@ fn in_tab(o: &mj_core::Opportunity, tab: OpportunityTab) -> bool {
 }
 
 impl Engine {
+    /// The share of every record in the hero total (`None` for cards the hero does not
+    /// count), in `results.opportunities` order. A card in the plan is counted with its
+    /// step's action, any other with its default action. Cached until an input changes.
+    pub(crate) fn card_shares(&self, results: &Results, skip: Badges) -> std::sync::Arc<Vec<Option<CardShare>>> {
+        let steps: Vec<(OpportunityId, Action)> =
+            mj_core::lock(&self.plan).plan.steps.iter().map(|s| (s.opportunity.clone(), s.action.clone())).collect();
+        let actions: Vec<Option<&Action>> = results
+            .opportunities
+            .iter()
+            .map(|rec| {
+                counted_card(rec).then(|| {
+                    let id = &rec.opportunity.id;
+                    steps.iter().find(|(o, _)| o == id).map(|(_, a)| a).unwrap_or(&rec.opportunity.default_action)
+                })
+            })
+            .collect();
+        let key = shares_key(results, &actions, skip);
+        let mut cache = mj_core::lock(&self.shares);
+        if let Some((k, shares)) = cache.as_ref() {
+            if *k == key {
+                return shares.clone();
+            }
+        }
+        let parts: Vec<Part<'_>> = results
+            .opportunities
+            .iter()
+            .zip(&actions)
+            .filter_map(|(rec, a)| a.map(|action| Part { rec, action }))
+            .collect();
+        let mut tallies = tally(&parts, skip, true).into_iter();
+        let shares: Vec<Option<CardShare>> =
+            actions.iter().map(|a| a.and_then(|_| tallies.next()).map(|t| CardShare::of(&t))).collect();
+        let shares = std::sync::Arc::new(shares);
+        *cache = Some((key, shares.clone()));
+        shares
+    }
+
     /// Cards for a tab, the hero summary and the tab counts.
     pub fn opportunities_list(&self, req: OpportunitiesRequest) -> Result<OpportunitiesList> {
         let results = self.results.read().unwrap_or_else(|e| e.into_inner());
         let in_plan: Vec<OpportunityId> =
             mj_core::lock(&self.plan).plan.steps.iter().map(|s| s.opportunity.clone()).collect();
         let skip = skip_badges(&mj_core::lock(&self.settings));
+        let shares = self.card_shares(&results, skip);
         let mut summary = SavingsSummary {
             reclaimed: self.reclaimed.load(std::sync::atomic::Ordering::Relaxed),
             ..SavingsSummary::default()
         };
         let mut counts = TabCounts::default();
         let mut items = Vec::new();
-        for rec in &results.opportunities {
+        for (rec, share) in results.opportunities.iter().zip(shares.iter()) {
             let mut o = rec.opportunity.clone();
             o.in_plan = in_plan.contains(&o.id);
             let available = o.availability.is_available();
-            if o.candidates == 0 && available {
+            if rec.candidates.is_empty() && available {
                 continue;
             }
-            if available {
-                summary.opportunities += 1;
-                for (_, (class, bytes)) in split_by_safety(rec, skip) {
-                    summary.total += bytes;
-                    match class.bucket() {
-                        SavingsBucket::Reversible => summary.reversible += bytes,
-                        SavingsBucket::OptIn => summary.opt_in += bytes,
-                        SavingsBucket::ReviewOnly => summary.review_only += bytes,
-                    }
+            if let Some(share) = share {
+                put_numbers(&mut o, share);
+                for (class, bytes) in &share.by_class {
+                    summary.add(*class, *bytes);
                 }
+                summary.overlap += share.overlap;
+                summary.opportunities += u64::from(share.selected > 0);
+                summary.review_opportunities += u64::from(share.to_review_count > 0);
+                summary.to_review += share.to_review;
             }
             counts.all += 1;
             for (tab, n) in [

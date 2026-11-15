@@ -64,10 +64,68 @@ impl Engine {
 
     /// Run a rule over the index as a custom opportunity.
     pub fn search_run(self: &Arc<Self>, req: SearchRunRequest) -> Result<Opportunity> {
-        let index = {
+        let (index, removed) = {
             let r = self.results.read().unwrap_or_else(|e| e.into_inner());
-            r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?
+            (r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?, r.removed.clone())
         };
+        let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom search".into());
+        let custom_id = {
+            let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
+            let existing = r
+                .opportunities
+                .iter()
+                .find(|o| matches!(o.opportunity.source, Source::Custom(_)) && o.opportunity.title == title);
+            match existing.map(|o| o.opportunity.source.clone()) {
+                Some(Source::Custom(id)) => id,
+                _ => {
+                    r.next_custom += 1;
+                    r.next_custom.to_string()
+                }
+            }
+        };
+        let mut rec = self.custom_record(&index, &req, &custom_id)?;
+        let skip = crate::results::skip_badges(&lock(&self.settings));
+        // ENG-11: the index still lists what was applied since it was built.
+        crate::results::drop_gone(&mut rec, &|p| crate::results::is_removed(&removed, p), skip);
+        let (opp, generation) = {
+            let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
+            // ENG-12: the rule is kept so the card is rebuilt by the next scan.
+            r.custom_rules.retain(|(id, _)| id != &custom_id);
+            r.custom_rules.push((custom_id.clone(), req));
+            let id = rec.opportunity.id.clone();
+            let opp = match r.get_mut(&id) {
+                Some(slot) => {
+                    // ENG-2: running the same search again keeps the rows the user ticked or
+                    // unticked in it.
+                    crate::steps::carry_user_choices(slot, &mut rec);
+                    crate::opportunities::recompute(&mut rec, skip);
+                    let opp = rec.opportunity.clone();
+                    *slot = rec;
+                    opp
+                }
+                None => {
+                    let opp = rec.opportunity.clone();
+                    r.opportunities.push(rec);
+                    opp
+                }
+            };
+            (opp, r.generation)
+        };
+        if self.in_plan(&opp.id).is_some() {
+            let plan = self.refresh_plan();
+            let _ = self.plan_changed(plan);
+        }
+        self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
+        Ok(opp)
+    }
+
+    /// The `custom:<custom_id>` card of `req` over `index`, not stored.
+    pub(crate) fn custom_record(
+        self: &Arc<Self>,
+        index: &mj_core::FileIndex,
+        req: &SearchRunRequest,
+        custom_id: &str,
+    ) -> Result<crate::results::OpportunityRecord> {
         let settings = lock(&self.settings).clone();
         let groups = mj_filters::groups::effective(&settings.type_groups);
         let ctx = mj_filters::FilterContext { now: mj_core::Timestamp::now(), type_groups: &groups };
@@ -80,7 +138,7 @@ impl Engine {
         };
         let cancel = mj_core::CancelToken::new();
         let sel = mj_filters::select_with(
-            &index,
+            index,
             &req.rule,
             &ctx,
             mj_filters::SelectOptions {
@@ -93,31 +151,18 @@ impl Engine {
         let action = req.action.clone().unwrap_or(Action::Trash);
         let removal = crate::plan::removes(&action);
         let preselect = removal && !action.safety(false).requires_confirmation();
+        // RF-1: a whole folder is pre-selected only when the rule asks for folders
+        // (`kind:dir`); one matched on its name, path length or attributes is only listed.
+        let preselect_folders = preselect && mj_filters::asks_for_folders(&req.rule);
         let mut out = DetectorOutput { diagnostics: sel.diagnostics.to_core(), ..Default::default() };
-        let (title, custom_id) = {
-            let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
-            let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom search".into());
-            let existing = r
-                .opportunities
-                .iter()
-                .find(|o| matches!(o.opportunity.source, Source::Custom(_)) && o.opportunity.title == title);
-            let id = match existing.map(|o| o.opportunity.source.clone()) {
-                Some(Source::Custom(id)) => id,
-                _ => {
-                    r.next_custom += 1;
-                    r.next_custom.to_string()
-                }
-            };
-            (title, id)
-        };
         for &p in sel.positions.iter().take(MAX_ROWS) {
             let e = index.entry(p);
-            let (target, size, files) = match e.kind {
+            let (target, size, files, selected) = match e.kind {
                 EntryKind::Dir => {
                     let t = index.totals(p);
-                    (TargetKind::Folder, t.reclaimable, Some(t.files))
+                    (TargetKind::Folder, t.reclaimable, Some(t.files), preselect_folders)
                 }
-                EntryKind::File => (TargetKind::File, e.reclaimable(), None),
+                EntryKind::File => (TargetKind::File, e.reclaimable(), None, preselect),
                 // Links are never targets of a custom search (they would not be followed).
                 _ => continue,
             };
@@ -125,13 +170,13 @@ impl Engine {
                 id: CandidateId(0),
                 path: e.path.clone(),
                 target,
-                source: Source::Custom(custom_id.clone()),
+                source: Source::Custom(custom_id.to_string()),
                 size,
                 size_after: if removal { 0 } else { size },
                 confidence: Confidence::Exact,
                 reason: "Matches the search".into(),
                 badges: mj_core::Badges::empty(),
-                default_selected: preselect,
+                default_selected: selected,
                 group: None,
                 sub_group: None,
                 modified: e.modified,
@@ -147,9 +192,9 @@ impl Engine {
         }
         let card = CardInfo {
             id: mj_core::OpportunityId(format!("custom:{custom_id}")),
-            source: Source::Custom(custom_id),
+            source: Source::Custom(custom_id.to_string()),
             category: Category::Clean,
-            title,
+            title: req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom search".into()),
             description: "Custom search".into(),
             safety: action.safety(false),
             default_action: action.kind(),
@@ -166,25 +211,11 @@ impl Engine {
             feature_ids: vec!["CLN-ENG-01".into(), "CLN-ENG-05".into()],
             availability: Availability::Available,
         };
-        let badges = self.badger(&index, &out, false, &cancel);
+        let badges = self.badger(index, &out, false, &cancel);
         let mut rec = build_record(self, card, out, ParamValues::default(), &|c| {
             badges.get(&c.path).copied().unwrap_or_default()
         });
         rec.opportunity.default_action = action;
-        let opp = rec.opportunity.clone();
-        let generation = {
-            let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
-            match r.get_mut(&opp.id) {
-                Some(slot) => *slot = rec,
-                None => r.opportunities.push(rec),
-            }
-            r.generation
-        };
-        if self.in_plan(&opp.id).is_some() {
-            let plan = self.refresh_plan();
-            let _ = self.plan_changed(plan);
-        }
-        self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
-        Ok(opp)
+        Ok(rec)
     }
 }

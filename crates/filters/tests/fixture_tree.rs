@@ -186,3 +186,18 @@ fn a_compiled_rule_matches_a_foreign_entry_too() {
     assert!(!c.matches(&FileEntry::new("/elsewhere/a.mp4", EntryKind::File, 5)));
     let _ = SystemTime::now();
 }
+
+/// RF-3: a path wildcard with separators is a pattern on part of the (absolute) path,
+/// as the grammar documents (`path:*/Photos/*`), and its negation excludes that part.
+#[test]
+fn path_wildcards_with_separators_match_inside_absolute_paths() {
+    let f = build();
+    assert_eq!(f.q("path:*/Photos/* kind:file"), ["Photos/a.jpg", "Photos/b.png", "Photos/fake.jpg"]);
+    assert_eq!(f.q(r"path:*\Photos\* kind:file"), ["Photos/a.jpg", "Photos/b.png", "Photos/fake.jpg"]);
+    assert_eq!(f.q("ext:jpg -path:*/Photos/*"), Vec::<String>::new());
+    assert_eq!(f.q("ext:js,bin -path:*/node_modules/*"), Vec::<String>::new());
+    assert_eq!(f.q("ext:rs,js -path:*/node_modules/*"), ["proj/src/main.rs"]);
+    assert_eq!(f.q("path:Photos/*.png"), ["Photos/b.png"]);
+    assert_eq!(f.q("path:*/Downloads/*.exe"), ["Downloads/setup.exe"]);
+    assert_eq!(f.q("path:node_modules/*/*.js"), ["proj/node_modules/pkg/index.js"]);
+}

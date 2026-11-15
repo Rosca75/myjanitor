@@ -3,15 +3,17 @@
 //! Applied before any rule: an excluded entry, and everything below an
 //! excluded folder, is never evaluated and never returned. The list mixes
 //! absolute paths and glob patterns, as in `Settings::safety::exclusions`:
-//! an entry that is absolute and has no wildcard is a path (the folder and its
-//! whole subtree), anything else is a pattern (matched against the full path
-//! when it contains a separator, against the file name otherwise; `*.sys`
-//! therefore excludes by type).
+//! an absolute entry is a path (the folder and its whole subtree; `[` and `]`
+//! are part of the name), and when it also holds `*` or `?` it is in addition a
+//! pattern with literal brackets (`mj_core::glob::is_pattern_entry`); any
+//! relative entry is a pattern (matched against the full path when it contains
+//! a separator, against the file name otherwise; `*.sys` therefore excludes by
+//! type).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use mj_core::glob::{Glob, GlobMode};
+use mj_core::glob::{entry_glob, is_absolute_entry, is_pattern_entry, Glob, GlobMode};
 use mj_core::pathutil::path_key;
 use mj_core::FileEntry;
 
@@ -21,10 +23,6 @@ pub struct Exclusions {
     /// `path_key`s of excluded folders/files.
     path_keys: HashSet<String>,
     patterns: Vec<Glob>,
-}
-
-fn is_absolute_like(s: &str) -> bool {
-    s.starts_with('/') || s.starts_with('\\') || s.as_bytes().get(1) == Some(&b':')
 }
 
 impl Exclusions {
@@ -41,8 +39,14 @@ impl Exclusions {
             if e.is_empty() {
                 continue;
             }
-            if is_absolute_like(e) && !e.contains(['*', '?']) {
+            // One classifier with the protected list and the scanner (RF-2, SCAN-3): an
+            // absolute entry is the folder of that exact name, and with `*` or `?` also a
+            // pattern whose brackets are literal.
+            if is_absolute_entry(e) {
                 ex.add_path(Path::new(e));
+                if is_pattern_entry(e) {
+                    ex.patterns.push(entry_glob(e));
+                }
             } else {
                 ex.add_pattern(e);
             }
@@ -124,5 +128,15 @@ mod tests {
         assert!(!ex.is_excluded(&e("/a/b/readme.txt")));
         assert!(!Exclusions::none().is_excluded(&e("/a")));
         assert!(Exclusions::from_entries::<&str>(&[]).is_empty());
+    }
+
+    /// SCAN-3: brackets in an absolute entry are part of the folder's name.
+    #[test]
+    fn absolute_entries_with_brackets_are_paths() {
+        let ex = Exclusions::from_entries(&["/data/[old]", "/srv/[x] */cache"]);
+        assert!(ex.is_excluded(&e("/data/[old]/a.txt")));
+        assert!(!ex.is_excluded(&e("/data/o")));
+        assert!(ex.is_excluded(&e("/srv/[x] web/cache")));
+        assert!(!ex.is_excluded(&e("/srv/x web/cache")));
     }
 }

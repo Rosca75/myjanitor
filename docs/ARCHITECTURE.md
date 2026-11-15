@@ -36,14 +36,14 @@ Two front ends share one engine:
 | `mj-platform` | `crates/platform` | core | `ScanPlatform` / `ActionPlatform` traits, `NativePlatform`, hand-written FFI |
 | `mj-formats` | `crates/formats` | core, miniz_oxide | ZIP, XML, OOXML, PDF, PNG, JPEG, EXIF, CFB, media tags, CRC-32, content sniffing |
 | `mj-scan` | `crates/scan` | core, platform | Walker, index building, scan cache |
-| `mj-dupes` | `crates/dupes` | core, platform, formats | Exact duplicates, similar images, version chains, derived files, attachment copies, duplicate fonts |
+| `mj-dupes` | `crates/dupes` | core, platform, formats, miniz_oxide, zune-jpeg | Exact duplicates, similar images, version chains, derived files, attachment copies, duplicate fonts; bounded JPEG/PNG thumbnails for the review (`decode::thumb`) |
 | `mj-filters` | `crates/filters` | core, formats, regex | Rule evaluation, quick-query parser, presets, type groups, content search |
 | `mj-detect` | `crates/detect` | core, platform, formats | Simple detectors |
 | `mj-actions` | `crates/actions` | core, platform, formats, serde_json | Action engine, guard, journal, undo, quarantine, safety inspection, keep-rule selection, report writers |
 | `mj-optimise` | `crates/optimise` | core, platform, formats | Optimisers, archiver, external tool detection and process runner |
 | `mj-engine` | `crates/engine` | all of the above, serde_json | `Engine` facade + `api` (commands, events, types) |
 | `mj-cli` (bin `myjanitor-cli`) | `crates/cli` | engine | CLI with in-house argument parsing |
-| `myjanitor` (lib `myjanitor_lib`) | `src-tauri` | engine, tauri | GUI shell: one `#[tauri::command]` per engine command, events forwarding |
+| `myjanitor` (lib `myjanitor_lib`) | `src-tauri` | engine, tauri, rfd | GUI shell: one `#[tauri::command]` per engine command, events forwarding, and the two shell commands that open the operating system's file dialogs (`dialogs.rs`, `api::SHELL_COMMANDS`) |
 
 Rules:
 
@@ -82,8 +82,9 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 ```
 
 1. **Scope** (`ScanScope`): roots, include/exclude globs, options. Roots are
-   normalised; nested roots collapse into their parent. Global exclusions from
-   `Settings::safety::exclusions` are added at scan time.
+   normalised; nested roots collapse into their parent (unless one sits on another
+   drive and `one_file_system` is on: then it is walked as its own root). Global
+   exclusions from `Settings::safety::exclusions` are added at scan time.
 2. **Scan** (`mj_scan::scan`): produces a `FileIndex` whose entries are sorted
    by `path_key`, so every subtree is a contiguous range (folder totals,
    children, topmost match are binary searches). Links/junctions are recorded
@@ -101,13 +102,29 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
    candidate and group ids, adds path badges (protected, synced, online-only,
    encrypted attribute) from `mj_actions::SafetyInspector`, applies the
    auto-uncheck rule (`Badges::AUTO_UNCHECK`), and computes the card numbers
-   (`opportunities::recompute`). Default sort: biggest saving first.
+   (`opportunities::recompute`). Default sort: biggest saving first. The step
+   table (`candidates_page`) is ordered, filtered and paged in the engine, flat or
+   with duplicate groups kept together (`review_order.rs`, W6-A: groups ordered by
+   an aggregate of the column, whole groups filtered, pages packed by groups, the
+   order cached per request shape and checked against a fingerprint). Row
+   thumbnails and the preview image come from `thumbs.rs` (bounded decode through
+   `mj_dupes::decode::thumb`, byte-capped LRU, never reading online-only files).
+   Every byte figure (hero total and buckets, card `saving`, plan step and plan
+   estimates, per-drive "after plan", dry-run measurement) is a sum over one
+   per-row decision, `savings::tally`: what the row's action frees (a removal the
+   whole row, an optimisation its estimate, review only / copy / light copy
+   nothing), each file counted once across the cards (or plan steps) that list
+   it. The hero total is therefore the sum of the numbers the cards show; rows
+   only listed for review are reported beside it (`to_review`), never in it
+   (docs/IPC.md, "The savings invariant"; decisions in docs/decisions/W6-B.md).
 5. **Plan**: steps reference opportunities; a step carries the action, the
    parameters, an estimate and its `SafetyClass`. The checklist is computed on
    every change.
 6. **Apply**: `plan_apply` checks confirmations, expands each step into
    `ActionItem`s (selected, non-blocked candidates with their scan stamp and
-   root), allocates a `RunId`, writes a `RunRecord`, and queues one job per
+   root), keeps the copy any step keeps (G-03), drops an item another step
+   removes (the same path or a folder holding it: a file is acted on once per
+   run, RF-8), allocates a `RunId`, writes a `RunRecord`, and queues one job per
    step. Jobs run `mj_actions::execute` with a `Guard` whose allowed roots are
    the scope roots.
 7. **Journal / undo**: every item is journaled before and after acting;
@@ -146,6 +163,20 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
   Never hold a lock across I/O or while emitting an event.
 - **Panic isolation**: every detector, optimiser and action item runs inside
   `catch_unwind`; a panic becomes an `Error::Internal` for that item/output.
+- **Native file dialogs** (`dialog_pick_folder`, `dialog_save_file`, W6-A): the
+  dialog is created on the main thread through `run_on_main_thread` (GTK needs
+  it, and the owner window handle is read there), which returns at once; the
+  async command then awaits the dialog's future. Neither the main thread nor the
+  async runtime is blocked while the dialog is open, and at most one dialog is
+  open at a time (a second request fails with `conflict`).
+- **GUI start-up** (W6-A): the shell builds the engine on a start-up thread
+  (`src-tauri/src/startup.rs`), never in the main thread's `setup`: opening the
+  journal, loading the scan cache and probing the external tools no longer keep
+  the window blank. Commands that arrive first wait for the engine on the
+  blocking pool. Expired quarantine items are purged by an ordinary queued job
+  (`Engine::quarantine_purge_if_due`) once the engine is ready. When another
+  process holds the data folder's lock (F-13), the window is hidden and a native
+  message box says so before the app exits; nothing relies on a console.
 - **Allocator**: system allocator for now; measure mimalloc on Windows in
   Wave 4 if profiles show allocator contention (lessons file rule 13; would
   need a DEPENDENCIES.md entry).
@@ -155,6 +186,12 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 - One enum, `mj_core::Error`, with stable `code()`s and actionable `hint()`s;
   `Result<T>` alias everywhere. `Error::io(path, err)` maps `NotFound` and
   `PermissionDenied` to their own variants.
+- Diagnostics (XC-3): `mj_core::diag` keeps `myjanitor.log` (cap 256 KiB, one rotated copy
+  `myjanitor.log.1`, std only) in the data folder. `Engine::new` points it there and installs
+  a panic hook (thread, source location, payload; the previous hook still runs). Engine
+  catch sites (job bodies, the scan, each detector) log one line with the payload and put it
+  in the message the UI shows. It holds no file contents and no path detail beyond the
+  journal's.
 - On the wire: `ErrorInfo {code, message, hint, path?}` (IPC.md §1.1). Command
   failures reject the promise with it; per-item failures live in
   `ItemOutcome.error`, journal entries and reports, so one bad file never
@@ -172,16 +209,16 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 
 | Aspect | Design |
 |---|---|
-| Store | **One global store** `<cache dir>/scan-cache.bin` (D-106), keyed by `path_key` (lexically normalised, `/` separators, case-folded on Windows). Overlapping roots share entries; no per-root merge logic. |
+| Store | **One global store** `<cache dir>/scan-cache.bin` (D-106), keyed by `path_key` (lexically normalised, `/` separators, case-folded on Windows; an undecodable byte of a non-Unicode name is written as NUL plus two hex digits, so a key always extends its folder's key). Overlapping roots share entries; no per-root merge logic. |
 | Validity | Stamp `{size: u64, mtime_ns: i64}` compared by **exact equality**. An entry whose mtime is within 2 s of the scan start, or in the future, is not trusted (still being written / clock skew). Optional `FileId` (Linux `st_dev`+`st_ino`) carries fingerprints across renames when `(id, size, mtime)` match. |
-| Contents | `mj_core::Fingerprints`: `partial`, `full` (xxh64), `sha256`, `dhash`, `phash`, `width`, `height`, `exif` (`Some` only when really captured), `flags` (`unreadable`, `no_thumbnail`, `from_thumbnail`, `decode_failed`). Every stage is an explicit `Option`; **no zero sentinels** (D-006). Derived scores (quality score) are never cached. |
+| Contents | `mj_core::Fingerprints`: `partial`, `full` (xxh64), `sha256`, `dhash`, `phash`, `width`, `height`, `exif` (`Some` only when really captured), `flags` (`unreadable`, `no_thumbnail`, `from_thumbnail`, `decode_failed`, `main_decoded`). Every stage is an explicit `Option`; **no zero sentinels** (D-006). Derived scores (quality score) are never cached. |
 | Versions | `format_version` (layout) and `algo_version` = `FINGERPRINT_ALGO_VERSION` (meaning: window layout, seed, grid, downsampler). Any mismatch = empty cache. Bump `algo_version` whenever the meaning of a stored value changes, not only its shape. |
 | Format | In-house little-endian binary, documented in `crates/scan/src/cache/format.rs`: magic `MJCACHE\0`, versions, entry count, records with a presence bitmask then only present fields, trailer = xxh64 of everything before it. |
 | Load | Whole file into memory at engine start; bad magic, version, trailer or any parse error → empty cache, one log line, never fatal. |
 | Save | After a completed scan (and after hash stages finish): write `<file>.tmp` in the same directory, `sync_all`, rename over the target (atomic). Cache write failures are ignored. |
 | Pruning | On save, drop entries under a scanned root that the completed scan did not see, and entries under roots that no longer exist (D-006). |
 | Lookup | `FingerprintStore::get(path, stamp)` returns data only on an exact stamp match; `put` merges stages under the same stamp and replaces on a different stamp, so later scans add stages lazily (e.g. a full hash to an entry that only had a partial). |
-| Staged hashing | Size buckets across **all** files (cache hits included, D-006); partial = xxh64 over head + middle + tail windows of 64 KiB (D-005), whole file when ≤ 192 KiB (stored as `full` too); full hash streamed in 1 MiB buffers for partial collisions only; SHA-256 (or byte compare) confirmation of a group before deletion is offered; files sharing a `FileId` are hard links, not duplicates. |
+| Staged hashing | Size buckets across **all** files (cache hits included, D-006); partial = xxh64 over head + middle + tail windows of 64 KiB (D-005), whole file when ≤ 192 KiB (stored as `full` too); full hash streamed in 1 MiB buffers for partial collisions only; SHA-256 (or byte compare) confirmation of a group before deletion is offered; files sharing a `FileId` are hard links, not duplicates, and a member with other hard links frees nothing (size 0, never pre-selected, kept in preference; W6-B D-B40). Partial and full reads are single-flight across the concurrently running content detectors (W6-B D-B43). |
 | Diagnostics | Every failed open/read/decode counted (`Diagnostics::unreadable`, `skipped["no_thumbnail"]`, ...); the UI must say "N files could not be compared". |
 
 Perceptual matching follows research §4-§7 unchanged: box-averaged grids,
@@ -192,8 +229,13 @@ confidence from the group diameter, deterministic ordering, no aspect-ratio
 bucketing, no full-decode fallback for files without an embedded thumbnail
 **for HEIC**. Deviation D-2B04: a JPEG without an embedded thumbnail (and any PNG) is
 fully decoded by default within limits (64 MiB file, 64 MP, 32768 px a side, at most
-two images over 16 MP at once); the `decode_full` toggle restores the strict
-reference behaviour (`skipped["no_thumbnail"]`).
+two images over 16 MP or 16 MiB at once; PNG decodes in O(width) memory); the
+`decode_full` toggle restores the strict reference behaviour (`skipped["no_thumbnail"]`).
+Deviation W6-B D-B39: an EXIF thumbnail is used only when it lies in the APP1 segment,
+is at most 1024x1024 and has the main frame's shape, and a thumbnail fingerprint never
+decides a match: every thumbnail-sourced image that would join a group is decoded in
+full and the grouping redone. A zero dHash is unusable in every mode (D-B41). Clusters
+over 2048 members report the 2t diameter bound (D-B44).
 
 ## 7. Safety model
 
@@ -275,7 +317,9 @@ confirmation (D-116).
   end of each item.
 - `runs.jsonl`: `RunRecord` snapshots (same last-wins rule).
 - Ids: `RunId` = start time in ms (bumped past the newest existing id);
-  `EntryId` = `run_id * 1_000_000 + item index` (unique across sessions).
+  `EntryId` = `run_id * 1_000_000 + item index` (unique across sessions), written as a
+  decimal string because it exceeds 2^53 (the webview's exact-integer limit); lines
+  written earlier with a bare number still load.
 - Retention: entries older than `undo_days` are not undoable
   (`undo_deadline`) but stay for the audit log; quarantine purge marks entries
   `purged`. Paths use the lossless codec.
@@ -327,6 +371,15 @@ Auto-purge after `quarantine_days`.
 - CSP: `default-src 'self'; style-src 'self'; img-src 'self' data:; connect-src
   'self' ipc: http://ipc.localhost`. No inline scripts, no inline `style`
   attributes (set dynamic sizes through the CSSOM, `el.style.setProperty`).
+- Folders and export targets are chosen in the operating system's own dialogs
+  (Windows: Explorer's `IFileOpenDialog` / `IFileSaveDialog`; Linux: the GTK
+  file chooser, or the desktop portal when sandboxed), opened by the shell
+  commands `dialog_pick_folder` / `dialog_save_file` and owned by the main
+  window. The webview has no dialog or filesystem permission (capability
+  `core:default`); it receives a path, or `null` on cancel, and acts on it only
+  through an engine command with its own checks. The mock backend answers both
+  commands deterministically (`ui/js/mock/dialogs.js`). Supersedes the in-app
+  folder browser of D-104 (W6-A D-6A1).
 - Colours only in `ui/styles/tokens.css` (a test enforces it). Light theme
   only (D-004). One scroll container per view.
 - Tests: `node --test ui/` (the `ui/package.json` main `test-all.js` imports
@@ -369,7 +422,7 @@ merge. Contract changes (anything frozen) are requested from the orchestrator.
 | **W3-A** optimisation framework, ZIP, OOXML | `crates/optimise/src/{framework.rs,zip_repack.rs}`, `crates/optimise/src/office/**`, `crates/formats/src/zip/write.rs`, `crates/formats/src/xml.rs`, `crates/formats/src/ooxml/**` |
 | **W3-B** PDF, archiving, FS compression | `crates/optimise/src/{pdf,archive,fs_compression}.rs`, `crates/formats/src/pdf/**`, `crates/platform/src/action/fs_compress/**` |
 | **W3-C** images, media, tools | `crates/optimise/src/{tools,external}.rs`, `crates/optimise/src/images/**`, `crates/optimise/src/media/**`, `crates/formats/src/png.rs`, `crates/formats/src/media/**`, `crates/engine/src/tools.rs` |
-| **W3-D** IPC wiring + derived screens | `src-tauri/src/**`, `crates/engine/src/{app,scope,fsbrowse,scan_ops,opportunities,results,steps,search,plan,apply,jobs,history,reports,disk}.rs`; UI files under `ui/js/views/{history,report,queue,search,disk}/**` (created in Wave 3) |
+| **W3-D** IPC wiring + derived screens | `src-tauri/src/**`, `crates/engine/src/{app,scope,scan_ops,opportunities,results,steps,search,plan,apply,jobs,history,reports,disk}.rs`; UI files under `ui/js/views/{history,report,queue,search,disk}/**` (created in Wave 3) |
 | **W3-E** settings, schedules, CLI | `crates/cli/**`, `crates/engine/src/{settings,schedules,presets,paths}.rs`; UI files under `ui/js/views/settings/**` (created in Wave 3); OS integration code (context menu) in new files under `crates/engine/src/settings/` |
 
 Living documents (`docs/PLAN.md`, `docs/STATUS.md`, `docs/FEATURE-STATUS.md`,
@@ -390,4 +443,4 @@ Additive changes (details and rationale in `docs/decisions/W3-D1.md`):
 | `mj_core::Error` | variants `NeedsElevation(PathBuf)` (`needs_elevation`), `Confidential(PathBuf)` (`confidential`). |
 | `mj_core::JournalEntry` | `original_mode`, `previous_compression`, `undo_of` (all optional). |
 | `mj_core::SavingsSummary` | `reclaimed` (serde default). |
-| `api::FsListDirResponse` | `omitted` (serde default). |
+| `api::FsListDirResponse` | `omitted` (serde default). The command and its types were removed in W6-A. |

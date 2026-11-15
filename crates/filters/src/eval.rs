@@ -268,14 +268,35 @@ fn file_name(e: &FileEntry) -> std::borrow::Cow<'_, str> {
 }
 
 impl Leaf {
+    /// True for the conditions that describe a regular file's own bytes or times (extension,
+    /// type group, size, dates, header, content, media). On anything else they are *not
+    /// applicable*, which evaluates to `Unknown`: never a match, and `-cond` is no match
+    /// either (RF-1). A folder's own size is 0 and its own mtime only moves when a direct
+    /// child is added or removed, so `size:<1MB`, `older:90d` or `-ext:mp4` said nothing
+    /// about the files inside and used to select (and pre-select) whole folders.
+    fn files_only(&self) -> bool {
+        matches!(
+            self,
+            Leaf::Ext(_)
+                | Leaf::Size(..)
+                | Leaf::ZeroByte
+                | Leaf::Date { .. }
+                | Leaf::Mismatch
+                | Leaf::Content(_)
+                | Leaf::Media(_)
+        )
+    }
+
     fn eval(&self, e: &FileEntry, rt: &Runtime<'_>) -> Tri {
-        let is_file = e.kind == EntryKind::File;
+        if e.kind != EntryKind::File && self.files_only() {
+            return Tri::Unknown;
+        }
         match self {
             Leaf::Name(m) => Tri::from(m.is_match(&file_name(e))),
             Leaf::Path(m) => Tri::from(m.is_match(&e.path.to_string_lossy())),
-            Leaf::Ext(set) => Tri::from(is_file && set.contains(&extension_lower(&e.path))),
+            Leaf::Ext(set) => Tri::from(set.contains(&extension_lower(&e.path))),
             Leaf::Size(cmp, bytes) => Tri::from(cmp.test(e.size, *bytes)),
-            Leaf::ZeroByte => Tri::from(is_file && e.size == 0),
+            Leaf::ZeroByte => Tri::from(e.size == 0),
             Leaf::Date { which, cmp, at } => {
                 let ts = match which {
                     DateField::Created => e.created,
@@ -301,9 +322,6 @@ impl Leaf {
             Leaf::Mismatch => self.eval_mismatch(e, rt),
             Leaf::Content(n) => self.eval_content(e, rt, n),
             Leaf::Media(m) => {
-                if !is_file {
-                    return Tri::False;
-                }
                 let meta = rt.content.media.as_ref().and_then(|p| p.0.media_meta(e));
                 match meta {
                     Some(meta) => Tri::from(m.matches(&meta)),
@@ -536,6 +554,21 @@ fn reads_files(n: &Node) -> bool {
         Node::Not(c) => reads_files(c),
         Node::Leaf(l) => matches!(l, Leaf::Mismatch | Leaf::Content(_)),
     }
+}
+
+/// True when the rule asks for folders in so many words: a `kind:dir` condition that is
+/// not negated. Only then may a matching folder be pre-selected as a whole (RF-1): a folder
+/// matched on its name, path length or attributes alone is listed, never pre-selected.
+pub fn asks_for_folders(rule: &Rule) -> bool {
+    fn walk(r: &Rule, positive: bool) -> bool {
+        match r {
+            Rule::All(v) | Rule::Any(v) => v.iter().any(|c| walk(c, positive)),
+            Rule::Not(c) => walk(c, !positive),
+            Rule::Cond(Condition::Kind { kind }) => positive && *kind == EntryKind::Dir,
+            Rule::Cond(_) => false,
+        }
+    }
+    walk(rule, true)
 }
 
 /// Compile a rule (validates regexes, groups and `LargestN` placement).

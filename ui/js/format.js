@@ -62,11 +62,14 @@ export function formatAgo(tsNs, nowMs = Date.now()) {
   return formatDate(tsNs);
 }
 
-/** `13 Nov 2026`. @param {number} tsNs */
+/**
+ * `13 Nov 2026`, in the user's time zone (UI-8: the engine computes schedules in local
+ * time, and a run at 08:30 must not read as the day before). @param {number} tsNs
+ */
 export function formatDate(tsNs) {
   const d = new Date(tsNs / 1e6);
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
 /** `1:02:14` or `4:08` from seconds. @param {number} seconds */
@@ -123,29 +126,17 @@ export function middleEllipsis(text, max = 48) {
   return `${t.slice(0, keep - tail)}…${t.slice(t.length - tail)}`;
 }
 
-/** `13 Nov 2026, 14:05` (UTC). @param {number} tsNs */
+/** `13 Nov 2026, 14:05`, local time like `formatDate`. @param {number} tsNs */
 export function formatDateTime(tsNs) {
   const d = new Date(tsNs / 1e6);
   const p = (n) => String(n).padStart(2, '0');
-  return `${formatDate(tsNs)}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  return `${formatDate(tsNs)}, ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /** Whole percent, or one decimal below 10 (`0.4 %`, `37 %`). @param {number} fraction 0..1 */
 export function formatPercent(fraction) {
   const p = Math.max(0, Math.min(1, Number(fraction) || 0)) * 100;
   return `${p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)} %`;
-}
-
-/**
- * Join a folder and a new file name for display or for an export target. The
- * separator follows the platform; only used for names the user typed, never
- * for paths the engine handed out.
- * @param {string} dir @param {string} name @param {string} [platform]
- */
-export function joinPath(dir, name, platform = 'windows') {
-  const sep = platform === 'windows' || /^[A-Za-z]:/.test(dir) ? '\\' : '/';
-  const base = String(dir).replace(/[\\/]+$/, '');
-  return base === '' ? `${sep}${name}` : /^[A-Za-z]:$/.test(base) ? `${base}${sep}${name}` : `${base}${sep}${name}`;
 }
 
 /** Compression saved by the file system: 0..1, or null when nothing is compressed. @param {number} size @param {number} allocated */

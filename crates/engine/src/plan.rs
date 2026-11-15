@@ -9,20 +9,49 @@ use std::collections::BTreeMap;
 
 use mj_core::{
     lock, Action, Badges, ChecklistItem, ChecklistLevel, Confidence, Error, Estimate, OpportunityId, Plan, PlanStep,
-    Result, SafetyClass, SelectionOverrides, StepId, Timestamp,
+    Result, SafetyClass, StepId, Timestamp,
 };
 
 use crate::api::{Event, PlanAddStepRequest, PlanReorderRequest, PlanUpdateStepRequest, StepRequest};
-use crate::results::{blocked_reason, candidate_safety, is_selected, severity, skip_badges, OpportunityRecord};
+use crate::results::{candidate_safety, is_selected, severity, skip_badges, OpportunityRecord, Results};
+use crate::savings::{tally, Part, Tally};
 use crate::Engine;
+
+/// What a dry run measured for one step, and what it was measured for.
+#[derive(Debug, Clone)]
+pub struct Measured {
+    pub action: Action,
+    /// `measure_key` of the items the dry run built (ENG-4): the measurement stands for
+    /// those items, not for whatever the selection is when the dry run ends.
+    pub key: u64,
+    /// `Tally::shared` of the step at the time: the rows another step of the plan counts
+    /// were left out of the measurement, so it stands only while they are the same.
+    pub shared: (u64, u64),
+    pub estimate: Estimate,
+}
 
 /// Plan state of the session.
 #[derive(Debug, Default)]
 pub struct PlanState {
     pub plan: Plan,
-    /// Exact estimates measured by the last dry run, valid while the step's action and
-    /// selection are unchanged.
-    pub measured: BTreeMap<StepId, (Action, SelectionOverrides, Estimate)>,
+    /// Exact estimates measured by the last dry run, valid while the step's action, the
+    /// identity of its items (`measure_key` of the items the dry run built) and its
+    /// overlap with the other steps are unchanged.
+    pub measured: BTreeMap<StepId, Measured>,
+    /// DUP-2: the parameters the user chose for an opportunity this session (in the review:
+    /// `step_params_set`, the keep rule), in the plan or not. A rescan runs the analysis
+    /// with them (`params_for`), so the review shows and keeps what the user chose.
+    pub chosen: BTreeMap<OpportunityId, mj_core::ParamValues>,
+}
+
+/// The account of the plan's steps (`None` for a step whose opportunity is gone): every
+/// file the steps act on is counted once, by the step that frees most for it.
+pub(crate) fn step_tallies(results: &Results, steps: &[PlanStep], skip: Badges) -> Vec<Option<Tally>> {
+    let recs: Vec<Option<&OpportunityRecord>> = steps.iter().map(|s| results.get(&s.opportunity)).collect();
+    let parts: Vec<Part<'_>> =
+        steps.iter().zip(&recs).filter_map(|(s, r)| r.map(|rec| Part { rec, action: &s.action })).collect();
+    let mut tallies = tally(&parts, skip, true).into_iter();
+    recs.iter().map(|r| r.and_then(|_| tallies.next())).collect()
 }
 
 /// One-line summary of an action.
@@ -64,31 +93,39 @@ pub(crate) fn removes(a: &Action) -> bool {
     matches!(a, Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete | Action::Move { .. })
 }
 
-/// Estimate of a step from its record's selection.
-pub(crate) fn step_estimate(rec: &OpportunityRecord, skip: Badges, action: &Action) -> Estimate {
-    let mut e = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
-    // F-02: members of a group whose every copy is selected are skipped at apply.
-    let survivors = if crate::results::removes_copy(action) {
-        crate::results::group_survivors(rec, skip)
-    } else {
-        Default::default()
-    };
-    for c in &rec.candidates {
-        let lost = c.group.is_some_and(|g| matches!(survivors.get(&g), Some(None)));
-        if lost && is_selected(rec, c, skip) {
-            e.skipped += 1;
-        } else if is_selected(rec, c, skip) {
-            e.files += 1;
-            if !c.badges.contains(Badges::ONLINE_ONLY) {
-                e.bytes_before += c.size;
-                e.bytes_after += c.size_after.min(c.size);
-            }
-            e.confidence = e.confidence.max(c.confidence);
-        } else if blocked_reason(c, skip).is_some() && c.default_selected {
-            e.skipped += 1;
-        }
+/// ENG-4: identity of the items a step of `rec` acts on: the candidate set (ids are fresh
+/// at every analysis; sizes, groups and kept copies), the groups' keepers, the selection
+/// and the badges the settings skip. A dry-run measurement stands for the step only while
+/// this key equals the key of the items the dry run measured: a re-analysis, a repeated
+/// search, rows removed by another step or a selection change during the dry run all
+/// change it. In-memory only (never persisted), so the std hasher is fine.
+pub(crate) fn measure_key(rec: &OpportunityRecord, skip: Badges) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    crate::review_order::fingerprint(&rec.candidates).hash(&mut h);
+    for g in &rec.groups {
+        (g.id, &g.keeper).hash(&mut h);
     }
-    e
+    rec.selection.include.hash(&mut h);
+    rec.selection.exclude.hash(&mut h);
+    skip.bits().hash(&mut h);
+    h.finish()
+}
+
+/// Days the items (or originals) of `action` stay in MyJanitor's quarantine before the
+/// purge deletes them, when they go there; `None` when they do not.
+pub(crate) fn quarantine_days(action: &Action, route: mj_actions::TrashRoute, setting: u32) -> Option<u32> {
+    use mj_actions::TrashRoute::Quarantine as Q;
+    match action {
+        Action::Quarantine { purge_after_days } => Some(*purge_after_days),
+        Action::Trash if route == Q => Some(setting),
+        Action::Optimise { originals, .. } | Action::Archive { originals, .. } => match originals {
+            mj_core::OriginalsPolicy::Quarantine => Some(setting),
+            mj_core::OriginalsPolicy::RecycleBin if route == Q => Some(setting),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Safety class of a step: the action's class, escalated by any selected row whose own
@@ -122,6 +159,7 @@ impl Engine {
 
     /// Recompute estimates, safety and the checklist; returns the new plan.
     pub(crate) fn refresh_plan(&self) -> Plan {
+        let route = self.trash_route();
         let settings = lock(&self.settings).clone();
         let skip = skip_badges(&settings);
         let sync_known = self.platform().sync_roots().is_ok();
@@ -135,23 +173,24 @@ impl Engine {
         let mut empty_steps = Vec::new();
         let mut lose_every_copy = 0u64;
         let measured = st.measured.clone();
-        for step in &mut st.plan.steps {
+        let tallies = step_tallies(&results, &st.plan.steps, skip);
+        let mut counted_once = 0u64;
+        for (step, t) in st.plan.steps.iter_mut().zip(&tallies) {
             let rec = results.get(&step.opportunity);
             step.safety = step_safety(&step.action, step.lossy, rec, skip);
             step.summary = summary(&step.action);
-            match rec {
-                Some(rec) => {
+            match (rec, t) {
+                (Some(rec), Some(t)) => {
                     step.selection = rec.selection.clone();
                     step.estimate = match measured.get(&step.id) {
-                        Some((a, sel, est)) if *a == step.action && *sel == rec.selection => *est,
-                        _ => step_estimate(rec, skip, &step.action),
-                    };
-                    if !removes(&step.action) && !matches!(step.action, Action::None) {
-                        // Copies free nothing; optimisations keep their estimate.
-                        if matches!(step.action, Action::Copy { .. }) {
-                            step.estimate.bytes_after = step.estimate.bytes_before;
+                        Some(m)
+                            if m.action == step.action && m.key == measure_key(rec, skip) && m.shared == t.shared =>
+                        {
+                            m.estimate
                         }
-                    }
+                        _ => t.estimate(),
+                    };
+                    counted_once += t.shared.0;
                     for c in &rec.candidates {
                         let locked = c.badges & skip;
                         if !locked.is_empty() {
@@ -174,11 +213,11 @@ impl Engine {
                     if crate::results::removes_copy(&step.action) {
                         lose_every_copy += crate::results::groups_losing_every_copy(rec, skip);
                     }
-                    if step.estimate.files == 0 {
+                    if step.estimate.files == 0 && t.shared.0 == 0 {
                         empty_steps.push(step.title.clone());
                     }
                 }
-                None => {
+                _ => {
                     step.estimate = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
                     empty_steps.push(step.title.clone());
                 }
@@ -190,14 +229,27 @@ impl Engine {
         plan.estimate = plan.steps.iter().fold(zero, |acc, s| acc.add(&s.estimate));
         plan.updated = Timestamp::now();
         let mut list = Vec::new();
-        if plan.steps.iter().any(|s| s.safety.is_undoable() && s.safety != SafetyClass::ReviewOnly) {
+        let undoable: Vec<&PlanStep> =
+            plan.steps.iter().filter(|s| s.safety.is_undoable() && s.safety != SafetyClass::ReviewOnly).collect();
+        if !undoable.is_empty() {
+            // ENG-9: items held in the quarantine are purged after their retention, so their
+            // undo window is the shorter of the two.
+            let undo = settings.general.undo_days;
+            let held = undoable
+                .iter()
+                .filter_map(|s| quarantine_days(&s.action, route, settings.general.quarantine_days))
+                .min()
+                .filter(|&d| d < undo);
             list.push(ChecklistItem {
                 level: ChecklistLevel::Ok,
                 code: "undo_window".into(),
-                text: format!(
-                    "Every reversible step can be undone from History for {} days",
-                    settings.general.undo_days
-                ),
+                text: match held {
+                    None => format!("Every reversible step can be undone from History for {undo} days"),
+                    Some(d) => format!(
+                        "Every reversible step can be undone from History for {undo} days, \
+                         except items kept in the quarantine: {d} days, then they are deleted"
+                    ),
+                },
             });
         }
         let confirm = plan.steps.iter().filter(|s| s.safety.requires_confirmation()).count() as u64;
@@ -288,6 +340,16 @@ impl Engine {
                 ),
             });
         }
+        if counted_once > 0 {
+            list.push(ChecklistItem {
+                level: ChecklistLevel::Info,
+                code: "counted_once".into(),
+                text: format!(
+                    "{} listed by more than one step: each is counted once, in the step that frees most",
+                    plural(counted_once, "item is", "items are")
+                ),
+            });
+        }
         if !empty_steps.is_empty() {
             list.push(ChecklistItem {
                 level: ChecklistLevel::Info,
@@ -323,7 +385,17 @@ impl Engine {
     /// choice is reported at once (the guard checks it again, per item, before acting):
     /// absolute, not protected (also in its canonical spelling), not one of MyJanitor's
     /// folders, and not inside a scanned location.
-    pub(crate) fn check_action_destination(&self, action: &Action) -> Result<()> {
+    /// ACT-9: a quarantine retention is checked here too, against the same bounds as the
+    /// `quarantine_days` setting (0 days would be a permanent delete classed reversible).
+    pub(crate) fn check_action(&self, action: &Action) -> Result<()> {
+        if let Action::Quarantine { purge_after_days } = action {
+            if !(1..=crate::settings::MAX_DAYS).contains(purge_after_days) {
+                return Err(Error::InvalidInput(format!(
+                    "a quarantine keeps items 1 to {} days, not {purge_after_days}",
+                    crate::settings::MAX_DAYS
+                )));
+            }
+        }
         let (Action::Move { dest, .. } | Action::Copy { dest, .. }) = action else { return Ok(()) };
         if !dest.is_absolute() {
             return Err(Error::InvalidInput(format!("the destination must be an absolute folder: {}", dest.display())));
@@ -366,7 +438,7 @@ impl Engine {
         if !matches!(action, Action::None) && !o.available_actions.contains(&action.kind()) {
             return Err(Error::InvalidInput(format!("{title} cannot use the action `{:?}`", action.kind())));
         }
-        self.check_action_destination(&action)?;
+        self.check_action(&action)?;
         // One source of truth for an optimiser's parameters: the step's. Values given inside
         // the action win over the card's, then the request's `params` win over both; the
         // action carries the merged set so the optimiser really runs with what the user chose.
@@ -380,7 +452,7 @@ impl Engine {
         if let Action::Optimise { params: p, .. } = &mut action {
             *p = params.clone();
         }
-        let lossy = o.safety == SafetyClass::LossyOptIn || crate::steps::params_lossy(rec, &params);
+        let lossy = crate::steps::step_lossy(rec, &params);
         drop(results);
         {
             let mut st = lock(&self.plan);
@@ -423,7 +495,7 @@ impl Engine {
             }
         }
         if let Some(a) = &req.action {
-            self.check_action_destination(a)?;
+            self.check_action(a)?;
         }
         {
             let mut st = lock(&self.plan);
@@ -443,8 +515,7 @@ impl Engine {
                 *p = step.params.clone();
             }
             if let Some(rec) = rec {
-                step.lossy =
-                    rec.opportunity.safety == SafetyClass::LossyOptIn || crate::steps::params_lossy(rec, &step.params);
+                step.lossy = crate::steps::step_lossy(rec, &step.params);
             }
             st.measured.remove(&req.step_id);
         }

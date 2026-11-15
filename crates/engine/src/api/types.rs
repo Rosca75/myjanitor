@@ -5,14 +5,15 @@
 //! unknown fields; optional request fields may be omitted; optional response
 //! fields are omitted when `None`; paths use the lossless codec
 //! (`mj_core::pathutil`); timestamps are integer nanoseconds since the epoch;
-//! sizes are integer bytes; ids are integers below 2^53.
+//! sizes are integer bytes; ids are integers below 2^53, except `EntryId`, which is
+//! a decimal string (see `mj_core::EntryId`).
 
 use std::path::PathBuf;
 
 use mj_core::index::ScanStats;
 use mj_core::{
     Action, Cadence, Candidate, CandidateGroup, CandidateId, Confidence, Diagnostics, ErrorInfo, Estimate,
-    ExportFormat, ItemOutcome, Job, JobId, JobProgress, JournalEntry, KeepRule, Opportunity, OpportunityId,
+    ExportFormat, GroupId, ItemOutcome, Job, JobId, JobProgress, JournalEntry, KeepRule, Opportunity, OpportunityId,
     OriginalsPolicy, ParamValues, Phase, Plan, Rule, RulePreset, RunId, RunKind, SafetyClass, SavingsSummary,
     ScanScope, Schedule, Settings, StepConfirmation, StepId, Timestamp,
 };
@@ -93,56 +94,60 @@ pub struct ScopePathRequest {
     pub path: PathBuf,
 }
 
-/// `fs_list_dir` request (in-app folder browser, D-104).
+// ------------------------------------------------- shell (native dialogs)
+//
+// The two `dialog_*` commands are shell commands (`SHELL_COMMANDS`): the GUI shell
+// implements them with the operating system's own dialogs, because they need the
+// window. The engine has no method for them; the types live here because this
+// module is the one IPC contract shared by the shell, IPC.md and the mock.
+
+/// `dialog_pick_folder` request: the OS folder dialog (W6-A D-6A1).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FsListDirRequest {
-    /// Folder to list; `None` lists the places (home, common folders, drives).
+pub struct DialogPickFolderRequest {
+    /// Dialog title; the OS default when omitted.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Folder the dialog opens in; the OS default (usually the last one used) when
+    /// omitted. A hint only: a relative or missing folder is ignored.
     #[serde(default, with = "mj_core::pathutil::serde_path::opt")]
-    pub path: Option<PathBuf>,
-    #[serde(default)]
-    pub show_hidden: bool,
-    /// Also list files (for "save as" pickers); folders only by default.
-    #[serde(default)]
-    pub include_files: bool,
+    pub start_dir: Option<PathBuf>,
 }
 
-/// One row of the folder browser.
+/// One entry of the file-type list of a save dialog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FsDirEntry {
+#[serde(deny_unknown_fields)]
+pub struct DialogFileFilter {
+    /// Label shown in the list (`CSV file`).
     pub name: String,
-    #[serde(with = "mj_core::pathutil::serde_path")]
-    pub path: PathBuf,
-    pub is_dir: bool,
-    pub is_link: bool,
-    pub hidden: bool,
+    /// Extensions without the dot (`["csv"]`). The first one of the first filter is
+    /// the default extension on Windows.
+    pub extensions: Vec<String>,
 }
 
-/// A shortcut in the folder browser sidebar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FsPlace {
-    pub label: String,
-    #[serde(with = "mj_core::pathutil::serde_path")]
-    pub path: PathBuf,
-    /// `home`, `folder` or `drive`.
-    pub kind: String,
-}
-
-/// `fs_list_dir` response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FsListDirResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "mj_core::pathutil::serde_path::opt")]
-    pub path: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "mj_core::pathutil::serde_path::opt")]
-    pub parent: Option<PathBuf>,
-    /// Sorted: folders first, then case-insensitive name.
-    pub entries: Vec<FsDirEntry>,
-    pub places: Vec<FsPlace>,
-    /// Entries left out because they are hidden (`show_hidden: false`) or are files
-    /// (`include_files: false`), so the browser can say so instead of hiding them silently.
+/// `dialog_save_file` request: the OS "Save as" dialog (W6-A D-6A1).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DialogSaveFileRequest {
+    /// Dialog title; the OS default when omitted.
     #[serde(default)]
-    pub omitted: u64,
+    pub title: Option<String>,
+    /// Folder the dialog opens in (a hint, like `DialogPickFolderRequest::start_dir`).
+    #[serde(default, with = "mj_core::pathutil::serde_path::opt")]
+    pub start_dir: Option<PathBuf>,
+    /// Suggested file name (a name, not a path).
+    #[serde(default)]
+    pub file_name: Option<String>,
+    /// File types offered by the dialog.
+    #[serde(default)]
+    pub filters: Vec<DialogFileFilter>,
 }
+
+/// Response of both dialog commands: the chosen path, or `null` when the user
+/// cancelled the dialog (a cancel is not an error).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DialogPath(#[serde(with = "mj_core::pathutil::serde_path::opt")] pub Option<PathBuf>);
 
 // ---------------------------------------------------------------- scan
 
@@ -352,9 +357,18 @@ pub struct CandidatesPageRequest {
     pub sort: CandidateSortKey,
     #[serde(default)]
     pub descending: bool,
-    /// Case-insensitive substring of the path.
+    /// Case-insensitive substring of the path. With `keep_groups`, a group is shown
+    /// (whole) when any of its members matches.
     #[serde(default)]
     pub filter: Option<String>,
+    /// Only rows of at least this many bytes. With `keep_groups`, a group is shown
+    /// (whole) when its largest member is at least this size.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    /// "Keep groups together" (W6-A): sort, filter and page whole groups, each under its
+    /// header with the kept copy first. Ignored by steps without groups.
+    #[serde(default)]
+    pub keep_groups: bool,
 }
 
 fn default_limit() -> u32 {
@@ -378,12 +392,73 @@ pub struct CandidateRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CandidatesPage {
     pub opportunity_id: OpportunityId,
-    /// Rows matching sub-group + filter.
+    /// Rows matching sub-group + filters.
     pub total: u64,
+    /// First row of this page (with `keep_groups`, the start of the page holding the
+    /// requested offset: a page never starts inside a group that fits on one page).
     pub offset: u64,
     pub rows: Vec<CandidateRow>,
     /// Groups referenced by the rows of this page.
     pub groups: Vec<CandidateGroup>,
+    /// Totals of those groups over all their shown members (also the ones on other pages).
+    #[serde(default)]
+    pub group_stats: Vec<GroupStats>,
+    /// The step's candidates have groups (duplicates-type step).
+    #[serde(default)]
+    pub has_groups: bool,
+    /// Groups are kept together on this page (`keep_groups` asked and `has_groups`).
+    #[serde(default)]
+    pub keep_groups: bool,
+    /// 1-based page number and page count.
+    #[serde(default)]
+    pub page: u64,
+    #[serde(default)]
+    pub pages: u64,
+    /// Offset of the next / previous page, `null` at the ends.
+    #[serde(default)]
+    pub next_offset: Option<u64>,
+    #[serde(default)]
+    pub prev_offset: Option<u64>,
+}
+
+/// Totals of one group in the step table (the group header row).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupStats {
+    pub id: GroupId,
+    /// Members shown (within the current sub-group).
+    pub files: u64,
+    /// Largest and smallest member size (equal for exact duplicates).
+    pub largest: u64,
+    pub smallest: u64,
+    /// Bytes freed by removing every member but the kept copy (one copy is always kept).
+    pub reclaimable: u64,
+}
+
+/// `candidate_thumbnails` request: the rows of the visible page (at most 100).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CandidateThumbnailsRequest {
+    pub opportunity_id: OpportunityId,
+    pub candidate_ids: Vec<CandidateId>,
+}
+
+/// One row thumbnail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Thumbnail {
+    pub candidate_id: CandidateId,
+    /// `data:image/...;base64,...` (at most 128 px on the long side for JPEG and PNG).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_url: Option<String>,
+    /// Why there is none: `not_image`, `online_only`, `too_large`, `unreadable`,
+    /// `undecodable`, `unknown` (the UI shows the file-type icon instead).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// `candidate_thumbnails` response, in request order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CandidateThumbnails {
+    pub thumbnails: Vec<Thumbnail>,
 }
 
 /// `selection_set` request.
@@ -396,6 +471,18 @@ pub struct SelectionSetRequest {
     pub ids: Option<Vec<CandidateId>>,
     #[serde(default)]
     pub sub_group: Option<String>,
+    /// With `ids: None`: only the rows the table shows for this text filter, same meaning
+    /// as in `candidates_page` (ENG-3: "select all" acts on what is visible, never on rows
+    /// a filter hides).
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// With `ids: None`: the "At least" size filter of `candidates_page`.
+    #[serde(default)]
+    pub min_size: Option<u64>,
+    /// With `ids: None`: whether the table keeps groups together (a filter then keeps or
+    /// drops whole groups, as in `candidates_page`).
+    #[serde(default)]
+    pub keep_groups: bool,
     pub selected: bool,
 }
 
@@ -818,7 +905,8 @@ pub enum ReportExportKind {
     Audit,
 }
 
-/// `report_export` request. The destination comes from the in-app save picker.
+/// `report_export` request. In the GUI the destination comes from the OS save dialog
+/// (`dialog_save_file`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReportExportRequest {
@@ -826,9 +914,15 @@ pub struct ReportExportRequest {
     pub run_id: Option<RunId>,
     pub kind: ReportExportKind,
     pub format: ExportFormat,
-    /// Target file; never overwritten (a ` (1)` suffix is added instead).
+    /// Target file. An existing file is kept and a ` (1)` suffix is added, unless
+    /// `overwrite` is set.
     #[serde(with = "mj_core::pathutil::serde_path")]
     pub dest: PathBuf,
+    /// Replace an existing regular file at `dest` (W6-A D-6A4). Set only when the user
+    /// chose `dest` in the OS save dialog, which asked before an existing file was
+    /// chosen. Off by default: the CLI and every other caller never overwrite.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 /// `results_export` request (CLN-ACT-11).
@@ -841,14 +935,18 @@ pub struct ResultsExportRequest {
     #[serde(default)]
     pub selected_only: bool,
     pub format: ExportFormat,
+    /// Target file; see `ReportExportRequest::dest`.
     #[serde(with = "mj_core::pathutil::serde_path")]
     pub dest: PathBuf,
+    /// Replace an existing regular file at `dest`; see `ReportExportRequest::overwrite`.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 /// Export result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportResult {
-    /// The file actually written (may carry a ` (n)` suffix).
+    /// The file actually written (carries a ` (n)` suffix when `dest` existed and was kept).
     #[serde(with = "mj_core::pathutil::serde_path")]
     pub path: PathBuf,
     pub bytes: u64,

@@ -22,7 +22,7 @@
 //! |---|---|
 //! | `ext:mp4`, `ext:jpg,png` | extension in the list (`.` and `*.` prefixes ignored) |
 //! | `name:*.tmp`, `name:final`, `name:=exact`, `name:/^img_\d+/` | name wildcard (`*`/`?`), contains, exact (`=`), regex |
-//! | `path:*/Photos/*`, `path:Photos` | same on the full path; a wildcard without a separator matches anywhere in the path |
+//! | `path:*/Photos/*`, `path:Photos` | same on the full path; a wildcard without a separator matches anywhere in the path; one with separators matches any part of the path unless it starts at a root (`/`, `C:`), and a lone `*` first or last segment spans any number of folders (`*/Photos/*` = `**/Photos/**`) |
 //! | `size:>1GB`, `size:<=500k`, `size:1MB..10MB`, `size:=0` | bytes (binary units B/KB/MB/GB/TB, decimals ok); `=0` is the zero-byte condition |
 //! | `modified:<2024`, `>=2024-03`, `2024-03-15`, `2023..2024` | absolute dates compare with the period named (`<2024` before 2024-01-01, `>2024` after 2024, `2024` within 2024) |
 //! | `modified:>2y`, `<30d`, `30d`, `6m` | relative values are *ages* (`>2y` older than two years, `<30d` newer than 30 days, bare `30d` within the last 30 days; `m` = months) |

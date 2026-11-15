@@ -387,7 +387,7 @@ pub fn general_help() -> String {
             s.push_str(&format!("    {:<14} {}\n", c.name, c.about));
         }
     }
-    s.push_str("\nEXIT CODES:\n    0 ok   1 error   2 usage   3 finished with some failed items\n\nRun `myjanitor-cli <COMMAND> --help` for details. Changes are undoable with `undo` unless noted.\n");
+    s.push_str("\nEXIT CODES:\n    0 ok   1 error   2 usage   3 finished with some failed items (skipped items are not failures)\n\nRun `myjanitor-cli <COMMAND> --help` for details. Changes are undoable with `undo` unless noted.\n");
     s
 }
 

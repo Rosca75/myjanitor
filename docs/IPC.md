@@ -5,15 +5,23 @@ Changes go through the orchestrator. This file is
 machine-checked:
 
 - every `### \`name\`` heading is a command or an event, in the order of
-  `mj_engine::api::COMMANDS` then `EVENTS` (test `every_command_is_unique_and_documented`
-  in `crates/engine/src/tests.rs`, and `ui/js/api.test.js`);
+  `mj_engine::api::COMMANDS`, then `SHELL_COMMANDS`, then `EVENTS` (test
+  `every_command_is_unique_and_documented` in `crates/engine/src/tests.rs`, and
+  `ui/js/api.test.js`);
 - every fenced block opened with three backticks followed by `json <TypeName>`
-  must deserialize into that Rust type (test `ipc_examples_parse`).
+  must deserialize into that Rust type (test `ipc_examples_parse`);
+- every shell command states its request and response types and shows a request
+  example (test `shell_commands_name_documented_types`).
 
 The same API is used by the Tauri shell (`src-tauri/src/commands.rs`, one thin
 wrapper per command), the CLI (`crates/cli`, calling `Engine` methods directly)
 and the mock backend (`ui/js/mock/backend.js`). The engine method for each
 command has the command's name: `Engine::plan_add_step(req)`.
+
+Two commands are **shell commands** (§3.1): they open the operating system's
+own file dialogs, need the application window, and are therefore implemented by
+the Tauri shell (`src-tauri/src/dialogs.rs`) instead of an `Engine` method. The
+CLI does not have them; the mock backend answers them with a stand-in (§7).
 
 ## 1. Conventions
 
@@ -28,7 +36,7 @@ command has the command's name: `Engine::plan_add_step(req)`.
 | Paths | Strings. A path that is not valid Unicode is sent as `"\u0000"` + an escaped form (`%XX` bytes on Linux, `%uXXXX` surrogates on Windows); it round-trips exactly. Display it with the replacement; never build paths in JS by string concatenation except for display. |
 | Timestamps | Integer **nanoseconds** since 1970-01-01 UTC. JS: `new Date(ts / 1e6)`. Precision loss in JS (~256 ns) is irrelevant. |
 | Sizes | Integer bytes. Display with binary units and Explorer labels (`1.5 KB` = 1536 B, D-107). |
-| Ids | Integers below 2^53 (`CandidateId`, `GroupId`, `StepId`, `JobId`, `RunId`, `EntryId`), strings for `OpportunityId` (`det:<detector>`, `opt:<optimiser>`, `custom:<n>`), preset and schedule ids. Candidate ids are valid for one scan generation only. |
+| Ids | Integers below 2^53 (`CandidateId`, `GroupId`, `StepId`, `JobId`, `RunId`); `EntryId` is a **decimal string** (`"1794582245123000001"`: run id x 1 000 000 + index, beyond what a JavaScript number holds exactly; the UI keeps it opaque and never does arithmetic on it; the engine also accepts a bare integer on input); strings for `OpportunityId` (`det:<detector>`, `opt:<optimiser>`, `custom:<n>`), preset and schedule ids. Candidate ids are valid for one scan generation only. |
 | Errors | Rejected promise with an `ErrorInfo` (`{code, message, hint, path?}`). Per-item failures of a batch are **not** command errors: they are in `JobOutcome.errors`, reports and journal entries. |
 | Long work | Commands marked *spawns* return immediately (a `Job` or a generation) and report through events. All wrappers run off the UI thread. |
 | Generations | Every scan has a `generation`. Results and events from an older generation must be ignored by the UI. |
@@ -66,13 +74,13 @@ command has the command's name: `Engine::plan_add_step(req)`.
 | Screen / state | Commands | Events |
 |---|---|---|
 | Start-up | `app_info`, `scope_get`, `scan_status`, `opportunities_list`, `plan_get`, `jobs_list`, `report_last`, `drives_list`, `tools_list` | all |
-| Empty state | `fs_list_dir`, `scope_add_root`, `scan_start` | |
+| Empty state | `dialog_pick_folder`, `scope_add_root`, `scan_start` | |
 | Scanning | `scan_pause`, `scan_resume`, `scan_stop`, `scan_status` | `scan://progress`, `scan://detector`, `scan://done` |
 | B1 Overview | `opportunities_list`, `drives_list`, `plan_add_step`, `plan_remove_step`, `plan_reorder`, `plan_dry_run`, `schedule_from_plan` | `opportunities://changed`, `plan://changed`, `plan://dry_run` |
-| B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `results_export` | |
+| B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `candidate_thumbnails`, `results_export`, `dialog_pick_folder` (move/copy destination, preferred folder), `dialog_save_file` | |
 | Confirmation dialog | `plan_confirmation_info`, `plan_apply` | |
 | Action running | `jobs_list`, `job_pause`, `job_resume`, `job_cancel`, `jobs_reorder` | `job://progress`, `job://state`, `job://done` |
-| Completed | `report_last`, `report_get`, `report_export`, `undo_last` | `history://changed` |
+| Completed | `report_last`, `report_get`, `report_export`, `dialog_save_file`, `undo_run` (Undo on the finished run), `undo_last` (strip) | `history://changed` |
 | History | `history_list`, `history_run_detail`, `undo_run`, `restore_entries`, `quarantine_info`, `quarantine_purge` | `history://changed` |
 | Custom search | `search_parse`, `search_suggest`, `search_run`, `presets_list`, `preset_save`, `preset_delete` | |
 | Settings drawer | `settings_get`, `settings_set`, `protected_paths_get`, `protected_paths_set`, `cache_info`, `cache_clear`, `schedules_list`, `schedule_save`, `schedule_delete`, `schedule_run_now`, `tools_refresh` | |
@@ -99,11 +107,16 @@ scope is already that path and the UI opens the Optimise or Clean view; nothing 
 scanned or applied automatically.
 
 ### `scope_get`
-No request → `ScanScope`. The session scope (scope chips).
+No request → `ScanScope`. The session scope (scope chips). Its `options` are
+Settings > Scanning (`settings.scan`): copied at start-up and whenever
+`settings_set` changes that section; a `scope_set` replaces them until then.
+With `use_cache` off, detectors neither reuse nor store fingerprints either.
 
 ### `scope_set`
 `ScopeSetRequest` → `ScanScope`. Roots must be absolute; nested roots collapse
-into their parent (`/a` and `/a/b` → `/a`).
+into their parent (`/a` and `/a/b` → `/a`), except, with `one_file_system` on, a
+nested root on another drive than its parent (a disk mounted at `/a/b`), which
+the parent's walk would not enter: it stays a root of its own.
 
 ```json ScopeSetRequest
 {"scope":{"roots":["/home/me/Downloads","/home/me/Projects"],"include":[],"exclude":["**/.cache/thumbnails"],"options":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false}}}
@@ -119,16 +132,6 @@ when the path is not an existing folder.
 
 ### `scope_remove_root`
 `ScopePathRequest` → `ScanScope`. Removes a chip (compared case-insensitively on Windows).
-
-### `fs_list_dir`
-`FsListDirRequest` → `FsListDirResponse`. The in-app folder browser used for
-"+ Add location", move/copy/backup destinations and export targets (D-104: no
-dialog plugin). Without `path` it returns only `places` (Home, Desktop,
-Documents, Downloads, Pictures, Videos, Music, drives / mount points). Read-only.
-
-```json FsListDirRequest
-{"path":"/home/me","show_hidden":false,"include_files":false}
-```
 
 ### `scan_start`
 `ScanStartRequest` → `ScanStarted`. *Spawns.* Optionally replaces the scope
@@ -159,14 +162,45 @@ No request → `ScanStatus`. Used at start-up and after a webview reload.
 
 ### `opportunities_list`
 `OpportunitiesRequest` → `OpportunitiesList`. Cards with at least one candidate,
-filtered by tab and sorted. `summary` and `counts` always cover every tab.
+filtered by tab and sorted. `summary` and `counts` always cover every tab
+(`counts.all = clean + optimise + archive + review_only`).
 Tabs: `clean`/`optimise`/`archive` exclude review-only cards, `review_only`
 holds them. Disabled cards (`availability.state = "disabled"`: optimiser tool
 missing, platform-specific, or analysis not available in this build) are
 included even without candidates, sorted after the available ones, and never
-counted in `summary`, so the UI can show them greyed with the reason. `summary`
-buckets each selected row by its own safety class; `summary.reclaimed` is what
-runs applied this session freed.
+counted in `summary`, so the UI can show them greyed with the reason.
+
+**The savings invariant.** `summary.total` is what applying every available
+card with its current selection and action (the plan step's action for a card in
+the plan, else `default_action`) frees, **every file counted once**:
+
+- `summary.total` = the sum of `saving` over the available cards of the `all`
+  tab = `reversible + opt_in + review_only` (each counted row goes to the bucket
+  of its own safety class);
+- a selected row counts `size − size after the action`: a removal (trash,
+  quarantine, permanent delete, move, hard link, reflink, make online-only)
+  counts the whole row, an optimisation, archive or transparent compression its
+  estimate, and an action that leaves the original in place (`none`, copy,
+  light copy, archive keeping its sources, decompress) counts nothing;
+- never counted: rows that are not selected or are locked, online-only rows,
+  groups whose every copy is selected under a removing action (apply keeps one
+  copy and skips the group);
+- when several cards select the same file, the card that frees most for it
+  counts it (the earlier card on a tie); a row inside a folder another row
+  removes or shrinks is counted once, by whichever frees more (the folder, or
+  everything counted inside it); a row another card keeps as the surviving copy
+  of a group (or a folder holding one) is not counted as removed. What a card
+  loses this way is its `overlap`; `summary.overlap` is their sum;
+- rows a card lists but does not count because nothing is selected (or its
+  action is `none`) are reported as `to_review` / `to_review_count`, never
+  added to `saving` or `summary.total`; `summary.review_opportunities` is the
+  number of cards that have some and `summary.to_review` the sum of their
+  `to_review` (the hero names it in words, next to the total, as not counted).
+
+`summary.opportunities` is the number of available cards with at least one
+selected row; `summary.reclaimed` is what runs applied this session freed. The
+plan follows the same rules over its own steps (see `Plan`), so with every card
+in the plan the plan total equals `summary.total`.
 
 ```json OpportunitiesRequest
 {"tab":"all","sort":"saving"}
@@ -175,7 +209,9 @@ runs applied this session freed.
 ### `step_detail`
 `OpportunityRequest` → `StepDetail`. B2 header, summary line, sub-group tabs
 (`opportunity.sub_groups`), right panel (`opportunity.presets`, `opportunity.settings`,
-`opportunity.params`) and the diagnostics note.
+`opportunity.params`) and the diagnostics note. The numbers here (`summary`, and
+the `opportunity`'s own `saving`) describe the step on its own, with the card's
+default action: every row for itself, `overlap` always 0.
 
 ```json OpportunityRequest
 {"opportunity_id":"det:exact_duplicates"}
@@ -184,15 +220,36 @@ runs applied this session freed.
 ### `candidates_page`
 `CandidatesPageRequest` → `CandidatesPage`. One page (`limit` 1-500, default 100)
 of the step's table. `sort` defaults to `saving`; `descending` reverses the
-ascending order. `groups` contains the groups referenced by the page's rows.
+ascending order. `filter` is a case-insensitive path substring, `min_size` a
+minimum size in bytes. `groups` contains the groups referenced by the page's rows,
+`group_stats` their totals (members shown, largest and smallest size, bytes
+reclaimable while one copy is kept), `has_groups` says whether the step has groups.
+
+"Keep groups together" (`keep_groups: true`, W6-A; ignored when `has_groups` is
+false, the response's `keep_groups` says whether it applied): the sort orders whole
+groups by an aggregate of the column (`size`: the group's largest file; `saving`:
+the bytes the group frees; `name` / `path`: the group's kept copy, else its first
+path; `modified`: its most recently modified member; `group`: the group id), and
+`descending` reverses the group order. Inside a group the kept copy comes first,
+then the column's natural order. Filters keep or drop whole groups: a group is
+shown, with all its members, when any member matches `filter` and its largest
+member is at least `min_size`. Pages are packed by groups: a page never starts
+inside a group that fits on one page (a larger group is split), so the response's
+`offset` is the start of the page holding the requested offset and pages hold up
+to `limit` rows; page with `next_offset` / `prev_offset` (`null` at the ends),
+`page` / `pages` are 1-based. Without `keep_groups` the rows are sorted on their
+own, `offset` is used as given and `next_offset = offset + limit`.
 
 ```json CandidatesPageRequest
-{"opportunity_id":"det:exact_duplicates","sub_group":null,"offset":0,"limit":100,"sort":"group","descending":false,"filter":"photos"}
+{"opportunity_id":"det:exact_duplicates","sub_group":null,"offset":0,"limit":100,"sort":"size","descending":false,"filter":"photos","min_size":1048576,"keep_groups":true}
 ```
 
 ### `selection_set`
 `SelectionSetRequest` → `StepSummary`. Checks or unchecks rows. With `ids`
-omitted, applies to the whole `sub_group` (or the whole step). Protected rows
+omitted, applies to exactly the rows `candidates_page` returns (every page) for
+the same `sub_group`, `filter`, `min_size` and `keep_groups` (all optional, same
+meaning as there; with groups kept together a filter keeps or drops whole
+groups): "select all" never touches a row the table's filters hide. Protected rows
 never become selected. With `ids` omitted and `selected: true` ("Select all"),
 the copy each group keeps (`keeper` badge) is not selected either; only an
 explicit `ids` pick selects it, and apply still keeps one member of every group
@@ -203,9 +260,18 @@ explicit `ids` pick selects it, and apply still keeps one member of every group
 {"opportunity_id":"opt:audio","ids":[1041,1042],"selected":false}
 ```
 
+"Select all" under the table's filter:
+
+```json
+{"opportunity_id":"det:exact_duplicates","filter":"downloads","keep_groups":true,"selected":true}
+```
+
 ### `selection_apply_keep_rule`
 `SelectionKeepRuleRequest` → `StepSummary`. CLN-ACT-01: in every group the
-keeper chosen by the rule is unchecked and the other members checked.
+keeper chosen by the rule is unchecked and the other members checked. The rule is
+recorded as the opportunity's `keep_rule` parameter (and `preferred_folder` for that
+rule) when its analysis has a keep-rule setting: `opportunities_list` and `step_detail`
+show it, the plan step (if any) takes it, and a rescan picks the same copies.
 
 ```json SelectionKeepRuleRequest
 {"opportunity_id":"det:exact_duplicates","rule":{"rule":"preferred_folder","folder":"/home/me/Photos"}}
@@ -219,19 +285,39 @@ keeper chosen by the rule is unchecked and the other members checked.
 and/or merges toggle/number values into the step parameters, then re-estimates.
 The result says whether the step is now lossy (and its safety class), which
 switches the plan step and the badge to *lossy · opt-in*. If the opportunity is
-in the plan the plan step is updated too (`plan://changed`).
+in the plan the plan step is updated too (`plan://changed`). The values are kept for the
+session, in the plan or not: a rescan runs the analysis with them.
 
 ```json StepParamsRequest
 {"opportunity_id":"opt:audio","preset_id":"speech","params":{"downmix_mono":true,"remove_silences":true,"max_pause_s":2,"strip_cover_art":true}}
 ```
 
 ### `candidate_preview`
-`CandidatePreviewRequest` → `Preview`. Thumbnail (base64, ≤ 512 px), first 4 KiB
+`CandidatePreviewRequest` → `Preview`. Image thumbnail (base64), first 4 KiB
 of text, or a waveform with the silences the current settings would remove.
-`kind: "none"` with a `reason` when not available.
+`kind: "none"` with a `reason` when not available. JPEG and PNG are decoded and
+downscaled to at most 512 px on the long side (EXIF orientation applied) and sent
+as PNG; GIF, WebP and BMP are sent unchanged only when the file is at most 1 MiB
+(the webview scales them). Online-only files are never read; JPEG/PNG over 64 MiB
+or 48 MP have no preview.
 
 ```json CandidatePreviewRequest
 {"candidate_id":1041}
+```
+
+### `candidate_thumbnails`
+`CandidateThumbnailsRequest` → `CandidateThumbnails`. W6-A: row thumbnails of the
+visible page of a duplicates-type step, at most 100 ids per call, answered in
+request order. `data_url` is a `data:image/...;base64,` URL: JPEG and PNG
+downscaled to at most 128 px (the EXIF embedded thumbnail when it matches the
+image, else the decoded image), GIF / WebP / BMP unchanged when at most 256 KiB.
+Otherwise `reason` is one of `not_image`, `online_only`, `too_large`,
+`unreadable`, `undecodable`, `unknown` (a stale id), and the UI shows the file-type
+icon. Rows of one exact-duplicate group share one thumbnail (any member on this
+disk serves the group); results are cached by path, size and modification time.
+
+```json CandidateThumbnailsRequest
+{"opportunity_id":"det:exact_duplicates","candidate_ids":[7,8]}
 ```
 
 ### `search_parse`
@@ -253,8 +339,13 @@ command itself does not fail.
 ### `search_run`
 `SearchRunRequest` → `Opportunity`. Evaluates the rule over the current index
 and creates (or replaces, same title) a `custom:<n>` opportunity that then
-behaves like any card (step review, plan). Fails with `invalid_input` before
-the first scan.
+behaves like any card (step review, plan). The rule is kept for the session:
+every later scan runs it again on its new index, so the card, the rows the user
+ticked or unticked and its plan step survive a rescan. Files applied since the
+last scan are not listed. Fails with `invalid_input` before the first scan.
+File conditions (extension, type, size, dates, header, content, media) never
+match a folder, not even negated; a matching folder becomes one whole-folder
+row, pre-selected only when the rule holds a non-negated `kind:dir` condition.
 
 ```json SearchRunRequest
 {"rule":{"all":[{"cond":{"field":"extension","values":["mp4"]}},{"cond":{"field":"size","cmp":"gt","bytes":1073741824}}]},"title":"Big videos","topmost_only":false,"action":{"kind":"trash"}}
@@ -283,8 +374,11 @@ No request → `Plan`.
 
 ### `plan_add_step`
 `PlanAddStepRequest` → `Plan`. "+ Add" on a card. `action` and `params` default
-to the opportunity's. Fails with `conflict` if already in the plan and
-`unsupported` for disabled opportunities. Emits `plan://changed`. A step's
+to the opportunity's. Fails with `conflict` if already in the plan,
+`unsupported` for disabled opportunities and `invalid_input` for a
+`quarantine` action whose `purge_after_days` is outside 1 to 3650 (the same
+check runs in `plan_update_step`; the action engine also holds a quarantined
+item at least one day). Emits `plan://changed`. A step's
 `params` are the single source of truth for an optimiser: values inside an
 `optimise` action, then `params`, are merged into the step and copied into the
 action, and `lossy` follows them (a lossy preset makes the step `lossy_opt_in`).
@@ -326,7 +420,11 @@ No request → `Job` (`kind: "dry_run"`). *Spawns.* "Estimate exactly (dry run)"
 every check of a real run without changing anything; optimisations are run
 into the temp folder to measure. Removal figures are the scan's allocated sizes
 (folders: subtree totals) of the items that pass every check, hard-link aware
-(removing one of several links frees nothing). `plan://dry_run` is sent after
+(removing one of several links frees nothing). Every file is measured once: a
+row another step of the plan counts (see `Plan`) is left out of this step's
+measurement and named in the step's `warnings`; steps that leave the original
+in place (copy, light copy, archive keeping its sources) measure a saving of 0.
+`plan://dry_run` is sent after
 the plan (`plan://changed`) carries the measured estimates. The result arrives as `plan://dry_run`; the
 plan's step estimates become `confidence: "exact"` where measured.
 
@@ -338,7 +436,12 @@ the acknowledgement text and the acting-button label. The UI renders the
 acting button in the warning colour (`permanent: false`) or the danger colour
 (`permanent: true`), disabled until the checkbox is ticked. `selection_digest`
 identifies exactly what the dialog describes (the step's action and its items
-with their scan stamps); the UI sends it back in `StepConfirmation`.
+with their scan stamps); the UI sends it back in `StepConfirmation`. `files` is
+the number of those items; the byte tiles are the step's share of the plan's
+one account of savings, as on the plan card (a file two steps list counts in
+one dialog only): the last dry run's measurement while it still stands for
+these items and this overlap, else the live figure. A step that changes while
+the dialog is prepared fails with `conflict`.
 
 ### `plan_apply`
 `PlanApplyRequest` → `ApplyStarted`. *Spawns.* Needs one `StepConfirmation`
@@ -365,7 +468,8 @@ never removed; with `synced_online_only` removals of synced items become
 No request → `Job[]`. Running and queued jobs plus the jobs finished this session.
 
 ### `job_pause`
-`JobRequest` → `Job`. Takes effect between items.
+`JobRequest` → `Job`. Takes effect between items (a `schedule` job pauses its
+scan and does not queue its apply jobs until resumed).
 
 ```json JobRequest
 {"job_id":31}
@@ -376,7 +480,9 @@ No request → `Job[]`. Running and queued jobs plus the jobs finished this sess
 
 ### `job_cancel`
 `JobRequest` → `Job`. Queued jobs become `cancelled` at once; running ones go
-through `cancelling`. Items already applied stay applied (and undoable).
+through `cancelling`. Items already applied stay applied (and undoable). A job
+that had already done all its work when the cancel reached it ends as
+`completed` (or `completed_with_errors`), not `cancelled`.
 
 ### `jobs_reorder`
 `JobsReorderRequest` → `Job[]`. Reorders queued jobs only.
@@ -403,13 +509,14 @@ says so and disables Restore for them before the user clicks.
 ```
 
 ### `undo_last`
-No request → `Job` (`kind: "undo"`). *Spawns.* "Undo last action": undoes every
+No request → `Job` (`kind: "undo"`). *Spawns.* The strip's "Undo last action": undoes every
 undoable entry of the newest run that has one. Undo jobs run in the same queue
 as apply jobs, in their own undo run (`job.run_id` is set when it starts). `invalid_input` when nothing
 can be undone.
 
 ### `undo_run`
-`RunRequest` → `Job`. *Spawns.* History → Restore for a whole run.
+`RunRequest` → `Job`. *Spawns.* History → Restore for a whole run, and "Undo" on the
+summary of a run that just finished (that run, never another one).
 
 ```json RunRequest
 {"run_id":1794582245123}
@@ -419,7 +526,7 @@ can be undone.
 `RestoreEntriesRequest` → `Job`. *Spawns.* Restore selected entries.
 
 ```json RestoreEntriesRequest
-{"entry_ids":[1794582245123000001,1794582245123000002]}
+{"entry_ids":["1794582245123000001","1794582245123000002"]}
 ```
 
 ### `quarantine_info`
@@ -429,7 +536,11 @@ No request → `QuarantineInfo`.
 `QuarantinePurgeRequest` → `Job`. *Spawns.* Permanently deletes quarantined
 items older than `older_than_days`; omitted, each item expires after its own
 step's `purge_after_days` (else the setting); needs no extra
-confirmation from the engine, so the UI asks first (it is irreversible).
+confirmation from the engine, so the UI asks first (it is irreversible). Pause
+and cancel act between items: a cancelled purge ends `cancelled` with the items
+deleted so far in its outcome; the rest stay in the quarantine. The desktop app
+queues this job itself (no `older_than_days`) right after start-up when at least
+one item has expired, instead of purging before the window opens.
 
 ```json QuarantinePurgeRequest
 {"older_than_days":30}
@@ -447,7 +558,18 @@ report as CSV, HTML or PDF (`format: "pdf"`, CLN-ACT-11: a text-only, paginated
 table of path, size, action and status in the standard Helvetica font;
 characters it cannot show are replaced by `?` and the count is noted on the last
 page); `kind: "audit"` writes the audit CSV (SAF-12) of one run
-or, without `run_id`, of the whole journal. Never overwrites: `name (1).csv`.
+or, without `run_id`, of the whole journal. Never overwrites: an existing `dest`
+is kept and the export is written beside it as `name (1).csv` (`ExportResult.path`
+is the file actually written). The one exception is `overwrite: true`, which the
+GUI sends when `dest` came from `dialog_save_file`: the OS dialog has already
+asked the user before an existing file was chosen, so that file is replaced
+(written to a temporary sibling first and renamed over it when complete; a
+failed export leaves the old file untouched; a folder or a link at `dest` is
+never replaced). `overwrite` defaults to `false`; the CLI never sets it. The desktop shell enforces the
+premise: it honours `overwrite: true` only when `dest` equals the path the last
+`dialog_save_file` returned (consumed by that export, so one confirmation replaces once);
+otherwise it sends `overwrite: false` to the engine and the export is written beside the
+existing file. The same holds for `results_export`.
 Columns (CSV, UTF-8 with BOM): report — `step, path, status, bytes_before,
 bytes_after, saved, error`; audit — `time, run_id, entry_id, action, state,
 path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
@@ -459,10 +581,11 @@ path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
 ### `results_export`
 `ResultsExportRequest` → `ExportResult`. CLN-ACT-11: candidates of one or all
 opportunities, as CSV, HTML or PDF (path, size, opportunity, selected). Columns: `opportunity, path, size, size_after, saving, reason,
-badges, selected, group, modified`.
+badges, selected, group, modified`. `dest` and `overwrite` behave as in
+`report_export`.
 
 ```json ResultsExportRequest
-{"opportunity_id":"det:old_installers","selected_only":true,"format":"html","dest":"/home/me/Documents/installers.html"}
+{"opportunity_id":"det:old_installers","selected_only":true,"format":"html","dest":"/home/me/Documents/installers.html","overwrite":true}
 ```
 
 ### `settings_get`
@@ -478,7 +601,10 @@ be turned off.
 No request → `ProtectedPathsInfo`. Built-ins are shown locked.
 
 ### `protected_paths_set`
-`ProtectedPathsSetRequest` → `ProtectedPathsInfo`. Absolute paths only.
+`ProtectedPathsSetRequest` → `ProtectedPathsInfo`. Absolute paths only. An
+entry is always the folder of that exact name, brackets included
+(`D:\Clients [2024]`); when it also holds `*` or `?` it is in addition a
+pattern whose brackets are literal.
 
 ```json ProtectedPathsSetRequest
 {"user":["/home/me/Clients/Archive"]}
@@ -496,7 +622,8 @@ No request → `Schedule[]`.
 ### `schedule_save`
 `ScheduleSaveRequest` → `Schedule[]`. Insert or replace by id (empty id = new).
 Steps whose action needs confirmation are rejected (`invalid_input`):
-lossy and permanent steps never run unattended (SAF-11).
+lossy and permanent steps never run unattended (SAF-11). Custom-search steps
+(`custom:<n>`) are rejected too: their rule is not stored with a schedule.
 
 ### `schedule_delete`
 `IdRequest` → `Schedule[]`.
@@ -516,6 +643,11 @@ schedule, a plan in progress or a running scan are refused immediately). The job
 scans the schedule's scope, then queues its steps (default selections) as `apply`
 jobs of one run and finishes; `job://done` carries any error (`nothing to do…`
 when no step found anything). The job's `run_id` is set once the run exists.
+The schedule's scope becomes the session scope and its scan replaces the session
+results (the UI re-reads `scope_get` on `scan://done`, so the scope chips name
+the folders the results describe). Only the steps the run added are applied: a
+step the user added to the plan while it scanned stays in the plan, untouched;
+on failure the run takes its own steps out again.
 
 ### `tools_list`
 No request → `ExternalTool[]`.
@@ -525,13 +657,18 @@ No request → `ExternalTool[]`. Detect again (after the user installs a tool or
 edits `settings.tool_paths`).
 
 ### `drives_list`
-No request → `Drive[]`. Hero drive bars: free now and after the plan.
+No request → `Drive[]`. Hero drive bars: free now and after the plan. The
+`plan_saving` of all drives adds up to the plan's estimated saving (each counted
+row on the volume that holds it), so the UI refetches it on `plan://changed`.
 
 ### `disk_usage_tree`
 `DiskUsageRequest` → `DiskNode`. Folder tree by size for the treemap and the
 size-sorted tree. Without `path`: a virtual root with one child per scan root.
 Children below `min_fraction` of their parent fold into `other`. Fails with
-`invalid_input` before the first scan.
+`invalid_input` before the first scan. `size` is the logical size of the files
+stored on this disk: online-only placeholders count in `files` but not in
+`size` or `allocated`, as in the scan summary (`ScanStats.bytes`), so the disk
+view and the scan say the same total (SCAN-7).
 
 ```json DiskUsageRequest
 {"path":"/home/me/Projects","depth":2,"min_fraction":0.01}
@@ -544,6 +681,50 @@ time) or owner.
 
 ```json BreakdownRequest
 {"by":"type"}
+```
+
+## 3.1 Shell commands (native dialogs)
+
+Implemented by the Tauri shell, not by the engine (`mj_engine::api::SHELL_COMMANDS`).
+Each opens the operating system's own dialog (Windows: the Explorer
+`IFileOpenDialog` / `IFileSaveDialog`; Linux: the GTK file chooser, which uses the
+desktop portal when the app runs sandboxed), owned by the main window, and
+resolves when the user closes it. The response is the chosen path as a string,
+or `null` when the user cancelled: **a cancel is not an error**, and the UI must
+change nothing and show nothing. The dialog only chooses a path; nothing is
+created, written or added to the scope until the UI sends the matching engine
+command (`scope_add_root`, `plan_update_step`, `report_export`, ...), which
+applies its own checks.
+
+Only one dialog can be open: a second call while one is open fails with
+`conflict`. `title` and `start_dir` are optional; `start_dir` is a hint (a
+relative path is ignored, and so is a folder that no longer exists).
+
+### `dialog_pick_folder`
+`DialogPickFolderRequest` → `DialogPath`. The folder dialog, used for
+"+ Add location", move/copy destinations, the preferred folder of a keep rule
+and the folder settings (protected paths, backup folder, temporary folder).
+
+```json DialogPickFolderRequest
+{"title":"Add a location to scan","start_dir":"C:\\Users\\Michel"}
+```
+
+```json DialogPath
+"C:\\Users\\Michel\\Pictures"
+```
+
+### `dialog_save_file`
+`DialogSaveFileRequest` → `DialogPath`. The "Save as" dialog, used for the
+export targets (`report_export`, `results_export`). `file_name` is the
+suggested name (a name, not a path; one with a path separator or a character
+Windows does not allow is ignored), `filters` the file types offered; on
+Windows the first extension of the first filter is appended when the user types
+a name without one. The dialog asks before an existing file is chosen, which is
+why the UI may then send `overwrite: true` to the export command. The shell remembers the
+returned path (`null` on cancel forgets it) and grants that one replace; see `report_export`.
+
+```json DialogSaveFileRequest
+{"title":"Save the results","file_name":"myjanitor-results.csv","filters":[{"name":"CSV file","extensions":["csv"]}]}
 ```
 
 ## 4. Events
@@ -596,16 +777,13 @@ Every example below is checked against the Rust types. Field order is free.
 
 `options` and its fields are optional (defaults shown). Includes and excludes
 are glob patterns (path mode: `*` stops at `/`, `**` crosses it) or absolute
-paths; global exclusions from settings are added by the engine.
+paths; global exclusions from settings are added by the engine. An absolute
+exclusion is always the folder of that exact name (`[` and `]` are part of it)
+and, with `*` or `?`, also a pattern with literal brackets; a trailing
+separator is ignored (`node_modules/` is `node_modules`).
 
 ```json ScanScope
 {"roots":["/home/me"],"include":[],"exclude":["/home/me/VMs"],"options":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false}}
-```
-
-#### FsListDirResponse
-
-```json FsListDirResponse
-{"path":"/home/me","parent":"/home","entries":[{"name":"Downloads","path":"/home/me/Downloads","is_dir":true,"is_link":false,"hidden":false}],"places":[{"label":"Home","path":"/home/me","kind":"home"},{"label":"Computer","path":"/","kind":"drive"}],"omitted":4}
 ```
 
 #### ScanStatus
@@ -629,18 +807,24 @@ paths; global exclusions from settings are added by the engine.
 #### Opportunity
 
 `size_before`, `saving`, `count` and `selected` follow the current selection.
+`saving` is the number the card shows: in `opportunities_list` the card's share
+of `summary.total` (see the savings invariant there), `size_before` the current
+size of the rows it counts, and `overlap` what the card would free on top of
+that on its own (the same files are counted by another card). `to_review` /
+`to_review_count` describe the rows listed for review and are never part of
+`saving`. `count` = `selected` = the ticked, actionable rows.
 `rank` orders "Biggest saving first". `availability` disabled = show greyed
 with `reason`. `params` holds the current values of `settings` (keys missing
 from `params` take the spec default).
 
 ```json Opportunity
-{"id":"opt:audio","source":{"optimiser":"audio"},"category":"optimise","title":"Meeting recordings","description":"Speech preset, silences trimmed","safety":"lossy_opt_in","size_before":5153960755,"saving":4509715660,"confidence":"estimated","count":23,"unit":"files","candidates":25,"selected":23,"badges":["duplicate","confidential","synced"],"default_action":{"kind":"optimise","optimiser":"audio","params":{},"output":{"mode":"replace"},"originals":{"policy":"recycle_bin"},"keep_if_not_smaller":true},"available_actions":["optimise"],"presets":[{"id":"speech","label":"Speech","description":"Opus 24 kbps mono · smallest","values":{"codec":"opus","bitrate_kbps":24,"downmix_mono":true},"lossy":true},{"id":"lossless","label":"Lossless","description":"FLAC · no quality loss, ~45 % smaller","values":{"codec":"flac"},"lossy":false}],"settings":[{"key":"downmix_mono","label":"Downmix to mono","kind":{"type":"toggle","default":true}},{"key":"remove_silences","label":"Remove long silences","kind":{"type":"toggle","default":true},"lossy":true},{"key":"max_pause_s","label":"Max pause","kind":{"type":"number","default":2,"min":1,"max":30,"step":1,"unit":"s max"}},{"key":"transcribe","label":"Transcribe on this PC, then archive audio","help":"Keeps a searchable text file next to each meeting","kind":{"type":"toggle","default":false},"advanced":true,"disabled_reason":"Requires a local transcription tool"}],"params":{"downmix_mono":true,"remove_silences":true,"max_pause_s":2},"sub_groups":[{"key":"same_meeting","label":"Same meeting twice","count":6},{"key":"needs_transcript","label":"Need transcript","count":4},{"key":"skipped","label":"Skipped","count":2}],"availability":{"state":"available"},"in_plan":true,"rank":4509715660.0,"feature_ids":["OPT-AUD-01","OPT-AUD-04","OPT-AUD-05","OPT-AUD-06"]}
+{"id":"opt:audio","source":{"optimiser":"audio"},"category":"optimise","title":"Meeting recordings","description":"Speech preset, silences trimmed","safety":"lossy_opt_in","size_before":5153960755,"saving":4509715660,"confidence":"estimated","count":23,"unit":"files","candidates":25,"selected":23,"overlap":123731968,"to_review":220200960,"to_review_count":1,"badges":["duplicate","confidential","synced"],"default_action":{"kind":"optimise","optimiser":"audio","params":{},"output":{"mode":"replace"},"originals":{"policy":"recycle_bin"},"keep_if_not_smaller":true},"available_actions":["optimise"],"presets":[{"id":"speech","label":"Speech","description":"Opus 24 kbps mono · smallest","values":{"codec":"opus","bitrate_kbps":24,"downmix_mono":true},"lossy":true},{"id":"lossless","label":"Lossless","description":"FLAC · no quality loss, ~45 % smaller","values":{"codec":"flac"},"lossy":false}],"settings":[{"key":"downmix_mono","label":"Downmix to mono","kind":{"type":"toggle","default":true}},{"key":"remove_silences","label":"Remove long silences","kind":{"type":"toggle","default":true},"lossy":true},{"key":"max_pause_s","label":"Max pause","kind":{"type":"number","default":2,"min":1,"max":30,"step":1,"unit":"s max"}},{"key":"transcribe","label":"Transcribe on this PC, then archive audio","help":"Keeps a searchable text file next to each meeting","kind":{"type":"toggle","default":false},"advanced":true,"disabled_reason":"Requires a local transcription tool"}],"params":{"downmix_mono":true,"remove_silences":true,"max_pause_s":2},"sub_groups":[{"key":"same_meeting","label":"Same meeting twice","count":6},{"key":"needs_transcript","label":"Need transcript","count":4},{"key":"skipped","label":"Skipped","count":2}],"availability":{"state":"available"},"in_plan":true,"rank":4509715660.0,"feature_ids":["OPT-AUD-01","OPT-AUD-04","OPT-AUD-05","OPT-AUD-06"]}
 ```
 
 #### OpportunitiesList
 
 ```json OpportunitiesList
-{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":18,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
+{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":15,"overlap":123731968,"review_opportunities":4,"to_review":220200960,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
 ```
 
 #### StepSummary
@@ -652,7 +836,7 @@ from `params` take the spec default).
 #### StepDetail
 
 ```json StepDetail
-{"opportunity":{"id":"det:temp_files","source":{"detector":"temp_files"},"category":"clean","title":"Temporary files","description":"Leftover temporary and partial downloads","safety":"reversible","size_before":1200,"saving":1200,"confidence":"exact","count":2,"unit":"files","candidates":2,"selected":2,"badges":[],"default_action":{"kind":"trash"},"available_actions":["trash","quarantine","permanent_delete"],"presets":[],"settings":[],"params":{},"availability":{"state":"available"},"in_plan":false,"rank":1200.0,"feature_ids":["CLN-DET-10"]},"summary":{"candidates":2,"selected":2,"size_before":1200,"size_after":0,"saving":1200,"confidence":"exact"},"diagnostics":{"unreadable":1,"unreadable_sample":["/home/me/.cache/locked.tmp"],"skipped":{},"notes":[]},"lossy":false,"safety":"reversible"}
+{"opportunity":{"id":"det:temp_files","source":{"detector":"temp_files"},"category":"clean","title":"Temporary files","description":"Leftover temporary and partial downloads","safety":"reversible","size_before":1200,"saving":1200,"confidence":"exact","count":2,"unit":"files","candidates":2,"selected":2,"overlap":0,"to_review":0,"to_review_count":0,"badges":[],"default_action":{"kind":"trash"},"available_actions":["trash","quarantine","permanent_delete"],"presets":[],"settings":[],"params":{},"availability":{"state":"available"},"in_plan":false,"rank":1200.0,"feature_ids":["CLN-DET-10"]},"summary":{"candidates":2,"selected":2,"size_before":1200,"size_after":0,"saving":1200,"confidence":"exact"},"diagnostics":{"unreadable":1,"unreadable_sample":["/home/me/.cache/locked.tmp"],"skipped":{},"notes":[]},"lossy":false,"safety":"reversible"}
 ```
 
 #### Candidate
@@ -682,13 +866,19 @@ carry a `blocked_reason` and can never be selected.
 #### CandidatesPage
 
 ```json CandidatesPage
-{"opportunity_id":"det:exact_duplicates","total":214,"offset":0,"rows":[{"id":7,"path":"/home/me/Photos/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Kept: newest copy","badges":["duplicate","keeper"],"default_selected":false,"group":3,"modified":1700000000000000000,"stamp":{"size":4194304,"mtime":1700000000000000000},"selected":false,"actionable":true},{"id":8,"path":"/home/me/Downloads/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Same content as 1 other file","badges":["duplicate"],"default_selected":true,"group":3,"modified":1690000000000000000,"stamp":{"size":4194304,"mtime":1690000000000000000},"selected":true,"actionable":true}],"groups":[{"id":3,"kind":"exact","label":"2 copies of IMG_0001.JPG","confidence":100.0,"keeper":"/home/me/Photos/IMG_0001.JPG","members":["/home/me/Photos/IMG_0001.JPG","/home/me/Downloads/IMG_0001.JPG"]}]}
+{"opportunity_id":"det:exact_duplicates","total":214,"offset":0,"rows":[{"id":7,"path":"/home/me/Photos/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Kept: newest copy","badges":["duplicate","keeper"],"default_selected":false,"group":3,"modified":1700000000000000000,"stamp":{"size":4194304,"mtime":1700000000000000000},"selected":false,"actionable":true},{"id":8,"path":"/home/me/Downloads/IMG_0001.JPG","target":"file","source":{"detector":"exact_duplicates"},"size":4194304,"size_after":0,"confidence":"exact","reason":"Same content as 1 other file","badges":["duplicate"],"default_selected":true,"group":3,"modified":1690000000000000000,"stamp":{"size":4194304,"mtime":1690000000000000000},"selected":true,"actionable":true}],"groups":[{"id":3,"kind":"exact","label":"2 copies of IMG_0001.JPG","confidence":100.0,"keeper":"/home/me/Photos/IMG_0001.JPG","members":["/home/me/Photos/IMG_0001.JPG","/home/me/Downloads/IMG_0001.JPG"]}],"group_stats":[{"id":3,"files":2,"largest":4194304,"smallest":4194304,"reclaimable":4194304}],"has_groups":true,"keep_groups":true,"page":1,"pages":5,"next_offset":98,"prev_offset":null}
 ```
 
 #### StepParamsResponse
 
 ```json StepParamsResponse
 {"params":{"codec":"opus","bitrate_kbps":24,"downmix_mono":true,"remove_silences":true,"max_pause_s":2},"summary":{"candidates":25,"selected":23,"size_before":5153960755,"size_after":644245094,"saving":4509715661,"confidence":"estimated"},"lossy":true,"safety":"lossy_opt_in"}
+```
+
+#### CandidateThumbnails
+
+```json CandidateThumbnails
+{"thumbnails":[{"candidate_id":7,"data_url":"data:image/png;base64,iVBORw0KGgo="},{"candidate_id":8,"reason":"online_only"}]}
 ```
 
 #### Preview
@@ -728,7 +918,7 @@ Nodes: `all`, `any`, `not`, `cond`. Conditions (`field`): `name`, `path`
 #### RulePreset
 
 ```json RulePreset
-{"id":"downloads_older_90d","name":"Downloads older than 90 days","description":"Anything in a Downloads folder not modified for 90 days","rule":{"all":[{"cond":{"field":"path","mode":"wildcard","pattern":"**/Downloads/**","case_sensitive":false}},{"cond":{"field":"date","which":"modified","cmp":"lt","value":{"ago":{"amount":90,"unit":"days"}}}}]},"topmost_only":false,"builtin":true}
+{"id":"downloads_older_90d","name":"Downloads older than 90 days","description":"Files in a Downloads folder not modified for 90 days","rule":{"all":[{"cond":{"field":"kind","kind":"file"}},{"cond":{"field":"path","mode":"wildcard","pattern":"**/Downloads/**","case_sensitive":false}},{"cond":{"field":"date","which":"modified","cmp":"lt","value":{"ago":{"amount":90,"unit":"days"}}}}]},"topmost_only":false,"builtin":true}
 ```
 
 #### Action
@@ -746,6 +936,16 @@ keep_if_not_smaller}`, `archive{format, level, dest?, originals, keep_sources}`,
 ```
 
 #### Plan
+
+Step estimates follow the savings invariant of `opportunities_list`, over the
+steps of the plan instead of every card: `estimate.bytes_before − bytes_after`
+is what the step frees with its action, a file several steps act on is counted
+by the step that frees most for it (checklist code `counted_once` says how many
+rows this concerns), and rows apply will skip (`estimate.skipped`: every copy
+of a group selected, the copy another step keeps) count nothing.
+`plan.estimate` is the sum of the steps. A step alone in the plan may therefore
+show more than its card, whose `overlap` is counted by a card that is not in
+the plan.
 
 ```json Plan
 {"id":5,"name":"Your plan","steps":[{"id":12,"opportunity":"det:exact_duplicates","title":"Exact duplicates","summary":"Keep newest · others to Recycle Bin","action":{"kind":"trash"},"params":{"keep_rule":"newest"},"selection":{"include":[],"exclude":[8]},"estimate":{"files":153,"bytes_before":9234179686,"bytes_after":0,"confidence":"exact","skipped":0},"safety":"reversible","lossy":false},{"id":15,"opportunity":"opt:audio","title":"Meeting recordings","summary":"Opus 24 kbps mono · originals to Recycle Bin","action":{"kind":"optimise","optimiser":"audio","params":{"codec":"opus","bitrate_kbps":24},"output":{"mode":"replace"},"originals":{"policy":"recycle_bin"},"keep_if_not_smaller":true},"params":{"codec":"opus","bitrate_kbps":24},"estimate":{"files":23,"bytes_before":5153960755,"bytes_after":644245094,"confidence":"estimated","skipped":0},"safety":"lossy_opt_in","lossy":true}],"estimate":{"files":176,"bytes_before":14388140441,"bytes_after":644245094,"confidence":"estimated","skipped":0},"checklist":[{"level":"ok","code":"undo_window","text":"Every reversible step can be undone from History for 30 days"},{"level":"warning","code":"confirmation_steps","text":"1 step will ask for confirmation"},{"level":"ok","code":"skipped_confidential","text":"14 signed or sensitivity-labelled files are skipped"},{"level":"info","code":"synced_files","text":"Synced OneDrive files are made online-only, never deleted in the cloud"}],"updated":1794582245000000000}
@@ -821,13 +1021,13 @@ removed as itself; a restore then puts back only a link, and a file entry only a
 file with the recorded content.
 
 ```json JournalEntry
-{"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}
+{"id":"1794582245123000001","run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}
 ```
 
 #### HistoryRunDetail
 
 ```json HistoryRunDetail
-{"run":{"run_id":1794582245123,"kind":"apply","title":"Plan · 1 step","started":1794582245000000000,"steps":["Temporary files"],"items":1,"done":1,"failed":0,"undone":0,"bytes_saved":1200,"undoable":true},"total":1,"entries":[{"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"at":1794582246000000000,"state":"done","action":"quarantine","target":"file","original":"/home/me/a.tmp","original_stamp":{"size":1200,"mtime":1690000000000000000},"bytes_before":1200,"bytes_after":0,"retained_at":"/home/me/.local/share/myjanitor/quarantine/1794582245123/1794582245123000001/a.tmp","reversible":true}],"occupied":[]}
+{"run":{"run_id":1794582245123,"kind":"apply","title":"Plan · 1 step","started":1794582245000000000,"steps":["Temporary files"],"items":1,"done":1,"failed":0,"undone":0,"bytes_saved":1200,"undoable":true},"total":1,"entries":[{"id":"1794582245123000001","run_id":1794582245123,"job_id":31,"at":1794582246000000000,"state":"done","action":"quarantine","target":"file","original":"/home/me/a.tmp","original_stamp":{"size":1200,"mtime":1690000000000000000},"bytes_before":1200,"bytes_after":0,"retained_at":"/home/me/.local/share/myjanitor/quarantine/1794582245123/1794582245123000001/a.tmp","reversible":true}],"occupied":[]}
 ```
 
 #### QuarantineInfo

@@ -3,19 +3,24 @@
  * Custom search (CLN-ENG-01/02/05): quick query with autocomplete and parse
  * errors, the rule builder, presets, and results shown in the shared step table.
  */
-import { createStepOps, freshStep } from './ctl-step.js';
+import { createStepOps, freshStep, quarantineDays } from './ctl-step.js';
 import { addTo, removeAt, updateAt, newCond, newGroup, fromRule, toRule, validate, initialModel } from './lib/rulebuilder.js';
 import { applySuggestion, byteOffset } from './lib/query.js';
 import { initialCustom } from './state.js';
 import { toErrorInfo } from './errors.js';
 
 /** Action choices of the search panel. */
-const ACTIONS = { trash: { kind: 'trash' }, quarantine: { kind: 'quarantine', purge_after_days: 7 }, permanent_delete: { kind: 'permanent_delete' } };
+const ACTIONS = { trash: { kind: 'trash' }, quarantine: { kind: 'quarantine', purge_after_days: 30 }, permanent_delete: { kind: 'permanent_delete' } };
 
 /** @param {any} c */
 export function searchActions(c) {
   const { api, set, get, gens, guard } = c;
   const cu = () => get().custom;
+  /** The chosen action; the quarantine holds items for the Settings value (ENG-9). @param {string} kind */
+  const actionFor = async (kind) => {
+    const a = ACTIONS[kind] ?? ACTIONS.trash;
+    return a.kind === 'quarantine' ? { ...a, purge_after_days: await quarantineDays(api, get) } : a;
+  };
   const setCu = (p) => set({ custom: { ...get().custom, ...p } });
   const ops = createStepOps(c, { key: 'cstep', read: () => cu().step, write: (step) => setCu({ step }) });
 
@@ -125,7 +130,7 @@ export function searchActions(c) {
       const s = cu();
       setCu({ running: true });
       try {
-        const opp = await api.searchRun({ rule, title: s.title.trim() || 'Custom search', topmost_only: s.topmost, action: ACTIONS[s.action] ?? ACTIONS.trash });
+        const opp = await api.searchRun({ rule, title: s.title.trim() || 'Custom search', topmost_only: s.topmost, action: await actionFor(s.action) });
         setCu({ errors: [], result: opp, running: false, step: opp.count > 0 ? freshStep(opp.id) : null });
         await c.actions.refreshOpps();
         if (opp.count > 0) await ops.reloadStep();
@@ -138,7 +143,7 @@ export function searchActions(c) {
     addSearchToPlan: guard(async () => {
       const s = cu();
       if (!s.result) return;
-      set({ plan: await api.planAddStep({ opportunity_id: s.result.id, action: ACTIONS[s.action] ?? ACTIONS.trash }) });
+      set({ plan: await api.planAddStep({ opportunity_id: s.result.id, action: await actionFor(s.action) }) });
       await c.actions.refreshOpps();
       await ops.loadDetail();
     }),

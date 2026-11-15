@@ -84,9 +84,22 @@ pub fn settings(default: &str, images: bool) -> Vec<SettingSpec> {
     ]
 }
 
-/// Index of the keeper among `members` (never `None` for a non-empty group).
-pub fn pick(rule: &KeepRule, members: &[&FileEntry], pixels: &[Option<u64>]) -> usize {
-    let infos: Vec<KeepInfo<'_>> = members
+/// True when `entry` has another name on disk: the dupes lanes keep one path per
+/// file id, so the other names are never in the group and removing this one frees
+/// nothing (DUP-4).
+pub fn shares_data(entry: &FileEntry) -> bool {
+    entry.links.is_some_and(|l| l > 1)
+}
+
+/// Keeper of a group of byte-identical files: [`pick`], preferring a member that
+/// [`shares_data`] ([`KeepRule::pick_same_content`]).
+pub fn pick_same_content(rule: &KeepRule, members: &[&FileEntry], pixels: &[Option<u64>]) -> usize {
+    let linked: Vec<bool> = members.iter().map(|e| shares_data(e)).collect();
+    rule.pick_same_content(&infos(members, pixels), &linked).unwrap_or(0)
+}
+
+fn infos<'a>(members: &[&'a FileEntry], pixels: &[Option<u64>]) -> Vec<KeepInfo<'a>> {
+    members
         .iter()
         .enumerate()
         .map(|(i, e)| KeepInfo {
@@ -95,8 +108,12 @@ pub fn pick(rule: &KeepRule, members: &[&FileEntry], pixels: &[Option<u64>]) -> 
             size: e.size,
             pixels: pixels.get(i).copied().flatten(),
         })
-        .collect();
-    rule.pick(&infos).unwrap_or(0)
+        .collect()
+}
+
+/// Index of the keeper among `members` (never `None` for a non-empty group).
+pub fn pick(rule: &KeepRule, members: &[&FileEntry], pixels: &[Option<u64>]) -> usize {
+    rule.pick(&infos(members, pixels)).unwrap_or(0)
 }
 
 /// Image quality score 0..=100 (research §6), computed at group time, never cached.
@@ -132,10 +149,13 @@ pub fn quality_score(width: Option<u32>, height: Option<u32>, size: u64, exif: O
     score.clamp(0.0, 100.0) as u8
 }
 
-/// One candidate row for `entry` (ids are assigned by the engine).
+/// One candidate row for `entry` (ids are assigned by the engine). A row that
+/// [`shares_data`] holds no reclaimable bytes: its size is 0, like an online-only
+/// file's, so every total agrees with what removing it frees (DUP-4).
 pub fn candidate(entry: &FileEntry, source: DetectorId, reason: String) -> Candidate {
     let mut badges = Badges::empty();
-    if entry.links.is_some_and(|l| l > 1) {
+    let linked = shares_data(entry);
+    if linked {
         badges |= Badges::HARDLINKED;
     }
     Candidate {
@@ -143,7 +163,7 @@ pub fn candidate(entry: &FileEntry, source: DetectorId, reason: String) -> Candi
         path: entry.path.clone(),
         target: TargetKind::File,
         source: Source::Detector(source),
-        size: entry.reclaimable(),
+        size: if linked { 0 } else { entry.reclaimable() },
         size_after: 0,
         confidence: Confidence::Exact,
         reason,
@@ -192,7 +212,14 @@ pub fn emit(spec: GroupSpec<'_>, out: &mut mj_core::DetectorOutput) {
     let keeper = spec.keeper.min(spec.members.len().saturating_sub(1));
     for (i, e) in spec.members.iter().enumerate() {
         let is_keeper = i == keeper;
-        let reason = if is_keeper { spec.keeper_reason.clone() } else { spec.reason.clone() };
+        let linked = !is_keeper && shares_data(e);
+        let reason = if is_keeper {
+            spec.keeper_reason.clone()
+        } else if linked {
+            format!("{}. Shares its data with another file name: removing it frees no space", spec.reason)
+        } else {
+            spec.reason.clone()
+        };
         let mut c = candidate(e, spec.source, reason);
         c.badges |= spec.badges;
         c.group = Some(spec.id);
@@ -200,7 +227,8 @@ pub fn emit(spec: GroupSpec<'_>, out: &mut mj_core::DetectorOutput) {
             c.badges |= Badges::KEEPER;
             c.default_selected = false;
         } else {
-            c.default_selected = spec.selection == Selection::AllButKeeper;
+            // Removing a name of a hard-linked file frees nothing: never pre-selected.
+            c.default_selected = spec.selection == Selection::AllButKeeper && !linked;
         }
         if let Some(cols) = spec.columns.get(i) {
             c.columns.extend(cols.clone());

@@ -14,7 +14,16 @@ fn oid(s: &str) -> OpportunityId {
 }
 
 fn select(e: &mj_engine::Engine, id: &str, ids: Option<Vec<mj_core::CandidateId>>, selected: bool) -> StepSummary {
-    e.selection_set(SelectionSetRequest { opportunity_id: oid(id), ids, sub_group: None, selected }).unwrap()
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: oid(id),
+        ids,
+        sub_group: None,
+        selected,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
+    })
+    .unwrap()
 }
 
 fn rows(e: &mj_engine::Engine, id: &str) -> Vec<CandidateRow> {
@@ -26,6 +35,8 @@ fn rows(e: &mj_engine::Engine, id: &str) -> Vec<CandidateRow> {
         sort: CandidateSortKey::Path,
         descending: false,
         filter: None,
+        min_size: None,
+        keep_groups: false,
     })
     .unwrap()
     .rows

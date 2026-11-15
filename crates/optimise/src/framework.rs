@@ -242,8 +242,12 @@ pub struct Route {
 pub fn refine_zip<R: Read + Seek>(r: R) -> Option<FileKind> {
     let z = mj_formats::zip::ZipArchive::new(r).ok()?;
     let has = |n: &str| z.entries().iter().any(|e| e.name.eq_ignore_ascii_case(n));
-    let prefix =
-        |p: &str| z.entries().iter().any(|e| e.name.len() >= p.len() && e.name[..p.len()].eq_ignore_ascii_case(p));
+    // Bytes, not `str` slices: a name can hold a multi-byte character at the cut (OPT-6).
+    let prefix = |p: &str| {
+        z.entries()
+            .iter()
+            .any(|e| e.name.as_bytes().get(..p.len()).is_some_and(|b| b.eq_ignore_ascii_case(p.as_bytes())))
+    };
     if has("[Content_Types].xml") {
         if prefix("ppt/") {
             return Some(FileKind::Pptx);
@@ -687,7 +691,8 @@ pub fn analyse_by_content(
             ctx.cancel.checkpoint()?;
             ctx.progress.report(&Progress::new(Phase::Detecting, n as u64, Some(total)));
         }
-        let kind = match content_kind(&e.path) {
+        // A reader bug on one hostile file must cost that file only, never the whole card (OPT-6).
+        let kind = match guarded("route", || content_kind(&e.path)) {
             Ok(k) => k,
             Err(_) => {
                 out.diagnostics.unreadable(&e.path);
@@ -1087,6 +1092,24 @@ mod tests {
         w.add("mimetype", b"application/epub+zip", 0, 0, 0).unwrap();
         w.add("META-INF/container.xml", b"<c/>", 6, 0, 0).unwrap();
         assert_eq!(refine_zip(std::io::Cursor::new(w.finish().unwrap())), Some(FileKind::Epub));
+    }
+
+    /// OPT-6: entry names are compared as bytes; a non-ASCII name must never panic the routing.
+    #[test]
+    fn refine_zip_never_panics_on_non_ascii_names() {
+        for names in [&["日本語.xml"][..], &["xlé", "pp"], &["wor\u{e9}d/x"], &["ééé/word/document.xml"]] {
+            let mut w = mj_formats::zip::ZipWriter::new(Vec::new());
+            w.add("[Content_Types].xml", b"<Types/>", 6, 0, 0).unwrap();
+            for n in names {
+                w.add(n, b"<x/>", 6, 0, 0).unwrap();
+            }
+            assert_eq!(refine_zip(std::io::Cursor::new(w.finish().unwrap())), Some(FileKind::Zip), "{names:?}");
+        }
+        let mut w = mj_formats::zip::ZipWriter::new(Vec::new());
+        w.add("[Content_Types].xml", b"<Types/>", 6, 0, 0).unwrap();
+        w.add("日本.xml", b"<x/>", 6, 0, 0).unwrap();
+        w.add("XL/workbook.xml", b"<x/>", 6, 0, 0).unwrap();
+        assert_eq!(refine_zip(std::io::Cursor::new(w.finish().unwrap())), Some(FileKind::Xlsx));
     }
 
     #[test]

@@ -2,9 +2,9 @@
 /**
  * Controller of the Settings drawer. The shell's controller only knows
  * `loadSettings` and `clearCache`; everything else the drawer does (settings,
- * protected paths, schedules, tools, the folder picker) is handled here, with
+ * protected paths, schedules, tools, choosing folders) is handled here, with
  * the exact payloads of docs/IPC.md. The drawer's own transient state (inline
- * errors, open "Advanced" sections, the picker, loaded lists) lives in the
+ * errors, open "Advanced" sections, loaded lists) lives in the
  * controller, one per shell `actions` object, because the shell store has no
  * keys for it. Settings values themselves always come from the store.
  *
@@ -12,7 +12,7 @@
  */
 import defaultApi from '../../api.js';
 import { replaceKeepingFocus } from '../../dom.js';
-import { errors } from './copy.js';
+import { errors, sc } from './copy.js';
 
 /** @type {WeakMap<object, any>} */
 const registry = new WeakMap();
@@ -43,12 +43,13 @@ function createController(actions, api) {
     prot: null, schedules: null, loaded: false, loading: false,
     /** @type {Record<string, string|null>} */ errors: {},
     /** @type {Record<string, boolean>} */ open: {},
-    /** @type {any} */ picker: null,
     /** @type {string|null} */ confirmDelete: null,
     /** @type {Record<string, string>} */ notes: {},
   };
   /** @type {{ host: any, s: any, build: ((s: any) => any) | null }} */
   const view = { host: null, s: null, build: null };
+  /** The settings changes in flight, in order (UI-7). @type {Promise<void>} */
+  let commits = Promise.resolve();
 
   const rerender = () => { if (view.host && view.build && view.s) replaceKeepingFocus(view.host, view.build(view.s)); };
   const fail = (field, e) => { st.errors[field] = e?.message ?? String(e); rerender(); };
@@ -69,17 +70,27 @@ function createController(actions, api) {
     },
     toggleOpen(key) { st.open[key] = !st.open[key]; rerender(); },
 
-    /** Change settings with `mutate(copy)`; the engine validates and the error shows under `field`. */
-    async commit(field, mutate) {
-      const next = structuredClone(view.s.settings);
-      mutate(next);
-      try {
-        const saved = await api.settingsSet({ settings: next });
-        ok(field);
-        view.s = { ...view.s, settings: saved };
-        await actions.loadSettings();
-        rerender();
-      } catch (e) { fail(field, e); }
+    /**
+     * Change settings with `mutate(copy)`; the engine validates and the error shows under
+     * `field`. UI-7: `settings_set` replaces the whole object, so changes run one at a time
+     * and each `mutate` applies to the settings the previous one saved; two quick changes
+     * (a number committed on blur, then a switch) never undo each other.
+     */
+    commit(field, mutate) {
+      const run = async () => {
+        const next = structuredClone(view.s.settings);
+        mutate(next);
+        try {
+          const saved = await api.settingsSet({ settings: next });
+          ok(field);
+          view.s = { ...view.s, settings: saved };
+          await actions.loadSettings();
+          rerender();
+        } catch (e) { fail(field, e); }
+      };
+      const done = commits.then(run);
+      commits = done;
+      return done;
     },
     /** A whole number within bounds, checked here first so typing errors never hit the engine. */
     async commitNumber(field, raw, min, max, apply) {
@@ -129,35 +140,26 @@ function createController(actions, api) {
       st.confirmDelete = null;
       try { st.schedules = await api.scheduleDelete({ id }); ok(`schedule:${id}`); rerender(); } catch (e) { fail(`schedule:${id}`, e); }
     },
-    // --------------------------------------------------------------- picker
-    /** Open the inline folder picker for `purpose` ('protected' | 'temp' | 'backup'). */
-    async openPicker(purpose) {
-      st.picker = { purpose, path: '', parent: null, entries: [], places: [], loading: true };
-      rerender();
+    // -------------------------------------------------------------- folders
+    /**
+     * Choose a folder in the operating system's folder dialog (docs/IPC.md 3.1) and
+     * store it for `purpose`: a protected path, the temporary folder or the backup
+     * folder for originals. A cancelled dialog changes nothing; an error shows under
+     * the control that opened the dialog.
+     * @param {'protected' | 'temp' | 'backup'} purpose
+     */
+    async chooseFolder(purpose) {
+      const field = purpose === 'backup' ? 'originals' : purpose;
+      const settings = view.s?.settings;
+      const current = purpose === 'temp' ? settings?.performance?.temp_dir : purpose === 'backup' ? settings?.general?.default_originals?.folder : null;
+      let path;
       try {
-        const first = await api.fsListDir({});
-        st.picker = { ...st.picker, places: first.places };
-        const start = first.places[0]?.path;
-        if (start) await ctl.pickerTo(start); else { st.picker.loading = false; rerender(); }
-      } catch (e) { st.picker = null; fail('picker', e); }
-    },
-    async pickerTo(path) {
-      st.picker = { ...st.picker, loading: true };
-      rerender();
-      try {
-        const r = await api.fsListDir({ path, show_hidden: false, include_files: false });
-        st.picker = { ...st.picker, path: r.path, parent: r.parent ?? null, entries: r.entries.filter((e) => e.is_dir), loading: false };
-        rerender();
-      } catch (e) { st.picker = { ...st.picker, loading: false }; fail('picker', e); }
-    },
-    closePicker() { st.picker = null; rerender(); },
-    async pickerChoose() {
-      const { purpose, path } = st.picker ?? {};
+        path = await api.dialogPickFolder({ title: sc.dialogs[purpose], ...(current ? { start_dir: current } : {}) });
+      } catch (e) { fail(field, e); return; }
       if (!path) return;
-      st.picker = null;
       if (purpose === 'protected') await ctl.setProtected([...(st.prot?.user ?? []), path]);
       else if (purpose === 'temp') await ctl.commit('temp', (s) => { s.performance.temp_dir = path; });
-      else if (purpose === 'backup') await ctl.commit('originals', (s) => { s.general.default_originals = { policy: 'backup_folder', folder: path }; });
+      else await ctl.commit('originals', (s) => { s.general.default_originals = { policy: 'backup_folder', folder: path }; });
     },
   };
   return ctl;

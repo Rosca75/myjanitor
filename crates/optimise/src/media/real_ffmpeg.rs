@@ -331,3 +331,79 @@ fn f17_playlists_posing_as_media_are_never_followed() {
     let wav = tone_silence_tone(&d);
     assert_eq!(super::ffmpeg::demuxer_of(&wav), Some("wav"));
 }
+
+/// A wrapper around the real ffmpeg that cuts every encode to its first second (`-t 1` before the
+/// output), like a demuxer that stops early on a damaged file and still exits 0.
+#[cfg(unix)]
+fn truncating_ffmpeg(real: &Path, dir: &TempDir) -> Vec<ExternalTool> {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = dir.join("ffmpeg");
+    let script = format!(
+        "#!/bin/sh\ncase \" $* \" in *\" -progress \"*) ;; *) exec '{real}' \"$@\";; esac\nn=$#; i=0\nfor a do\n  i=$((i+1))\n  [ $i -eq 1 ] && set --\n  [ $i -eq $n ] && set -- \"$@\" -t 1\n  set -- \"$@\" \"$a\"\ndone\nexec '{real}' \"$@\"\n",
+        real = real.display()
+    );
+    std::fs::write(&exe, script).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    vec![crate::tools::tool_at("ffmpeg", exe)]
+}
+
+fn ffmpeg_ok(exe: &Path, a: Vec<std::ffi::OsString>) {
+    let o = run(exe, &a, &RunOptions::default()).unwrap();
+    assert!(o.success(), "{}", o.stderr);
+}
+
+/// OPT-4: MyJanitor's own prober cannot read Matroska, so the length check used to be skipped and
+/// a truncated encode of an .mkv replaced the original. It must fail closed.
+#[cfg(unix)]
+#[test]
+fn opt4_a_truncated_mkv_encode_never_replaces_the_original() {
+    let Some((exe, _)) = ffmpeg() else { return };
+    let d = TempDir::new("ff-trunc").unwrap();
+    let mp4 = make_video(&exe, &d, 5, 1);
+    let mkv = d.join("obs.mkv");
+    let mut a = args(["-nostdin", "-loglevel", "error", "-y", "-i"]);
+    a.push(mp4.into());
+    a.extend(args(["-c", "copy"]));
+    a.push(mkv.clone().into());
+    ffmpeg_ok(&exe, a);
+    let tools = truncating_ffmpeg(&exe, &d);
+    let dst = d.join("out.mkv");
+    let r = job_run(&Video, &mkv, &dst, &d, &ParamValues::new().with("remux_only", spec::b(true)), &tools);
+    assert!(r.is_err() && !dst.exists(), "{r:?}");
+    assert!(r.unwrap_err().to_string().contains("long but the original"));
+}
+
+/// OPT-5: the remux keeps a Matroska file's attachments (subtitle fonts) and a timecode track
+/// while dropping what the user asked (here the second audio track); it never drops a track
+/// silently and calls the result lossless.
+#[test]
+fn opt5_remux_keeps_attachments_and_timecode() {
+    let Some((exe, tools)) = ffmpeg() else { return };
+    let d = TempDir::new("ff-streams").unwrap();
+    let font = d.write("f.ttf", &[7u8; 2000]).unwrap();
+    // Video + two PCM audio tracks (the second one is what the user drops) + a font / a timecode.
+    let make = |out: &Path, extra: &[&str], pcm: &str| {
+        let mut a = args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=10:d=4"]);
+        a.extend(args(["-f", "lavfi", "-i", "sine=d=4", "-f", "lavfi", "-i", "sine=f=300:d=4"]));
+        a.extend(args(["-map", "0", "-map", "1", "-map", "2", "-c:v", "libx264", "-c:a", pcm]));
+        a.extend(args(extra.iter().copied()));
+        a.push(out.into());
+        ffmpeg_ok(&exe, a);
+    };
+    let mkv = d.join("anime.mkv");
+    let attach = font.to_string_lossy().into_owned();
+    make(&mkv, &["-attach", &attach, "-metadata:s:t", "mimetype=application/x-truetype-font"], "pcm_s16le");
+    let mov = d.join("clip.mov");
+    make(&mov, &["-timecode", "01:00:00:00"], "pcm_s16le");
+    let p = ParamValues::new().with("remux_only", spec::b(true)).with("drop_extra_audio", spec::b(true));
+    let cancel = CancelToken::new();
+    use super::ffmpeg::StreamKind;
+    for (src, ext, kind) in [(&mkv, "mkv", StreamKind::Attachment), (&mov, "mov", StreamKind::Data)] {
+        assert_eq!(super::ffmpeg::probe_input(&exe, src, &cancel).unwrap().count(kind), 1, "{ext} source");
+        let dst = d.join(format!("out.{ext}"));
+        let r = job_run(&Video, src, &dst, &d, &p, &tools).unwrap();
+        assert!(r.skipped.is_none() && !r.lossy, "{ext}: {r:?}");
+        let out = super::ffmpeg::probe_input(&exe, &dst, &cancel).unwrap();
+        assert_eq!((out.count(kind), out.count(StreamKind::Audio)), (1, 1), "{ext}: {out:?}");
+    }
+}

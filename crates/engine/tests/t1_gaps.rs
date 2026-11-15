@@ -12,8 +12,10 @@ fn oid(s: &str) -> OpportunityId {
     OpportunityId(s.into())
 }
 
-/// CLN-ACT-04: an item quarantined with a retention that has already passed is purged
-/// automatically once the run completes, and at the next start-up for older items.
+/// CLN-ACT-04: an item quarantined with a retention that has passed is purged
+/// automatically, at the next start-up and after each run, each item by its own step's
+/// retention. ACT-9: a retention of 0 days is refused (it would be an unconfirmed permanent
+/// delete), so the retention is made to pass by back-dating the journal record.
 #[test]
 fn cln_act_04_expired_quarantine_items_are_purged_after_the_run() {
     let t = TempDir::new("t1-purge").unwrap();
@@ -23,16 +25,34 @@ fn cln_act_04_expired_quarantine_items_are_purged_after_the_run() {
     let f = engine_for(t);
     let e = &f.engine;
     scan(e);
-    e.plan_add_step(PlanAddStepRequest {
+    let step = |days| PlanAddStepRequest {
         opportunity_id: oid("det:exact_duplicates"),
-        action: Some(mj_core::Action::Quarantine { purge_after_days: 0 }),
+        action: Some(mj_core::Action::Quarantine { purge_after_days: days }),
         params: None,
-    })
-    .unwrap();
+    };
+    let err = e.plan_add_step(step(0)).unwrap_err();
+    assert_eq!(err.info().code, "invalid_input", "{err}");
+    e.plan_add_step(step(1)).unwrap();
     e.plan_apply(PlanApplyRequest::default()).unwrap();
     wait_jobs(e);
-    assert_eq!(e.quarantine_info().unwrap().items, 0, "expired at once, purged after the run");
+    assert_eq!(e.quarantine_info().unwrap().items, 1, "held for its retention, not purged at once");
     let left = ["a/x.bin", "b/x.bin"].iter().filter(|p| exists(&f.tree.join(p))).count();
+    assert_eq!(left, 1, "the kept copy stays");
+
+    // Two days later (back-dated record), the next start-up purges it.
+    let Fixture { tree, app, engine, .. } = f;
+    drop(engine);
+    let j = mj_actions::Journal::open(&app.join("journal")).unwrap();
+    for mut r in j.all_entries() {
+        if r.action == mj_core::ActionKind::Quarantine && r.state == mj_core::JournalState::Done {
+            r.at = r.at.add_days(-2);
+            j.append(&r).unwrap();
+        }
+    }
+    drop(j);
+    let e2 = mj_engine::Engine::new(config(&app, Default::default())).unwrap();
+    assert_eq!(e2.quarantine_info().unwrap().items, 0, "expired, purged at start-up");
+    let left = ["a/x.bin", "b/x.bin"].iter().filter(|p| exists(&tree.join(p))).count();
     assert_eq!(left, 1, "the kept copy stays");
 }
 
@@ -119,6 +139,7 @@ fn cln_act_11_results_and_reports_export_as_pdf() {
             selected_only: false,
             format: mj_core::ExportFormat::Pdf,
             dest: out.join("results.pdf"),
+            overwrite: false,
         })
         .unwrap();
     assert_eq!(r.rows, 2);
@@ -140,6 +161,7 @@ fn cln_act_11_results_and_reports_export_as_pdf() {
             kind: ReportExportKind::Report,
             format: mj_core::ExportFormat::Pdf,
             dest: out.join("report.pdf"),
+            overwrite: false,
         })
         .unwrap();
     let bytes = std::fs::read(&rep.path).unwrap();

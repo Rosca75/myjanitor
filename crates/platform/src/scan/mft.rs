@@ -21,12 +21,21 @@
 
 use std::path::Path;
 
-#[cfg(not(windows))]
-use mj_core::Error;
-use mj_core::{CancelToken, FileEntry, FileId, Result};
+use mj_core::{CancelToken, Error, FileEntry, FileId, Result};
 
 use super::metadata::{entry_from_win32, win_attr};
 use super::ntfs::NtfsFileInfo;
+
+/// True for a whole drive (`C:\\`, `C:`, `\\\\?\\C:\\`): the only roots worth a whole-volume
+/// MFT pass (SCAN-9). Pure, so it is tested on every platform.
+pub fn is_volume_root(root: &str) -> bool {
+    let r = root.strip_prefix(r"\\?\").unwrap_or(root);
+    let b = r.as_bytes();
+    b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || (b.len() == 3 && matches!(b[2], b'\\' | b'/')))
+}
 
 /// Feature name used in `Unsupported` errors.
 pub const FEATURE: &str = "Fast indexing";
@@ -71,6 +80,11 @@ pub fn entry_from_mft(
 pub fn fast_enumerate(root: &Path, sink: &mut dyn FnMut(FileEntry), cancel: &CancelToken) -> Result<()> {
     #[cfg(windows)]
     {
+        // SCAN-9: the MFT pass reads the whole volume whatever the root; for a folder
+        // (Downloads, Documents...) the directory walk lists far less and reports progress.
+        if !is_volume_root(&root.to_string_lossy()) {
+            return Err(Error::unsupported(FEATURE, "the location is a folder, not a whole drive"));
+        }
         imp::enumerate(root, sink, cancel)
     }
     #[cfg(not(windows))]
@@ -317,6 +331,16 @@ mod imp {
 mod tests {
     use super::super::ntfs::{apply_fixups, parse_file_record, tests::Rec};
     use super::*;
+
+    #[test]
+    fn only_a_whole_drive_takes_the_mft_pass() {
+        for r in ["C:\\", "c:", "D:/", r"\\?\E:\"] {
+            assert!(is_volume_root(r), "{r}");
+        }
+        for r in [r"C:\Users\me\Downloads", r"\\srv\share", "/home/me", "C:x", ""] {
+            assert!(!is_volume_root(r), "{r}");
+        }
+    }
     use mj_core::{Attributes, EntryKind, Timestamp};
 
     fn info(r: Rec) -> NtfsFileInfo {

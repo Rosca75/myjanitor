@@ -34,8 +34,24 @@ impl Optimiser for FakeOpt {
             safety: if self.lossy { SafetyClass::LossyOptIn } else { SafetyClass::Reversible },
             default_action: ActionKind::Optimise,
             available_actions: vec![ActionKind::Optimise],
-            presets: vec![],
-            settings: vec![],
+            // A lossless preset and a setting that is not lossy by itself (like the audio
+            // card's FLAC preset and bitrate): ENG-6.
+            presets: vec![mj_core::StepPreset {
+                id: "lossless".into(),
+                label: "Lossless".into(),
+                description: String::new(),
+                values: ParamValues::new().with("bitrate_kbps", mj_core::ParamValue::Number(320.0)),
+                lossy: false,
+            }],
+            settings: vec![mj_core::SettingSpec {
+                key: "bitrate_kbps".into(),
+                label: "Bitrate".into(),
+                help: None,
+                kind: mj_core::SettingKind::Number { default: 48.0, min: 8.0, max: 320.0, step: 8.0, unit: None },
+                advanced: false,
+                lossy: false,
+                disabled_reason: None,
+            }],
             platform: PlatformSupport::Both,
             tools: vec![],
             feature_ids: vec![],
@@ -174,10 +190,19 @@ fn a_panicking_detector_becomes_a_disabled_card_and_the_scan_survives() {
     let list = fx.engine.opportunities_list(OpportunitiesRequest::default()).unwrap();
     let card = list.items.iter().find(|o| o.id.0 == "det:temp_files").expect("card listed");
     match &card.availability {
-        Availability::Disabled { reason } => assert!(reason.contains("failed"), "{reason}"),
+        Availability::Disabled { reason } => {
+            // XC-3: the card says which analysis failed and why.
+            assert!(
+                reason.contains("failed") && reason.contains("det:temp_files") && reason.contains("detector bug"),
+                "{reason}"
+            );
+        }
         a => panic!("{a:?}"),
     }
     assert!(list.items.iter().any(|o| o.id.0 == "opt:video" && o.availability.is_available()));
+    // ... and the log file in the data folder keeps the payload for a bug report.
+    let log = std::fs::read_to_string(fx._app.join("data").join(mj_core::diag::LOG_NAME)).unwrap();
+    assert!(log.contains("ERROR") && log.contains("det:temp_files") && log.contains("detector bug"), "{log}");
 }
 
 #[test]
@@ -244,6 +269,43 @@ fn a_lossy_optimiser_is_refused_without_confirmation_and_runs_with_it() {
     let jobs = wait_jobs(&fx.engine);
     assert_eq!(jobs[0].outcome.as_ref().unwrap().succeeded, 1, "{jobs:?}");
     assert_eq!(std::fs::metadata(fx.tree.join("clip.fake")).unwrap().len(), 2000);
+}
+
+/// ENG-6: changing a parameter that is not lossy by itself keeps a lossy-by-nature step
+/// lossy: the confirmation is still asked before anything is encoded.
+#[test]
+fn a_parameter_change_keeps_a_lossy_step_lossy() {
+    let fx = fixture(true, false, &[("clip.fake", 4000)]);
+    scan(&fx.engine);
+    add_fake_step(&fx.engine);
+    let r = fx
+        .engine
+        .step_params_set(StepParamsRequest {
+            opportunity_id: OpportunityId("opt:video".into()),
+            params: ParamValues::new().with("bitrate_kbps", mj_core::ParamValue::Number(64.0)),
+            preset_id: None,
+        })
+        .unwrap();
+    assert!(r.lossy, "{r:?}");
+    assert_eq!(r.safety, SafetyClass::LossyOptIn);
+    let plan = fx.engine.plan_get().unwrap();
+    assert!(plan.steps[0].lossy);
+    assert_eq!(plan.steps[0].safety, SafetyClass::LossyOptIn);
+    let err = fx.engine.plan_apply(PlanApplyRequest::default()).unwrap_err();
+    assert_eq!(err.code(), "confirmation_required");
+    assert!(fx.engine.jobs_list().unwrap().is_empty());
+    assert_eq!(std::fs::metadata(fx.tree.join("clip.fake")).unwrap().len(), 4000);
+    // Its own lossless preset is not lossy, in the response and in the plan.
+    let r = fx
+        .engine
+        .step_params_set(StepParamsRequest {
+            opportunity_id: OpportunityId("opt:video".into()),
+            params: ParamValues::new(),
+            preset_id: Some("lossless".into()),
+        })
+        .unwrap();
+    assert!(!r.lossy, "{r:?}");
+    assert!(!fx.engine.plan_get().unwrap().steps[0].lossy);
 }
 
 #[test]

@@ -16,11 +16,13 @@
 
 pub mod action;
 pub mod ffi;
+pub mod locale;
 pub mod lockfile;
 pub mod native;
 pub mod scan;
 pub mod traits;
 
+pub use locale::system_language;
 pub use native::NativePlatform;
 pub use traits::{
     ActionPlatform, CloudFileState, CloudInfo, DirItem, Platform, ScanPlatform, SyncProvider, SyncRoot, VolumeFeatures,

@@ -239,6 +239,142 @@ pub fn clock(secs: f64) -> String {
     }
 }
 
+/// The kind of one stream, as `ffmpeg -i` names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum StreamKind {
+    Video,
+    /// A still picture attached to the file (cover art), shown as `(attached pic)`.
+    CoverPicture,
+    Audio,
+    Subtitle,
+    /// Timed data: timecode (`tmcd`), GPS or telemetry (`gpmd`), camera metadata (`mebx`)...
+    Data,
+    /// A file carried inside the container (fonts of a Matroska file).
+    Attachment,
+    Other,
+}
+
+impl StreamKind {
+    /// Plural user-facing name.
+    pub fn label(self) -> &'static str {
+        match self {
+            StreamKind::Video => "video tracks",
+            StreamKind::CoverPicture => "cover pictures",
+            StreamKind::Audio => "audio tracks",
+            StreamKind::Subtitle => "subtitle tracks",
+            StreamKind::Data => "data tracks (timecode, GPS or camera data)",
+            StreamKind::Attachment => "attached files (such as subtitle fonts)",
+            StreamKind::Other => "other tracks",
+        }
+    }
+}
+
+/// One input stream: its kind and the codec text after the kind (`tmcd`, `gpmd`, `ttf`...).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputStream {
+    pub kind: StreamKind,
+    pub codec: String,
+}
+
+/// What `ffmpeg -i <file>` reports about a file: its length and its streams. ffmpeg reads every
+/// container it can decode, so this works where MyJanitor's own media prober does not (Matroska,
+/// WebM, AVI, ASF/WMV) and is the independent check of an encode's output (OPT-4, OPT-5).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InputReport {
+    pub duration_ms: Option<u64>,
+    pub streams: Vec<InputStream>,
+}
+
+impl InputReport {
+    /// Number of streams of `kind`.
+    pub fn count(&self, kind: StreamKind) -> usize {
+        self.streams.iter().filter(|s| s.kind == kind).count()
+    }
+}
+
+/// Parse the `Input #0` part of `ffmpeg -i` stderr; `None` when ffmpeg did not open the file.
+pub fn parse_input_report(stderr: &str) -> Option<InputReport> {
+    let mut lines = stderr.lines().skip_while(|l| !l.starts_with("Input #0"));
+    lines.next()?;
+    let mut r = InputReport::default();
+    for line in lines {
+        let t = line.trim_start();
+        if line.starts_with("Input #") || line.starts_with("Output #") || t.starts_with("Stream mapping") {
+            break;
+        }
+        if let Some(d) = t.strip_prefix("Duration: ") {
+            r.duration_ms = parse_clock_ms(d.split(',').next().unwrap_or(""));
+        } else if let Some(rest) = t.strip_prefix("Stream #0:") {
+            let Some((_, desc)) = rest.split_once(": ") else { continue };
+            let (kind, codec) = desc.split_once(": ").unwrap_or((desc, ""));
+            let kind = match kind {
+                "Video" if desc.contains("(attached pic)") => StreamKind::CoverPicture,
+                "Video" => StreamKind::Video,
+                "Audio" => StreamKind::Audio,
+                "Subtitle" => StreamKind::Subtitle,
+                "Data" => StreamKind::Data,
+                "Attachment" => StreamKind::Attachment,
+                _ => StreamKind::Other,
+            };
+            let codec = match codec.find(" (").filter(|_| kind == StreamKind::Data) {
+                // `Data: none (tmcd / 0x64636D74)`: the tag names the data.
+                Some(i) => codec[i + 2..].split([' ', ')']).next().unwrap_or("").to_string(),
+                None => codec.split([',', ' ']).next().unwrap_or("").to_string(),
+            };
+            r.streams.push(InputStream { kind, codec });
+        }
+    }
+    Some(r)
+}
+
+/// `HH:MM:SS.ss` to milliseconds (`N/A` and garbage give `None`).
+fn parse_clock_ms(s: &str) -> Option<u64> {
+    let mut parts = s.trim().split(':');
+    let (h, m, sec) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let (h, m, sec) = (h.parse::<u64>().ok()?, m.parse::<u64>().ok()?, sec.parse::<f64>().ok()?);
+    (sec.is_finite() && sec >= 0.0).then(|| (h * 3600 + m * 60) * 1000 + (sec * 1000.0).round() as u64)
+}
+
+/// Run `ffmpeg -i <path>` (local files only, demuxer forced as for an encode) and parse its report.
+pub fn probe_input(exe: &Path, path: &Path, cancel: &CancelToken) -> Result<InputReport> {
+    let mut a = args(["-nostdin", "-hide_banner"]);
+    a.extend(input_args(path));
+    let opts = RunOptions {
+        timeout: Some(Duration::from_secs(120)),
+        max_stderr: 4 << 20,
+        cancel: Some(cancel),
+        ..Default::default()
+    };
+    // Without an output ffmpeg exits with an error after printing the report: that is expected.
+    let out = run(exe, &a, &opts)?;
+    parse_input_report(&out.stderr).ok_or_else(|| {
+        let why = out.stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no report").trim().to_string();
+        Error::parse("media", format!("ffmpeg could not read {}: {why}", path.display()))
+    })
+}
+
+/// The length check of a run that cuts nothing (OPT-4): both lengths must be known and agree
+/// within `tolerance_ms`. It fails closed: an unknown length is an error, never a pass.
+pub fn check_length(d_in: Option<u64>, d_out: Option<u64>, tolerance_ms: u64, what: &str) -> Result<()> {
+    match (d_in, d_out) {
+        (Some(a), Some(b)) if a.abs_diff(b) <= tolerance_ms => Ok(()),
+        (Some(a), Some(b)) => Err(Error::Internal(format!(
+            "the new {what} is {} long but the original is {}; nothing was changed",
+            clock(b as f64 / 1000.0),
+            clock(a as f64 / 1000.0)
+        ))),
+        (None, _) => Err(Error::Internal(format!(
+            "the length of the original {what} could not be read, so the result cannot be checked; nothing was changed"
+        ))),
+        (Some(_), None) => Err(Error::Internal(format!(
+            "the length of the new {what} could not be read, so it cannot be checked; nothing was changed"
+        ))),
+    }
+}
+
 /// An error for a finished encode that left no usable file.
 pub fn empty_output(tool: &str) -> Error {
     Error::Internal(format!("{tool} finished but wrote no output; try again or check the file plays"))
@@ -271,6 +407,42 @@ mod tests {
         let fr = "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 0\n[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 3\n[freezedetect @ 0x1] lavfi.freezedetect.freeze_end: 3\n";
         assert_eq!(parse_freezes(fr, None), [(0.0, 3.0)]);
         assert_eq!(intersect(&[(0.0, 3.0), (8.0, 9.0)], &[(1.0, 5.0)]), [(1.0, 3.0)]);
+    }
+
+    const REPORT: &str = "[mov @ 0x5] Using non-standard frame rate\nInput #0, mov,mp4,m4a,3gp,3g2,mj2, from 'GX010001.MP4':\n  Metadata:\n    major_brand     : mp41\n  Duration: 00:45:00.50, start: 0.000000, bitrate: 112 kb/s\n  Stream #0:0[0x1](eng): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 64x48, 30 kb/s, 10 fps (default)\n    Metadata:\n      handler_name    : GoPro AVC\n  Stream #0:1[0x2](eng): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo\n  Stream #0:2[0x3](eng): Data: none (tmcd / 0x64636D74), 0 kb/s\n  Stream #0:3[0x4](eng): Data: bin_data (gpmd / 0x646D7067), 61 kb/s\n  Stream #0:4: Video: mjpeg (Baseline), yuvj420p, 300x300, 90k tbn (attached pic)\n  Stream #0:5: Attachment: ttf\n  Stream #0:6(eng): Subtitle: ass (default)\nAt least one output file must be specified\n";
+
+    #[test]
+    fn input_report_lists_length_and_every_stream() {
+        let r = parse_input_report(REPORT).unwrap();
+        assert_eq!(r.duration_ms, Some(2_700_500));
+        let kinds: Vec<(StreamKind, &str)> = r.streams.iter().map(|s| (s.kind, s.codec.as_str())).collect();
+        assert_eq!(
+            kinds,
+            [
+                (StreamKind::Video, "h264"),
+                (StreamKind::Audio, "aac"),
+                (StreamKind::Data, "tmcd"),
+                (StreamKind::Data, "gpmd"),
+                (StreamKind::CoverPicture, "mjpeg"),
+                (StreamKind::Attachment, "ttf"),
+                (StreamKind::Subtitle, "ass"),
+            ]
+        );
+        assert_eq!(r.count(StreamKind::Data), 2);
+        let na = parse_input_report("Input #0, matroska,webm, from 'a.mkv':\n  Duration: N/A, start: 0\n").unwrap();
+        assert_eq!(na, InputReport::default());
+        assert!(parse_input_report("a.mkv: Invalid data found when processing input\n").is_none());
+        assert_eq!(parse_clock_ms("01:02:03.25"), Some(3_723_250));
+        assert_eq!(parse_clock_ms("1:2"), None);
+    }
+
+    #[test]
+    fn length_check_fails_closed() {
+        assert!(check_length(Some(60_000), Some(59_500), 2000, "video").is_ok());
+        assert!(check_length(Some(2_700_000), Some(130_000), 2000, "video").unwrap_err().to_string().contains("2:10"));
+        assert!(check_length(None, Some(1000), 2000, "video").is_err());
+        assert!(check_length(Some(1000), None, 2000, "video").is_err());
+        assert!(check_length(None, None, 2000, "video").is_err());
     }
 
     #[test]

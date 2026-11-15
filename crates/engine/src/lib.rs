@@ -15,7 +15,6 @@ mod apply;
 mod disk;
 mod engine;
 mod extract;
-mod fsbrowse;
 mod history;
 pub mod instance;
 mod jobs;
@@ -25,6 +24,8 @@ mod plan;
 mod presets;
 mod reports;
 mod results;
+mod review_order;
+mod savings;
 mod scan_ops;
 pub mod schedules;
 mod scope;
@@ -32,6 +33,7 @@ mod search;
 pub mod settings;
 mod steps;
 mod store;
+mod thumbs;
 mod tools;
 
 pub use engine::{Engine, EngineConfig};
@@ -41,3 +43,6 @@ mod tests;
 
 #[cfg(test)]
 mod fault_tests;
+
+#[cfg(test)]
+mod schedule_job_tests;

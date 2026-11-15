@@ -35,6 +35,15 @@ pub struct TestPlatform {
     pub fake_reflink: bool,
     /// Simulate a sync provider that accepts "free up space" but frees nothing.
     pub ignore_dehydrate: bool,
+    /// Simulate a trash of a folder that fails part-way: one file below the folder is
+    /// deleted, then the call fails (ACT-1).
+    pub partial_trash: bool,
+    /// Simulate another program writing to the kept file the moment it is linked (ACT-11).
+    pub write_keeper_on_link: bool,
+    /// Called with the path of every `metadata` call before it is answered: lets a test
+    /// change a file at an exact point of an action.
+    #[allow(clippy::type_complexity)]
+    pub on_metadata: Mutex<Option<Box<dyn FnMut(&Path) + Send>>>,
 }
 
 impl TestPlatform {
@@ -48,12 +57,18 @@ impl TestPlatform {
             compressed: Mutex::new(BTreeSet::new()),
             fake_reflink: true,
             ignore_dehydrate: false,
+            partial_trash: false,
+            write_keeper_on_link: false,
+            on_metadata: Mutex::new(None),
         }
     }
 }
 
 impl ScanPlatform for TestPlatform {
     fn metadata(&self, path: &Path) -> Result<FileEntry> {
+        if let Some(hook) = self.on_metadata.lock().unwrap().as_mut() {
+            hook(path);
+        }
         let mut e = self.native.metadata(path)?;
         if self.online.lock().unwrap().contains(path) {
             e.attrs |= Attributes::ONLINE_ONLY;
@@ -83,6 +98,11 @@ impl ActionPlatform for TestPlatform {
         if self.fail_trash_at == Some(n) {
             return Err(Error::Io { path: Some(path.into()), kind: "other", message: "injected failure".into() });
         }
+        if self.partial_trash && path.is_dir() {
+            let first = std::fs::read_dir(path).unwrap().flatten().find(|e| e.path().is_file()).unwrap();
+            std::fs::remove_file(first.path()).unwrap();
+            return Err(Error::Io { path: Some(path.into()), kind: "other", message: "in use".into() });
+        }
         #[cfg(unix)]
         return trash_with(path, &self.trash_cfg, Timestamp::now());
         #[cfg(not(unix))]
@@ -95,6 +115,13 @@ impl ActionPlatform for TestPlatform {
         return fixture_trash::restore(ticket, original);
     }
     fn hardlink(&self, existing: &Path, new_link: &Path) -> Result<()> {
+        if self.write_keeper_on_link {
+            std::io::Write::write_all(
+                &mut std::fs::OpenOptions::new().append(true).open(existing).unwrap(),
+                b" edited",
+            )
+            .unwrap();
+        }
         self.native.hardlink(existing, new_link)
     }
     fn reflink(&self, src: &Path, dst: &Path) -> Result<()> {

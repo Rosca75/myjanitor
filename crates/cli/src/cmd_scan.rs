@@ -125,6 +125,8 @@ pub fn print_candidates(ctx: &Ctx, id: &OpportunityId, limit: u32) -> Res {
         sort: Default::default(),
         descending: false,
         filter: None,
+        min_size: None,
+        keep_groups: false,
     })?;
     if ctx.json {
         println!("{}", json(&page));
@@ -178,6 +180,8 @@ pub fn show(a: &Parsed) -> Res {
             selected_only: a.flag("selected"),
             format,
             dest,
+            // The CLI never overwrites: an existing file gets a ` (1)` sibling.
+            overwrite: false,
         })?;
         println!("Wrote {} rows to {} ({}).", r.rows, r.path.display(), bytes(r.bytes));
         return Ok(());

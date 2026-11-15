@@ -92,6 +92,8 @@ pub(crate) struct ScanEnv {
     pub protected: Vec<String>,
     /// `Settings::general::kept_languages`, comma-separated (empty = system language).
     pub kept_languages: String,
+    /// RF-9: the user's interface language from the OS (`fr-FR`), when it says.
+    pub system_language: Option<String>,
 }
 
 impl ScanEnv {
@@ -123,7 +125,14 @@ impl ScanEnv {
         protected.extend(settings.safety.protected_paths.iter().map(|p| mj_core::pathutil::encode_path(p)));
         protected.extend(engine.cfg.app_dirs().iter().map(|p| mj_core::pathutil::encode_path(p)));
         let kept_languages = settings.general.kept_languages.join(", ");
-        ScanEnv { sync_roots: engine.platform().sync_roots().ok(), downloads, fonts, protected, kept_languages }
+        ScanEnv {
+            sync_roots: engine.platform().sync_roots().ok(),
+            downloads,
+            fonts,
+            protected,
+            kept_languages,
+            system_language: mj_platform::system_language(),
+        }
     }
 
     /// Add the env keys, and fill W2-B's own folder parameters when the user left them empty.
@@ -136,6 +145,9 @@ impl ScanEnv {
         params.set(env::DOWNLOADS, ParamValue::Text(env::encode_paths(&self.downloads)));
         params.set(env::FONT_FOLDERS, ParamValue::Text(env::encode_paths(&self.fonts)));
         params.set(env::PROTECTED, ParamValue::Text(env::encode(&self.protected)));
+        if let Some(l) = &self.system_language {
+            params.set(env::SYSTEM_LANGUAGE, ParamValue::Text(l.clone()));
+        }
         fill_text(params, "downloads_folders", &self.downloads);
         fill_text(params, "font_folders", &self.fonts);
         if let Some(ParamValue::Text(t)) = params.0.get("kept_languages") {
@@ -219,7 +231,7 @@ impl Engine {
         lock(&self.scan).status.generation == generation
     }
 
-    fn run_scan(&self, generation: u64, mut scope: ScanScope, cancel: CancelToken) {
+    fn run_scan(self: &Arc<Self>, generation: u64, mut scope: ScanScope, cancel: CancelToken) {
         let started = Instant::now();
         let settings = lock(&self.settings).clone();
         // AUT-05: the walk and hashing workers follow the settings when the scope does not
@@ -241,17 +253,20 @@ impl Engine {
                 current: p.current.clone(),
                 elapsed_ms: started.elapsed().as_millis() as u64,
             };
-            {
+            // Later phases keep the file count of the walk: the event carries what the status
+            // holds, so the header never falls back to 0 after the walk (IPC-4).
+            let ev = {
                 let mut st = lock(&self.scan);
                 if st.status.generation != generation {
                     return;
                 }
-                let mut ev2 = ev.clone();
+                let mut ev = ev;
                 if !walking {
-                    ev2.files = st.status.progress.files;
+                    ev.files = st.status.progress.files;
                 }
-                st.status.progress = ev2;
-            }
+                st.status.progress = ev.clone();
+                ev
+            };
             self.emit(Event::ScanProgress(ev));
         };
         let sink = ThrottledSink::new(emit_progress);
@@ -265,7 +280,9 @@ impl Engine {
             };
             let index = Arc::new(mj_scan::scan_with_cache(&req, &self.cache)?);
             cancel.checkpoint()?;
-            let records = self.run_analyses(generation, &index, &cancel, &sink)?;
+            let mut records = self.run_analyses(generation, &index, &cancel, &sink)?;
+            cancel.checkpoint()?;
+            records.extend(self.custom_records(&index));
             Ok((index, records))
         }));
         let (state, error, stats) = match outcome {
@@ -283,10 +300,13 @@ impl Engine {
                         crate::results::carry_selections(&results.opportunities, &mut records);
                         let skip = crate::results::skip_badges(&lock(&self.settings));
                         for rec in &mut records {
+                            // ENG-7: carried selections keep the kept badge truthful.
+                            crate::steps::sync_keepers(rec, skip);
                             crate::opportunities::recompute(rec, skip);
                         }
                         results.generation = generation;
                         results.index = Some(index);
+                        results.removed.clear();
                         results.opportunities = records;
                         results.cached = stats.cache_hits > 0;
                     }
@@ -296,8 +316,11 @@ impl Engine {
             }
             Ok(Err(Error::Cancelled)) => (ScanRunState::Cancelled, None, None),
             Ok(Err(e)) => (ScanRunState::Failed, Some(e.info()), None),
-            Err(_) => {
-                (ScanRunState::Failed, Some(Error::Internal("the scan stopped unexpectedly".into()).info()), None)
+            Err(p) => {
+                let text = mj_core::diag::panic_text(&*p);
+                self.log("ERROR", &format!("scan {generation} stopped unexpectedly: {text}"));
+                let e = Error::Internal(format!("the scan stopped unexpectedly: {text}"));
+                (ScanRunState::Failed, Some(e.info()), None)
             }
         };
         let status = {
@@ -323,14 +346,18 @@ impl Engine {
         }
     }
 
-    /// Effective parameters for an analysis: spec defaults, then the plan step's
-    /// parameters when the opportunity is in the plan.
+    /// Effective parameters for an analysis: spec defaults, then the parameters the user
+    /// chose in the review this session (DUP-2), then the plan step's parameters when the
+    /// opportunity is in the plan.
     fn params_for(&self, card: &CardInfo) -> ParamValues {
-        let defaults = mj_core::params::defaults(&card.settings);
+        let mut params = mj_core::params::defaults(&card.settings);
         let plan = lock(&self.plan);
+        if let Some(chosen) = plan.chosen.get(&card.id) {
+            params = params.merged(chosen);
+        }
         match plan.plan.steps.iter().find(|s| s.opportunity == card.id) {
-            Some(step) => defaults.merged(&step.params),
-            None => defaults,
+            Some(step) => params.merged(&step.params),
+            None => params,
         }
     }
 
@@ -345,6 +372,10 @@ impl Engine {
         cancel: &CancelToken,
     ) -> Result<OpportunityRecord> {
         let settings = lock(&self.settings).clone();
+        // SCAN-5: with the scan cache turned off, detectors neither reuse nor store hashes.
+        let no_cache = mj_core::NoFingerprintStore;
+        let fingerprints: &dyn mj_core::FingerprintStore =
+            if lock(&self.scope).options.use_cache { &self.cache } else { &no_cache };
         if let Availability::Disabled { reason } = &card.availability {
             return Ok(disabled_record(self, card.clone(), reason.clone()));
         }
@@ -354,7 +385,7 @@ impl Engine {
             index,
             params: &full,
             now: Timestamp::now(),
-            fingerprints: &self.cache,
+            fingerprints,
             cancel,
             progress: &NullProgress,
             threads: settings.performance.threads as usize,
@@ -366,7 +397,12 @@ impl Engine {
                 return Ok(disabled_record(self, card, e.to_string()))
             }
             Ok(Err(e)) => return Ok(disabled_record(self, card, format!("The analysis failed: {e}"))),
-            Err(_) => return Ok(disabled_record(self, card, "The analysis failed (internal error)".into())),
+            Err(p) => {
+                let text = mj_core::diag::panic_text(&*p);
+                self.log("ERROR", &format!("analysis {} panicked: {text}", card.id.0));
+                let reason = format!("The analysis failed (internal error in {}: {text})", card.id.0);
+                return Ok(disabled_record(self, card, reason));
+            }
         };
         let owned = card.safety == mj_core::SafetyClass::Rebuildable;
         let badges = self.badger(index, &output, owned, cancel);
@@ -404,6 +440,9 @@ impl Engine {
             if other_spelling(&spellings, &c.path).is_some_and(|q| protected.is_protected(&q)) {
                 b |= Badges::PROTECTED;
             }
+            // RF-11: a row of a regenerable card that says it is not regenerable itself
+            // (Windows.old, a temp folder) does not own the repositories inside it.
+            let owned = owned && c.safety_override().is_none_or(|s| s == mj_core::SafetyClass::Rebuildable);
             if c.target == mj_core::TargetKind::Folder
                 && folder_holds_protected(index, &protected, &c.path, owned, &spellings)
             {
@@ -482,29 +521,45 @@ impl Engine {
         Ok(out)
     }
 
+    /// ENG-12: the custom-search cards rebuilt on a new index from their stored rules. A
+    /// rule that no longer runs (for example a type group that was deleted) loses its card.
+    fn custom_records(self: &Arc<Self>, index: &FileIndex) -> Vec<OpportunityRecord> {
+        let rules = self.results.read().unwrap_or_else(|e| e.into_inner()).custom_rules.clone();
+        rules.iter().filter_map(|(id, req)| self.custom_record(index, req, id).ok()).collect()
+    }
+
     /// Re-run one detector or optimiser with new parameters on the current index
     /// (step parameters changed). Returns the new record.
     pub(crate) fn rerun_analysis(&self, id: &mj_core::OpportunityId, params: ParamValues) -> Result<OpportunityRecord> {
-        let index = {
+        let (index, removed) = {
             let r = self.results.read().unwrap_or_else(|e| e.into_inner());
-            r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?
+            (r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?, r.removed.clone())
         };
         let tools = lock(&self.tools).clone();
         let env = ScanEnv::detect(self);
         let cancel = CancelToken::new();
+        let mut rec = None;
         for d in &self.detectors {
             let card = CardInfo::detector(d.info());
             if &card.id == id {
-                return self.run_one(card, &|ctx| d.run(ctx), params, &index, &env, &cancel);
+                rec = Some(self.run_one(card, &|ctx| d.run(ctx), params.clone(), &index, &env, &cancel)?);
+                break;
             }
         }
-        for o in &self.optimisers {
-            let card = CardInfo::optimiser(o.info(), o.availability(&tools));
-            if &card.id == id {
-                return self.run_one(card, &|ctx| o.analyse(ctx), params, &index, &env, &cancel);
+        if rec.is_none() {
+            for o in &self.optimisers {
+                let card = CardInfo::optimiser(o.info(), o.availability(&tools));
+                if &card.id == id {
+                    rec = Some(self.run_one(card, &|ctx| o.analyse(ctx), params.clone(), &index, &env, &cancel)?);
+                    break;
+                }
             }
         }
-        Err(crate::results::unknown(id))
+        let mut rec = rec.ok_or_else(|| crate::results::unknown(id))?;
+        // ENG-11: the index still lists what was applied since it was built.
+        let skip = crate::results::skip_badges(&lock(&self.settings));
+        crate::results::drop_gone(&mut rec, &|p| crate::results::is_removed(&removed, p), skip);
+        Ok(rec)
     }
 
     /// Pause the running scan.

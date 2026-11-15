@@ -12,16 +12,30 @@ const tick = async () => { for (let i = 0; i < 6; i++) await new Promise((r) => 
 
 const SCHEDULE = { id: 'sched_1', name: 'Weekly Downloads', enabled: true, cadence: { every: 'weekly', weekday: 1, hour: 8, minute: 47 }, scope: { roots: ['/home/m/Downloads'] }, steps: [{ opportunity: 'det:temp_files', action: { kind: 'trash' }, params: {} }], last_run: null, next_run: 1_800_000_000_000_000_000 };
 
-/** @param {{ portable?: boolean, settingsError?: any, scheduleError?: any, schedules?: any[] }} [o] */
+/**
+ * `dialog` is what the native folder dialog answers: a path, `null` (cancelled) or an
+ * ErrorInfo to reject with; change it later through the returned `dialog.answer`.
+ * `hold`: settings_set answers only when the test calls the functions in `held`.
+ * @param {{ hold?: boolean, portable?: boolean, settingsError?: any, scheduleError?: any, schedules?: any[], dialog?: any }} [o]
+ */
 async function setup(o = {}) {
   const doc = installFakeDom();
   const calls = [];
   const rec = (cmd, req) => calls.push({ cmd, req });
+  const dialog = { answer: 'dialog' in o ? o.dialog : '/home/m/Clients' };
+  /** @type {Array<() => void>} */
+  const held = [];
   let settings = structuredClone(SETTINGS);
   let schedules = o.schedules ?? [];
   let prot = { builtin: ['C:\\Windows', 'C:\\Program Files'], builtin_patterns: ['**/.git'], user: [] };
   const api = {
-    settingsSet: async (req) => { rec('settings_set', req); if (o.settingsError) throw o.settingsError; settings = structuredClone(req.settings); return settings; },
+    settingsSet: async (req) => {
+      rec('settings_set', req);
+      if (o.hold) await new Promise((r) => held.push(r)); // answered when the test says so
+      if (o.settingsError) throw o.settingsError;
+      settings = structuredClone(req.settings);
+      return settings;
+    },
     protectedPathsGet: async () => prot,
     protectedPathsSet: async (req) => { rec('protected_paths_set', req); prot = { ...prot, user: req.user }; return prot; },
     schedulesList: async () => schedules,
@@ -29,14 +43,14 @@ async function setup(o = {}) {
     scheduleDelete: async (req) => { rec('schedule_delete', req); schedules = schedules.filter((s) => s.id !== req.id); return schedules; },
     scheduleRunNow: async (req) => { rec('schedule_run_now', req); return { run_id: 1, jobs: [] }; },
     toolsRefresh: async () => { rec('tools_refresh'); return TOOLS; },
-    fsListDir: async (req) => {
-      rec('fs_list_dir', req);
-      if (!req.path) return { places: [{ label: 'Home', path: '/home/m', kind: 'home' }], entries: [] };
-      return { path: req.path, parent: req.path === '/home/m' ? null : '/home/m', entries: [{ name: 'Clients', path: `${req.path}/Clients`, is_dir: true, is_link: false, hidden: false }], places: [] };
+    dialogPickFolder: async (req) => {
+      rec('dialog_pick_folder', req);
+      if (dialog.answer && typeof dialog.answer === 'object') throw dialog.answer;
+      return dialog.answer;
     },
   };
   const actions = { loadSettings: async () => { rec('load_settings'); }, clearCache: async () => rec('cache_clear') };
-  attachSettingsApi(actions, api);
+  const ctl = attachSettingsApi(actions, api);
   const state = { settings, cache: { entries: 12, bytes: 2048 }, tools: TOOLS, info: { version: '0.1.0', platform: 'linux', portable: !!o.portable, data_dir: '/home/m/.local/share/myjanitor', journal_persistent: true } };
   const root = doc.createElement('div');
   doc.body.append(root);
@@ -44,19 +58,19 @@ async function setup(o = {}) {
   await tick();
   const $ = (sel) => root.querySelector(sel);
   const sent = (cmd) => calls.filter((c) => c.cmd === cmd);
-  return { root, $, calls, sent, settings: () => settings };
+  return { root, $, calls, sent, dialog, ctl, held, settings: () => settings };
 }
 
 test('renders every section, the offline line, the portable indicator and locked built-ins', async () => {
   const t = await setup();
-  const ids = t.root.querySelectorAll('[data-section]').map((e) => e.getAttribute('data-section'));
+  const ids = Array.from(t.root.querySelectorAll('[data-section]')).map((e) => e.getAttribute('data-section'));
   assert.deepEqual(ids, ['general', 'scan', 'protected', 'exclusions', 'safety', 'performance', 'engines', 'automation']);
   assert.match(t.$('[data-role="offline"]').textContent, /no telemetry/);
   assert.match(t.$('[data-role="mode"]').textContent, /Installed mode/);
   const builtin = t.$('[data-role="builtin"]');
   assert.match(builtin.textContent, /C:\\Windows/);
   assert.ok(builtin.querySelectorAll('.badge').length >= 3, 'every built-in row carries the Locked badge');
-  assert.equal(builtin.querySelectorAll('button').filter((b) => /Remove/.test(b.textContent)).length, 0, 'built-ins cannot be removed');
+  assert.equal(Array.from(builtin.querySelectorAll('button')).filter((b) => /Remove/.test(b.textContent)).length, 0, 'built-ins cannot be removed');
   const p = await setup({ portable: true });
   assert.match(p.$('[data-role="mode"]').textContent, /Portable mode/);
 });
@@ -118,35 +132,60 @@ test('exclusions: add (trimmed, Enter or button) and remove', async () => {
   assert.deepEqual(t.sent('settings_set')[1].req.settings.safety.exclusions, []);
 });
 
-test('protected paths: choose with the in-app browser, then remove', async () => {
+test('protected paths: choose in the OS folder dialog, then remove', async () => {
   const t = await setup();
   t.$('[data-fk="add-protected"]').click();
   await tick();
-  assert.deepEqual(t.sent('fs_list_dir')[0].req, {});
-  assert.deepEqual(t.sent('fs_list_dir')[1].req, { path: '/home/m', show_hidden: false, include_files: false });
-  t.$('[data-fk="pick-dir-Clients"]').click();
-  await tick();
-  assert.match(t.$('.browser__current').textContent, /Clients/);
-  t.$('[data-fk="pick-choose"]').click();
-  await tick();
+  assert.deepEqual(t.sent('dialog_pick_folder').map((c) => c.req), [{ title: 'Choose a folder to protect' }]);
   assert.deepEqual(t.sent('protected_paths_set')[0].req, { user: ['/home/m/Clients'] });
-  assert.equal(t.$('[data-picker]'), null, 'the picker closes');
+  assert.ok(t.$('[data-fk="add-protected"]'), 'the button stays: there is no in-app picker to close');
   t.$('[data-fk="rm-protected-/home/m/Clients"]').click();
   await tick();
   assert.deepEqual(t.sent('protected_paths_set')[1].req, { user: [] });
 });
 
-test('originals radio group sets the default policy; backup folder goes through the picker', async () => {
-  const t = await setup();
+test('a cancelled folder dialog changes no setting and shows no error', async () => {
+  const t = await setup({ dialog: null });
+  for (const fk of ['add-protected', 'orig-backup', 'choose-temp']) {
+    t.$(`[data-fk="${fk}"]`).click();
+    await tick();
+  }
+  assert.equal(t.sent('dialog_pick_folder').length, 3);
+  assert.equal(t.sent('protected_paths_set').length, 0);
+  assert.equal(t.sent('settings_set').length, 0);
+  assert.equal(t.root.querySelectorAll('[data-error]').length, 0);
+  assert.equal(t.$('[data-fk="orig-backup"]').getAttribute('aria-checked'), 'false');
+});
+
+test('a folder dialog that fails shows the reason under the control that opened it', async () => {
+  const t = await setup({ dialog: { code: 'conflict', message: 'A file dialog is already open', hint: 'Choose or cancel in the open dialog first.' } });
+  t.$('[data-fk="add-protected"]').click();
+  await tick();
+  assert.match(t.$('[data-error="protected"]').textContent, /A file dialog is already open/);
+  t.$('[data-fk="choose-temp"]').click();
+  await tick();
+  assert.match(t.$('[data-error="temp"]').textContent, /already open/);
+  t.$('[data-fk="orig-backup"]').click();
+  await tick();
+  assert.match(t.$('[data-error="originals"]').textContent, /already open/);
+  assert.equal(t.sent('protected_paths_set').length + t.sent('settings_set').length, 0);
+  // The next successful choice clears the message.
+  t.dialog.answer = '/home/m/Clients';
+  t.$('[data-fk="add-protected"]').click();
+  await tick();
+  assert.equal(t.$('[data-error="protected"]'), null);
+});
+
+test('originals radio group sets the default policy; backup folder goes through the OS folder dialog', async () => {
+  const t = await setup({ dialog: '/mnt/backup/originals' });
   assert.equal(t.$('[role="radiogroup"]').querySelectorAll('[role="radio"]').length, 3);
   t.$('[data-fk="orig-quarantine"]').click();
   await tick();
   assert.deepEqual(t.sent('settings_set')[0].req.settings.general.default_originals, { policy: 'quarantine' });
   t.$('[data-fk="orig-backup"]').click();
   await tick();
-  t.$('[data-fk="pick-choose"]').click();
-  await tick();
-  assert.deepEqual(t.sent('settings_set')[1].req.settings.general.default_originals, { policy: 'backup_folder', folder: '/home/m' });
+  assert.deepEqual(t.sent('dialog_pick_folder')[0].req, { title: 'Choose the backup folder for originals' });
+  assert.deepEqual(t.sent('settings_set')[1].req.settings.general.default_originals, { policy: 'backup_folder', folder: '/mnt/backup/originals' });
 });
 
 test('the keep-if-not-smaller guarantee is shown locked on', async () => {
@@ -163,11 +202,15 @@ test('temp folder: choose and reset; advanced sections are collapsed until opene
   await tick();
   assert.ok(t.$('[data-fk="set-parallel_jobs"]'));
   assert.equal(t.$('[data-fk="adv-perf"]').getAttribute('aria-expanded'), 'true');
+  t.dialog.answer = '/home/m/scratch';
   t.$('[data-fk="choose-temp"]').click();
   await tick();
-  t.$('[data-fk="pick-choose"]').click();
+  assert.deepEqual(t.sent('dialog_pick_folder')[0].req, { title: 'Choose the temporary folder' });
+  assert.equal(t.sent('settings_set')[0].req.settings.performance.temp_dir, '/home/m/scratch');
+  // Once set, the dialog opens in the folder in force.
+  t.$('[data-fk="choose-temp"]').click();
   await tick();
-  assert.equal(t.sent('settings_set')[0].req.settings.performance.temp_dir, '/home/m');
+  assert.equal(t.sent('dialog_pick_folder')[1].req.start_dir, '/home/m/scratch');
 });
 
 test('engines: unavailable tools say why; overrides must be absolute and trigger a re-detect', async () => {
@@ -246,4 +289,22 @@ test('clear cache goes through the shell action', async () => {
 test('absolute path check', () => {
   for (const p of ['/usr/bin/x', 'C:\\Tools\\x.exe', 'C:/x', '\\\\srv\\share']) assert.ok(isAbsolutePath(p), p);
   for (const p of ['x', 'rel/x', '', 'C:x']) assert.ok(!isAbsolutePath(p), p);
+});
+
+test('two overlapping settings changes both survive: each applies to the last saved settings (UI-7)', async () => {
+  const t = await setup({ hold: true });
+  const a = t.ctl.commitNumber('undo_days', '60', 1, 365, (s, n) => { s.general.undo_days = n; });
+  const b = t.ctl.commit('skip_signed', (s) => { s.safety.skip_signed = false; });
+  const c = t.ctl.addExclusion('**/node_modules');
+  for (let i = 0; i < 3; i++) {
+    await tick();
+    t.held.shift()?.();
+  }
+  await Promise.all([a, b, c]);
+  const last = t.sent('settings_set').at(-1).req.settings;
+  assert.equal(t.sent('settings_set').length, 3);
+  assert.equal(last.general.undo_days, 60);
+  assert.equal(last.safety.skip_signed, false);
+  assert.deepEqual(last.safety.exclusions, ['**/node_modules']);
+  assert.deepEqual(t.settings(), last);
 });

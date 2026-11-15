@@ -7,7 +7,7 @@
 //! | OPT-VID-02 | `encoder` nvenc, qsv or amf; [`detect_hardware`] parses `ffmpeg -encoders` and trial-encodes; [`encode_time_estimate`] |
 //! | OPT-VID-03 | `max_height` and `max_fps` |
 //! | OPT-VID-04 | `drop_extra_audio` and `drop_subtitles` |
-//! | OPT-VID-05 | `remux_only`: stream copy, junk streams dropped, lossless |
+//! | OPT-VID-05 | `remux_only`: stream copy of every track, lossless; a file with a track the output cannot carry is skipped ([`StreamPlan`]) |
 //! | OPT-VID-06 | [`compatibility_warning`], also shown as the codec option's help |
 
 use std::ffi::OsString;
@@ -21,7 +21,10 @@ use mj_core::{
 use mj_formats::media::MediaInfo;
 
 use super::estimate::{encode_seconds, info_of, video_after, VideoPlan};
-use super::ffmpeg::{base_args, clock, encoder_accepts, input_args, list_encoders, run_encode};
+use super::ffmpeg::{
+    base_args, check_length, clock, encoder_accepts, input_args, list_encoders, probe_input, run_encode, InputReport,
+    StreamKind,
+};
 use crate::external::{args, path_arg};
 use crate::images::common::{self, spec};
 
@@ -278,6 +281,8 @@ pub struct SourceFacts {
     pub fps: Option<f32>,
     pub height: Option<u32>,
     pub subtitle_tracks: u32,
+    /// Files attached to the container (Matroska fonts), from ffmpeg's report.
+    pub attachments: u32,
 }
 
 impl SourceFacts {
@@ -289,7 +294,77 @@ impl SourceFacts {
             fps: info.and_then(|i| i.frame_rate),
             height: info.and_then(|i| i.height),
             subtitle_tracks: info.map_or(0, |i| i.subtitle_tracks),
+            attachments: 0,
         }
+    }
+
+    /// Complete the facts with ffmpeg's own report (it reads containers the in-house prober cannot).
+    pub fn with_report(mut self, r: &InputReport) -> SourceFacts {
+        self.subtitle_tracks = self.subtitle_tracks.max(r.count(StreamKind::Subtitle) as u32);
+        self.attachments = r.count(StreamKind::Attachment) as u32;
+        self
+    }
+}
+
+/// Which tracks of the source the output must hold (OPT-5): every track, minus what the user asked
+/// to drop (extra audio tracks, subtitles). A track the output cannot carry makes the file skipped
+/// before anything is encoded; after the encode, ffmpeg's report of the output is checked against
+/// the expected counts, so a track ffmpeg left out is never dropped silently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamPlan {
+    /// (kind, tracks the output must hold), for every kind the source has.
+    pub expected: Vec<(StreamKind, usize)>,
+    /// Tracks the output could not carry: the reason to skip the file.
+    pub unkeepable: Vec<String>,
+}
+
+impl StreamPlan {
+    pub fn new(src: &InputReport, s: &VideoSettings, container: Container) -> StreamPlan {
+        let mut kinds: Vec<StreamKind> = src.streams.iter().map(|x| x.kind).collect();
+        kinds.sort();
+        kinds.dedup();
+        let (mut expected, mut unkeepable) = (Vec::new(), Vec::new());
+        for kind in kinds {
+            let n = src.count(kind);
+            let keep = match kind {
+                StreamKind::Video => {
+                    if n > 1 {
+                        unkeepable.push(format!("{} more video tracks", n - 1));
+                    }
+                    1
+                }
+                StreamKind::Audio if s.drop_extra_audio => 1,
+                StreamKind::Subtitle if s.drop_subtitles => 0,
+                StreamKind::Audio | StreamKind::Subtitle => n,
+                StreamKind::Attachment if container.ext == "mkv" => n,
+                StreamKind::Data => {
+                    // ffmpeg writes a timecode track again from the timecode it reads; any other
+                    // data (GPS, telemetry, camera metadata) it cannot carry over.
+                    let other = src.streams.iter().filter(|x| x.kind == kind && x.codec != "tmcd").count();
+                    if other > 0 {
+                        unkeepable.push(format!("{other} {}", kind.label()));
+                    }
+                    n - other
+                }
+                StreamKind::CoverPicture | StreamKind::Attachment | StreamKind::Other => {
+                    unkeepable.push(format!("{n} {}", kind.label()));
+                    0
+                }
+            };
+            expected.push((kind, keep));
+        }
+        StreamPlan { expected, unkeepable }
+    }
+
+    /// The tracks `out` lacks, as a user-facing list; `None` when it holds every expected track.
+    pub fn missing(&self, out: &InputReport) -> Option<String> {
+        let lost: Vec<String> = self
+            .expected
+            .iter()
+            .filter(|(k, n)| out.count(*k) < *n)
+            .map(|(k, n)| format!("{} {}", n - out.count(*k), k.label()))
+            .collect();
+        (!lost.is_empty()).then(|| lost.join(", "))
     }
 }
 
@@ -425,6 +500,12 @@ pub fn build_args(
     if subs {
         a.extend(args(["-map", "0:s?"]));
     }
+    // Matroska attachments (subtitle fonts) are kept whenever the output is Matroska (OPT-5).
+    let attachments = f.attachments > 0 && container.ext == "mkv";
+    if attachments {
+        a.extend(args(["-map", "0:t?"]));
+    }
+    // Timecode tracks are written again by the muxer from the timecode ffmpeg reads.
     a.extend(args(["-map_metadata", "0", "-map_chapters", "0"]));
     if s.remux_only {
         a.extend(args(["-c", "copy"]));
@@ -450,6 +531,9 @@ pub fn build_args(
         if subs {
             a.extend(args(["-c:s", if container.ext == "mkv" { "copy" } else { "mov_text" }]));
         }
+        if attachments {
+            a.extend(args(["-c:t", "copy"]));
+        }
     }
     if container.ext == "mp4" {
         a.extend(args(["-movflags", "+faststart"]));
@@ -470,7 +554,24 @@ pub(crate) fn run_video_job(
     let exe = crate::tools::require(job.tools, "ffmpeg")?;
     let before = std::fs::metadata(job.src).map_err(|e| Error::io(job.src, e))?.len();
     let info = info_of(job.src);
-    let facts = SourceFacts::of(job.src, info.as_ref());
+    // ffmpeg's own report: the length and the tracks of every container it reads (OPT-4, OPT-5).
+    let report = probe_input(exe, job.src, job.cancel)?;
+    let facts = SourceFacts::of(job.src, info.as_ref()).with_report(&report);
+    let dur = info.as_ref().and_then(|i| i.duration_ms).or(report.duration_ms);
+    if s.trim.is_none() && dur.is_none() {
+        return Ok(common::skipped(
+            before,
+            "The length of the video could not be read, so the result could not be checked",
+        ));
+    }
+    let container = container_for(&facts.ext, s.remux_only, facts.subtitle_tracks > 0 && !s.drop_subtitles);
+    let plan = StreamPlan::new(&report, s, container);
+    if !plan.unkeepable.is_empty() {
+        return Ok(common::skipped(
+            before,
+            format!("The new file could not keep {}; the video was left as it is", plan.unkeepable.join(", ")),
+        ));
+    }
     let mut chosen = None;
     if !s.remux_only {
         let enc = Encoders(list_encoders(exe, job.cancel)?);
@@ -496,25 +597,33 @@ pub(crate) fn run_video_job(
         notes.push(compatibility_warning(s.codec).to_string());
         chosen = Some(c);
     }
-    let container = container_for(&facts.ext, s.remux_only, facts.subtitle_tracks > 0 && !s.drop_subtitles);
     notes.push(format!("output_extension={}", container.ext));
     // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
     let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "video")?;
     let out = scratch.join(format!("out.{}", container.ext));
-    let dur = info.as_ref().and_then(|i| i.duration_ms);
     run_encode(job, exe, &build_args(s, chosen.as_ref(), &facts, job.src, &out), dur)?;
     let after = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
     if after == 0 {
         return Err(super::ffmpeg::empty_output("ffmpeg"));
     }
-    if let (None, Some(d_in), Some(d_out)) = (s.trim, dur, info_of(&out).and_then(|i| i.duration_ms)) {
-        if d_in.abs_diff(d_out) > (d_in / 25).max(2000) {
+    // The output is read back by ffmpeg: it must hold every expected track and, unless the run
+    // trims, the whole length (fails closed when a length is unknown).
+    let checked = probe_input(exe, &out, job.cancel).and_then(|o| {
+        if s.trim.is_none() {
+            let d_out = info_of(&out).and_then(|i| i.duration_ms).or(o.duration_ms);
+            check_length(dur, d_out, dur.map_or(0, |d| (d / 25).max(2000)), "video")?;
+        }
+        Ok(plan.missing(&o))
+    });
+    match checked {
+        Ok(None) => {}
+        Ok(Some(lost)) => {
             let _ = std::fs::remove_file(&out);
-            return Err(Error::Internal(format!(
-                "the new video is {} long but the original is {}; nothing was changed",
-                clock(d_out as f64 / 1000.0),
-                clock(d_in as f64 / 1000.0)
-            )));
+            return Ok(common::skipped(before, format!("The new file would lose {lost}; the video was left as it is")));
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&out);
+            return Err(e);
         }
     }
     if after >= before {
@@ -565,7 +674,7 @@ fn settings() -> Vec<SettingSpec> {
         spec::toggle(
             "remux_only",
             "Remux only (no re-encode)",
-            Some("Keeps the picture as is and drops junk streams"),
+            Some("Keeps every track as is; files with tracks the new file cannot hold are skipped"),
             false,
             false,
             false,
@@ -716,7 +825,62 @@ mod tests {
             fps: Some(30.0),
             height: Some(1080),
             subtitle_tracks: 0,
+            attachments: 0,
         }
+    }
+
+    /// OPT-5: what the output must hold, and which tracks make a file skipped before encoding.
+    #[test]
+    fn stream_plan_keeps_or_refuses_every_track() {
+        use super::super::ffmpeg::InputStream;
+        let report = |list: &[(StreamKind, &str)]| InputReport {
+            duration_ms: Some(1000),
+            streams: list.iter().map(|(kind, codec)| InputStream { kind: *kind, codec: codec.to_string() }).collect(),
+        };
+        let (mp4, mkv) = (container_for("mp4", false, false), container_for("mkv", false, false));
+        let remux = VideoSettings { remux_only: true, ..VideoSettings::from_params(&ParamValues::new()) };
+        // GoPro: timecode is written again, GPS telemetry cannot be carried: skipped.
+        let gopro = report(&[
+            (StreamKind::Video, "h264"),
+            (StreamKind::Audio, "aac"),
+            (StreamKind::Data, "tmcd"),
+            (StreamKind::Data, "gpmd"),
+        ]);
+        let plan = StreamPlan::new(&gopro, &remux, mp4);
+        assert_eq!(plan.unkeepable, ["1 data tracks (timecode, GPS or camera data)"]);
+        // Timecode only: kept and checked afterwards.
+        let tc = report(&[(StreamKind::Video, "h264"), (StreamKind::Data, "tmcd")]);
+        let plan = StreamPlan::new(&tc, &remux, mp4);
+        assert!(plan.unkeepable.is_empty() && plan.expected.contains(&(StreamKind::Data, 1)));
+        assert!(plan.missing(&report(&[(StreamKind::Video, "hevc")])).unwrap().contains("data tracks"));
+        assert_eq!(plan.missing(&tc), None);
+        // Fonts survive into Matroska only; cover pictures and second video tracks are never dropped.
+        let anime =
+            report(&[(StreamKind::Video, "h264"), (StreamKind::Subtitle, "ass"), (StreamKind::Attachment, "ttf")]);
+        assert!(StreamPlan::new(&anime, &remux, mkv).unkeepable.is_empty());
+        assert!(!StreamPlan::new(&anime, &remux, mp4).unkeepable.is_empty());
+        let cover = report(&[(StreamKind::Video, "h264"), (StreamKind::CoverPicture, "mjpeg")]);
+        assert!(!StreamPlan::new(&cover, &remux, mp4).unkeepable.is_empty());
+        let two = report(&[(StreamKind::Video, "h264"), (StreamKind::Video, "h264")]);
+        assert_eq!(StreamPlan::new(&two, &remux, mkv).unkeepable, ["1 more video tracks"]);
+        // What the user asked to drop is not expected in the output.
+        let drop = VideoSettings { drop_subtitles: true, drop_extra_audio: true, ..remux.clone() };
+        let multi = report(&[
+            (StreamKind::Video, "h264"),
+            (StreamKind::Audio, "aac"),
+            (StreamKind::Audio, "ac3"),
+            (StreamKind::Subtitle, "srt"),
+        ]);
+        let plan = StreamPlan::new(&multi, &drop, mkv);
+        assert_eq!(plan.missing(&report(&[(StreamKind::Video, "h264"), (StreamKind::Audio, "aac")])), None);
+        // Attachments are mapped and copied when the output is Matroska.
+        let mut f = facts("mkv");
+        f.attachments = 1;
+        let a: Vec<String> = build_args(&remux, None, &f, Path::new("a.mkv"), Path::new("o.mkv"))
+            .iter()
+            .map(|x| x.to_string_lossy().into_owned())
+            .collect();
+        assert!(a.windows(2).any(|w| w == ["-map", "0:t?"]), "{a:?}");
     }
 
     #[test]

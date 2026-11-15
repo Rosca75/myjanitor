@@ -3,8 +3,8 @@
  * The ONLY module that touches `window.__TAURI__`. Owner: Wave 1 (frozen
  * shape; W2-F/W3-D may add helpers below the generated section).
  *
- * Every command of docs/IPC.md is exposed as `api.<camelCaseName>(req)`, which
- * calls `<snake_case_name>` with `{ req }`. Commands reject with an ErrorInfo
+ * Every command of docs/IPC.md (engine and shell commands alike) is exposed as
+ * `api.<camelCaseName>(req)`, which calls `<snake_case_name>` with `{ req }`. Commands reject with an ErrorInfo
  * object `{ code, message, hint, path? }`. Events: `api.on(name, cb)` returns a
  * Promise of an unlisten function; `cb` receives the payload.
  *
@@ -20,7 +20,6 @@ export const COMMANDS = Object.freeze([
   'scope_set',
   'scope_add_root',
   'scope_remove_root',
-  'fs_list_dir',
   'scan_start',
   'scan_pause',
   'scan_resume',
@@ -34,6 +33,7 @@ export const COMMANDS = Object.freeze([
   'selection_reset',
   'step_params_set',
   'candidate_preview',
+  'candidate_thumbnails',
   'search_parse',
   'search_suggest',
   'search_run',
@@ -81,6 +81,10 @@ export const COMMANDS = Object.freeze([
   'drives_list',
   'disk_usage_tree',
   'breakdown',
+  // Shell commands (docs/IPC.md 3.1): answered by the app shell with the operating
+  // system's own dialogs, not by the engine.
+  'dialog_pick_folder',
+  'dialog_save_file',
 ]);
 
 /** Event names, in docs/IPC.md order. */
@@ -201,8 +205,6 @@ export const api = Object.freeze({
   scopeAddRoot: (req) => call('scope_add_root', req),
   /** Remove a scope chip. @param {object} req ScopePathRequest @returns {Promise<any>} ScanScope */
   scopeRemoveRoot: (req) => call('scope_remove_root', req),
-  /** In-app folder browser (D-104): list a folder, or the places when `path` is omitted. @param {object} req FsListDirRequest @returns {Promise<any>} FsListDirResponse */
-  fsListDir: (req) => call('fs_list_dir', req),
   /** Start a scan of the scope; progress via `scan://progress`, `scan://detector`, end via `scan://done`. @param {object} req ScanStartRequest @returns {Promise<any>} ScanStarted */
   scanStart: (req) => call('scan_start', req),
   /** Pause the running scan. @returns {Promise<any>} ScanStatus */
@@ -229,6 +231,8 @@ export const api = Object.freeze({
   stepParamsSet: (req) => call('step_params_set', req),
   /** Preview for one row (thumbnail, text head, waveform). @param {object} req CandidatePreviewRequest @returns {Promise<any>} Preview */
   candidatePreview: (req) => call('candidate_preview', req),
+  /** Row thumbnails of the visible page (W6-A). @param {object} req CandidateThumbnailsRequest @returns {Promise<any>} CandidateThumbnails */
+  candidateThumbnails: (req) => call('candidate_thumbnails', req),
   /** Parse a quick query into a rule tree, with error positions. @param {object} req SearchParseRequest @returns {Promise<any>} SearchParseResponse */
   searchParse: (req) => call('search_parse', req),
   /** Autocomplete for the search box. @param {object} req SearchSuggestRequest @returns {Promise<any>} Vec<Suggestion> */
@@ -323,6 +327,10 @@ export const api = Object.freeze({
   diskUsageTree: (req) => call('disk_usage_tree', req),
   /** Size by type, extension, age or owner (SCAN-07). @param {object} req BreakdownRequest @returns {Promise<any>} Breakdown */
   breakdown: (req) => call('breakdown', req),
+  /** The operating system's folder dialog. Resolves to the chosen folder, or `null` when the user cancelled. @param {object} req DialogPickFolderRequest @returns {Promise<string | null>} DialogPath */
+  dialogPickFolder: (req) => call('dialog_pick_folder', req),
+  /** The operating system's "Save as" dialog. Resolves to the chosen file path, or `null` when the user cancelled. @param {object} req DialogSaveFileRequest @returns {Promise<string | null>} DialogPath */
+  dialogSaveFile: (req) => call('dialog_save_file', req),
   on,
 });
 

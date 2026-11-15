@@ -24,8 +24,9 @@ export function miscActions(c) {
       await c.actions.loadCategory(get().category.name);
     }),
     loadSettings: c.guard(async () => {
-      const [settings, cache, tools] = await Promise.all([api.settingsGet(), soft(api.cacheInfo(), null), soft(api.toolsList(), [])]);
-      set({ settings, cache, tools });
+      // app_info too: its trash_route follows general.windows_recycle_bin (IPC-5).
+      const [settings, cache, tools, info] = await Promise.all([api.settingsGet(), soft(api.cacheInfo(), null), soft(api.toolsList(), []), soft(api.appInfo(), get().info)]);
+      set({ settings, cache, tools, info });
     }),
     clearCache: c.guard(async () => set({ cache: await api.cacheClear() })),
   };

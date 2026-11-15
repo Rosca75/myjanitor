@@ -48,7 +48,7 @@ export function renderHeader(s, actions, nowMs = Date.now()) {
   return h('header', { class: 'header' },
     h('h1', { class: 'header__title' }, copy.nav.overview),
     scanned && scopeChips(s, actions),
-    scanned && button({ label: copy.header.addLocation, variant: 'link', fk: 'add-location', onClick: () => actions.openBrowser() }),
+    scanned && button({ label: copy.header.addLocation, variant: 'link', fk: 'add-location', onClick: () => actions.addLocation() }),
     h('div', { class: 'header__right' },
       scanned && h('span', { class: 'header__scanned' }, copy.header.scanned(formatAgo(s.opps.scanned_at, nowMs), s.opps.cached)),
       scanned && button({ label: copy.header.scanAgain, variant: 'secondary', fk: 'scan-again', onClick: () => actions.startScan() })));

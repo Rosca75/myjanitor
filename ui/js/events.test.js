@@ -25,15 +25,19 @@ test('scan events of an older generation are ignored', async () => {
   assert.deepEqual(Object.keys(env.state().detectors), ['y']);
 });
 
-test('plan://changed replaces the plan; opportunities://changed refetches the list', async () => {
+test('plan://changed replaces the plan and refetches the list; opportunities://changed refetches the list', async () => {
   const env = await makeEnv();
   env.clearCalls();
   env.backend.emit('plan://changed', { id: 9, name: 'Your plan', steps: [], estimate: { files: 0, bytes_before: 0, bytes_after: 0, confidence: 'exact', skipped: 0 }, checklist: [] });
   assert.equal(env.state().plan.id, 9);
-  env.backend.emit('opportunities://changed', { generation: 3 });
   await env.settle();
+  // A card in the plan counts with its step's action and the drive bars show the plan (W6-B).
   assert.equal(env.sent('opportunities_list').length, 1);
   assert.equal(env.sent('drives_list').length, 1);
+  env.backend.emit('opportunities://changed', { generation: 3 });
+  await env.settle();
+  assert.equal(env.sent('opportunities_list').length, 2);
+  assert.equal(env.sent('drives_list').length, 2);
 });
 
 test('job events update the queue and finishing every job of a run completes it', async () => {
@@ -56,7 +60,7 @@ test('history://changed refreshes history, undo availability and the last report
   env.backend.emit('history://changed', { run_id: 1 });
   await env.settle();
   assert.equal(env.sent('history_list').length, 1);
-  assert.equal(env.sent('report_last').length, 1);
+  assert.equal(env.sent('report_last').length, 0, 'the report itself is fetched on click only (IPC-8)');
 });
 
 test('plan://dry_run clears the running flag', async () => {
@@ -76,4 +80,39 @@ test('progress events never re-render the controls (clicks would be swallowed)',
   env.backend.emit('job://progress', { job_id: env.state().jobs[0].id, run_id: 1, progress: { done: 50, total: 153, bytes_done: 1, bytes_total: 2, saved: 0 }, current: 'x' });
   assert.equal(env.$('[data-fk^="pause-"]'), pause, 'same element after a progress event');
   await env.actions.cancelJob(env.state().jobs[0].id);
+});
+
+test('after a scheduled run the scope chips name the folders its scan covered (IPC-7)', async () => {
+  const env = await makeEnv();
+  const before = env.state().scope.roots;
+  const sched = { id: '', name: 'Weekly downloads', enabled: true, cadence: { every: 'weekly', weekday: 1, hour: 9, minute: 13 }, scope: { roots: ['/home/me/Elsewhere'] }, steps: [{ opportunity: 'det:temp_files', action: { kind: 'trash' }, params: {} }], last_run: null, next_run: null };
+  await env.backend.call('plan_clear', {});
+  const [saved] = await env.backend.call('schedule_save', { schedule: sched });
+  await env.backend.call('schedule_run_now', { id: saved.id });
+  assert.deepEqual(env.state().scope.roots, before, 'nothing changes before the scan ends');
+  env.backend.emit('scan://done', { ...env.state().scan, state: 'done', generation: env.state().scan.generation + 1 });
+  await env.settle();
+  assert.deepEqual(env.state().scope.roots, ['/home/me/Elsewhere']);
+  // An unchanged scope is not replaced (no needless re-render).
+  const scope = env.state().scope;
+  env.backend.emit('scan://done', { ...env.state().scan, state: 'done', generation: env.state().scan.generation + 1 });
+  await env.settle();
+  assert.equal(env.state().scope, scope);
+});
+
+test('plan://dry_run with an error is not announced as a success (IPC-10)', async () => {
+  const env = await makeEnv();
+  const toasts = () => JSON.stringify(env.state().toast ?? null);
+  env.store.set({ dryRunning: true });
+  env.backend.emit('plan://dry_run', { total: { files: 152, bytes_before: 9e9, bytes_after: 1e9 }, error: { code: 'internal', message: 'scratch folder gone' } });
+  assert.equal(env.state().dryRunning, false);
+  assert.ok(toasts().includes('scratch folder gone'));
+  assert.ok(!toasts().includes('Dry run finished'));
+});
+
+test('job://done of a dry run clears the busy flag even without plan://dry_run (IPC-10)', async () => {
+  const env = await makeEnv();
+  env.store.set({ dryRunning: true });
+  env.backend.emit('job://done', { job: { id: 77, kind: 'dry_run', state: 'failed', progress: { done: 0, total: 1 } } });
+  assert.equal(env.state().dryRunning, false);
 });

@@ -232,6 +232,14 @@ fn audit_and_report_from_a_real_run_and_exports_never_overwrite() {
     assert_eq!(std::fs::read(&dest).unwrap(), b"existing");
     assert!(bytes > 0 && rows == 2);
     assert!(report::write_export(std::path::Path::new("rel.csv"), |_| Ok(0)).is_err());
+    // A failed export leaves no file behind.
+    let failed = f.t.join("exports/failed.csv");
+    assert!(report::write_export(&failed, |w| {
+        w.write_all(b"half")?;
+        Err(mj_core::Error::Internal("boom".into()))
+    })
+    .is_err());
+    assert!(!failed.exists());
     let denied = vec![ItemOutcome {
         path: "/x".into(),
         status: ItemStatus::Failed,
@@ -240,4 +248,103 @@ fn audit_and_report_from_a_real_run_and_exports_never_overwrite() {
         error: Some(mj_core::Error::PermissionDenied("/x".into()).info()),
     }];
     assert_eq!(report::permission_denied_paths(&denied), vec![PathBuf::from("/x")]);
+}
+
+/// W6-A D-6A4: the replacing export is for a target the user confirmed in the OS save
+/// dialog. It replaces a regular file atomically and nothing else.
+/// A replace the user confirmed must also work over a read-only file (Windows refuses a
+/// plain rename over one; the Windows CI job runs this for real).
+#[test]
+fn replacing_export_replaces_a_read_only_file() {
+    let t = mj_core::testutil::TempDir::new("export-replace-ro").unwrap();
+    let dest = t.join("report.csv");
+    std::fs::write(&dest, b"old").unwrap();
+    let mut perms = std::fs::metadata(&dest).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&dest, perms).unwrap();
+    let r = report::write_export_replacing(&dest, |w| {
+        w.write_all(b"new export")?;
+        Ok(1)
+    });
+    let (written, bytes, _) = r.expect("a confirmed replace of a read-only export succeeds");
+    assert_eq!((written.as_path(), bytes), (dest.as_path(), 10));
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new export");
+    let entries = std::fs::read_dir(t.path()).unwrap().count();
+    assert_eq!(entries, 1, "no temporary file stays behind");
+    // Let the temp dir clean up on every platform.
+    let mut perms = std::fs::metadata(&dest).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    let _ = std::fs::set_permissions(&dest, perms);
+}
+
+#[test]
+fn replacing_export_swaps_a_regular_file_and_nothing_else() {
+    let t = mj_core::testutil::TempDir::new("export-replace").unwrap();
+    let names = |t: &mj_core::testutil::TempDir| {
+        let mut v: Vec<String> = std::fs::read_dir(t.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    let dest = t.join("report.csv");
+
+    // Nothing there yet: written at the exact name, like `write_export`.
+    let (written, bytes, rows) = report::write_export_replacing(&dest, |w| {
+        w.write_all(b"first")?;
+        Ok(1)
+    })
+    .unwrap();
+    assert_eq!((written.as_path(), bytes, rows), (dest.as_path(), 5, 1));
+
+    // An existing regular file is replaced; no temporary file stays behind.
+    let (written, bytes, rows) = report::write_export_replacing(&dest, |w| {
+        w.write_all(b"second export")?;
+        Ok(2)
+    })
+    .unwrap();
+    assert_eq!((written.as_path(), bytes, rows), (dest.as_path(), 13, 2));
+    assert_eq!(std::fs::read(&dest).unwrap(), b"second export");
+    assert_eq!(names(&t), ["report.csv"]);
+
+    // A failing writer leaves the old file exactly as it was, and no temporary file.
+    let r = report::write_export_replacing(&dest, |w| {
+        w.write_all(b"half written")?;
+        Err(mj_core::Error::Internal("boom".into()))
+    });
+    assert!(r.is_err());
+    assert_eq!(std::fs::read(&dest).unwrap(), b"second export");
+    assert_eq!(names(&t), ["report.csv"]);
+
+    // A folder with the target's name is never replaced: the export gets a free name.
+    let dir = t.join("folder.csv");
+    std::fs::create_dir(&dir).unwrap();
+    let (written, ..) = report::write_export_replacing(&dir, |w| {
+        w.write_all(b"x")?;
+        Ok(1)
+    })
+    .unwrap();
+    assert_eq!(written, t.join("folder (1).csv"));
+    assert!(dir.is_dir());
+
+    // Neither is a link, nor the file behind it.
+    #[cfg(unix)]
+    {
+        let target = t.join("precious.txt");
+        std::fs::write(&target, b"precious").unwrap();
+        let link = t.join("link.csv");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let (written, ..) = report::write_export_replacing(&link, |w| {
+            w.write_all(b"x")?;
+            Ok(1)
+        })
+        .unwrap();
+        assert_eq!(written, t.join("link (1).csv"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"precious");
+        assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    }
+
+    assert!(report::write_export_replacing(std::path::Path::new("rel.csv"), |_| Ok(0)).is_err());
 }

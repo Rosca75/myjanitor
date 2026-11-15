@@ -8,7 +8,7 @@
 //! spreadsheet programs show it as text instead of evaluating it (OWASP
 //! guidance). Numbers written by MyJanitor itself are never prefixed.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -449,36 +449,77 @@ pub fn write_export(dest: &Path, write: impl FnOnce(&mut dyn Write) -> Result<u6
     if !dest.is_absolute() {
         return Err(Error::InvalidInput(format!("not an absolute path: {}", dest.display())));
     }
-    let mut target = crate::fsops::unique_path(dest);
-    let mut file = None;
+    let (target, file) = create_free(dest, crate::fsops::unique_path)?;
+    let (bytes, rows) = fill(&target, file, write)?;
+    Ok((target, bytes, rows))
+}
+
+/// Like [`write_export`], but an existing regular file at `dest` is replaced. For
+/// the one caller that has the user's answer to the operating system's own "replace
+/// this file?" question (the native save dialog, W6-A D-6A4).
+///
+/// The new content is written to a temporary sibling first and renamed over `dest`
+/// only when it is complete and synced, so a failed export leaves the old file as it
+/// was. Anything at `dest` that is not a regular file (a folder, a link) is never
+/// replaced: the export then gets a free name like `write_export`.
+pub fn write_export_replacing(
+    dest: &Path,
+    write: impl FnOnce(&mut dyn Write) -> Result<u64>,
+) -> Result<(PathBuf, u64, u64)> {
+    if !dest.is_absolute() {
+        return Err(Error::InvalidInput(format!("not an absolute path: {}", dest.display())));
+    }
+    // lstat: a link is not a regular file, so the file behind it is never replaced.
+    let replace = std::fs::symlink_metadata(dest).map(|m| m.is_file()).unwrap_or(false);
+    if !replace {
+        return write_export(dest, write);
+    }
+    let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut n = 0u32;
+    let (tmp, file) = create_free(dest, |d| {
+        n += 1;
+        d.with_file_name(format!(".{name}.{}-{n}.mjtmp", std::process::id()))
+    })?;
+    let (bytes, rows) = fill(&tmp, file, write)?;
+    if let Err(e) = crate::fsops::rename_replacing(&tmp, dest) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::io(dest, e));
+    }
+    Ok((dest.to_path_buf(), bytes, rows))
+}
+
+/// Create a new file at the first free name `next` proposes (never opens an existing one).
+fn create_free(dest: &Path, mut next: impl FnMut(&Path) -> PathBuf) -> Result<(PathBuf, File)> {
     for _ in 0..1000 {
+        let target = next(dest);
         match OpenOptions::new().write(true).create_new(true).open(&target) {
-            Ok(f) => {
-                file = Some(f);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => target = crate::fsops::unique_path(dest),
+            Ok(f) => return Ok((target, f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(e) => return Err(Error::io(&target, e)),
         }
     }
-    let f = file.ok_or_else(|| Error::Conflict(format!("no free name for {}", dest.display())))?;
-    let mut buf = std::io::BufWriter::new(f);
-    let rows = match write(&mut buf) {
-        Ok(r) => r,
-        Err(e) => {
-            drop(buf);
-            let _ = std::fs::remove_file(&target);
-            return Err(e);
-        }
-    };
-    let f = buf.into_inner().map_err(|e| Error::io(&target, e.into_error()))?;
-    f.sync_all().map_err(|e| Error::io(&target, e))?;
-    let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
+    Err(Error::Conflict(format!("no free name for {}", dest.display())))
+}
+
+/// Write the export into the new file `target`, sync it and give it normal permissions.
+/// Returns its size and what `write` returned. On failure the file is removed.
+fn fill(target: &Path, file: File, write: impl FnOnce(&mut dyn Write) -> Result<u64>) -> Result<(u64, u64)> {
+    let done = (|| {
+        let mut buf = std::io::BufWriter::new(file);
+        let rows = write(&mut buf)?;
+        let f = buf.into_inner().map_err(|e| Error::io(target, e.into_error()))?;
+        f.sync_all().map_err(|e| Error::io(target, e))?;
+        Ok((f.metadata().map(|m| m.len()).unwrap_or(0), rows))
+    })();
+    if done.is_err() {
+        let _ = std::fs::remove_file(target);
+        return done;
+    }
     #[cfg(unix)]
     {
         // Lessons rule 8: a created file gets normal permissions, not a temp file's 0600.
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644));
+        let _ = std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o644));
     }
-    Ok((target, bytes, rows))
+    done
 }

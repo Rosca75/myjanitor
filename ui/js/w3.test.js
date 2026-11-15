@@ -1,10 +1,10 @@
 // W3-D2 screens against the mock backend: render tests, wiring (exact command and payload) and error paths.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeEnv, HOSTILE } from './testing/env.js';
+import { makeEnv, HOSTILE, HOSTILE_FILE } from './testing/env.js';
 
 const last = (env, cmd) => env.sent(cmd).at(-1)?.req;
-const texts = (els) => els.map((e) => e.textContent);
+const texts = (els) => Array.from(els, (e) => e.textContent);
 const go = async (env, name, params) => { env.actions.navigate(name, params); await env.settle(); };
 const rich = (opts = {}) => makeEnv({ scenario: 'rich', ...opts });
 
@@ -50,7 +50,7 @@ test('history: Restore on an entry sends restore_entries and shows refusals with
   await go(env, 'history');
   await env.click(env.$('.run .run__toggle'));
   const row = env.$$('.entry').find((e) => /Done/.test(e.textContent) && !e.querySelector('button[disabled]'));
-  const id = Number(row.getAttribute('data-entry'));
+  const id = row.getAttribute('data-entry');
   await env.click(row.querySelector('button'));
   assert.deepEqual(last(env, 'restore_entries'), { entry_ids: [id] });
   assert.equal(env.state().jobs.at(-1).kind, 'undo');
@@ -105,24 +105,35 @@ test('history: select entries and restore the selection; empty and error states'
   assert.equal(broken.$$('.run').length, 3);
 });
 
-test('history: export audit CSV goes through the folder picker and sends report_export', async () => {
+test('history: export audit CSV asks the OS save dialog and sends report_export with its answer', async () => {
   const env = await rich();
   await go(env, 'history');
   await env.click(env.$('[data-fk="export-audit"]'));
-  assert.equal(env.state().browser.mode, 'export');
-  assert.equal(env.$('[data-fk="export-name"]').value, 'myjanitor-audit.csv');
-  await env.click(env.$('[data-fk="browser-choose"]'));
-  const req = last(env, 'report_export');
-  assert.equal(req.kind, 'audit');
-  assert.equal(req.format, 'csv');
-  assert.equal(req.run_id, undefined);
-  assert.equal(req.dest, 'C:\\Users\\Michel\\Documents\\myjanitor-audit.csv');
+  assert.deepEqual(last(env, 'dialog_save_file'), { title: 'Save the audit log', file_name: 'myjanitor-audit.csv', filters: [{ name: 'CSV file', extensions: ['csv'] }] });
+  assert.equal(env.$('[role="dialog"]'), null, 'no in-app dialog: the operating system shows its own');
+  // The dialog asked before an existing file was chosen, so the export may replace it.
+  assert.deepEqual(last(env, 'report_export'), { kind: 'audit', format: 'csv', dest: 'C:\\Users\\Michel\\Documents\\myjanitor-audit.csv', overwrite: true });
   assert.match(env.$('.toast').textContent, /Saved \d+ rows to C:\\Users\\Michel\\Documents\\myjanitor-audit\.csv/);
+  // The path is the dialog's answer, whatever folder and name the user chose there.
+  env.backend.answerDialogs({ file: 'D:\\Reports\\last run.csv' });
   const runId = env.state().history.runs[1].run_id;
   await env.click(env.$(`[data-fk="audit-${runId}"]`));
-  await env.click(env.$('[data-fk="browser-choose"]'));
-  assert.equal(last(env, 'report_export').run_id, runId);
-  assert.match(last(env, 'report_export').dest, /myjanitor-audit \(1\)|myjanitor-audit-\d+\.csv/);
+  assert.equal(last(env, 'dialog_save_file').file_name, `myjanitor-audit-${runId}.csv`);
+  assert.deepEqual(last(env, 'report_export'), { run_id: runId, kind: 'audit', format: 'csv', dest: 'D:\\Reports\\last run.csv', overwrite: true });
+  assert.match(env.$('.toast').textContent, /to D:\\Reports\\last run\.csv/);
+});
+
+test('a cancelled save dialog writes nothing and shows nothing', async () => {
+  const env = await rich();
+  await go(env, 'history');
+  env.backend.answerDialogs({ file: null });
+  env.clearCalls();
+  const before = env.state();
+  await env.click(env.$('[data-fk="export-audit"]'));
+  assert.deepEqual(env.sent().map((c) => c.cmd), ['dialog_save_file'], 'only the dialog was asked');
+  assert.equal(env.state(), before, 'the store was not written at all');
+  assert.equal(env.$('.toast'), null);
+  assert.equal(env.$('[data-fk="export-audit"]').disabled, false, 'the export stays available');
 });
 
 test('history: purge quarantine asks, then sends quarantine_purge with the days', async () => {
@@ -152,31 +163,32 @@ test('report: totals, errors and skipped items with reasons, filters, exports', 
   await env.click(env.$('[data-fk="rfilter-failed"]'));
   assert.ok(env.$$('[data-status]').every((r) => r.getAttribute('data-status') === 'failed'));
   await env.click(env.$('[data-fk="report-html"]'));
-  assert.equal(env.state().browser.exportJob.format, 'html');
-  await env.click(env.$('[data-fk="browser-choose"]'));
-  assert.deepEqual(Object.keys(last(env, 'report_export')).sort(), ['dest', 'format', 'kind', 'run_id']);
+  assert.deepEqual(last(env, 'dialog_save_file'), { title: 'Save the report', file_name: `myjanitor-report-${runId}.html`, filters: [{ name: 'HTML page', extensions: ['html'] }] });
+  assert.deepEqual(Object.keys(last(env, 'report_export')).sort(), ['dest', 'format', 'kind', 'overwrite', 'run_id']);
   assert.equal(last(env, 'report_export').kind, 'report');
   assert.match(last(env, 'report_export').dest, /myjanitor-report-\d+\.html$/);
   // CLN-ACT-11: PDF export of the same report.
   await env.click(env.$(`[data-fk="report-${runId}"]`));
   await env.click(env.$('[data-fk="report-pdf"]'));
-  assert.equal(env.state().browser.exportJob.format, 'pdf');
-  await env.click(env.$('[data-fk="browser-choose"]'));
+  assert.deepEqual(last(env, 'dialog_save_file').filters, [{ name: 'PDF document', extensions: ['pdf'] }]);
   assert.equal(last(env, 'report_export').format, 'pdf');
   assert.match(last(env, 'report_export').dest, /myjanitor-report-\d+\.pdf$/);
 });
 
-test('report: a hostile path and a bad file name are text only / refused', async () => {
+test('report: a hostile path is text only, and a hostile path from the save dialog too', async () => {
   const env = await rich();
   env.store.set({ report: { run_id: 1, title: 'T', started: 1, totals: { files: 1, succeeded: 0, skipped: 1, failed: 0, bytes_before: 1, bytes_after: 1, bytes_saved: 0 }, sections: [{ title: 'S', action: 'x', totals: { files: 1 }, items: [{ path: `C:\\${HOSTILE}`, status: 'skipped', bytes_before: 1, bytes_after: 1, error: { code: 'protected', message: HOSTILE, hint: '' } }] }] }, reportUi: { filter: 'all', shown: {} } });
   assert.equal(env.$$('img').length, 0);
   assert.equal(env.$$('script').length, 0);
-  await env.actions.startExport({ type: 'report', format: 'csv', run_id: 1 });
+  // The file name is typed in the operating system's dialog; whatever comes back is
+  // sent to the engine as it is and shown as text.
+  env.backend.answerDialogs({ file: `C:\\${HOSTILE_FILE}.csv` });
+  await env.actions.startExport({ type: 'audit', format: 'csv' });
   await env.settle();
-  env.$('[data-fk="export-name"]').setValue('..\\evil.csv');
-  await env.click(env.$('[data-fk="browser-choose"]'));
-  assert.equal(env.sent('report_export').length, 0);
-  assert.match(env.$('.toast').textContent, /without folders/);
+  assert.equal(last(env, 'report_export').dest, `C:\\${HOSTILE_FILE}.csv`);
+  assert.ok(env.$('.toast').textContent.includes(HOSTILE_FILE));
+  assert.equal(env.$$('img').length, 0);
+  assert.equal(env.$$('script').length, 0);
 });
 
 // ------------------------------------------------------------- Job queue
@@ -207,8 +219,10 @@ test('job queue: per-job progress, current file, errors, summary with Undo and V
   await env.click(env.$('[data-fk="queue-report"]'));
   assert.equal(last(env, 'report_get').run_id, s.completed.run_id);
   await env.click(env.$('[data-fk="report-close"]'));
+  const runId = s.completed.run_id;
   await env.click(env.$('[data-fk="queue-undo"]'));
-  assert.equal(env.sent('undo_last').length, 1);
+  assert.equal(env.sent('undo_last').length, 0); // UI-2: that run, not the newest undoable one
+  assert.deepEqual(last(env, 'undo_run'), { run_id: runId });
 });
 
 test('job queue: reorder queued jobs sends jobs_reorder with the new order; cancel sends job_cancel', async () => {
@@ -276,7 +290,7 @@ test('custom search: run sends the parsed rule, title, topmost and action; resul
   assert.deepEqual(req.rule, { all: [{ cond: { field: 'extension', values: ['log'] } }, { cond: { field: 'size', cmp: 'gt', bytes: 1048576 } }] });
   assert.equal(req.title, 'Big logs');
   assert.equal(req.topmost_only, true);
-  assert.deepEqual(req.action, { kind: 'quarantine', purge_after_days: 7 });
+  assert.deepEqual(req.action, { kind: 'quarantine', purge_after_days: 30 });
   assert.match(env.$('.custom__result').textContent, /Big logs: \d+ matches/);
   assert.ok(env.$$('.cresults .row').length > 0, 'rows in the shared table');
   assert.equal(last(env, 'candidates_page').opportunity_id, env.state().custom.result.id);
@@ -284,7 +298,7 @@ test('custom search: run sends the parsed rule, title, topmost and action; resul
   await env.settle();
   assert.equal(last(env, 'selection_set').selected, false);
   await env.click(env.$('[data-fk="custom-add"]'));
-  assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: env.state().custom.result.id, action: { kind: 'quarantine', purge_after_days: 7 } });
+  assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: env.state().custom.result.id, action: { kind: 'quarantine', purge_after_days: 30 } });
   assert.equal(env.$('[data-fk="custom-add"]').disabled, true);
 });
 
@@ -423,13 +437,21 @@ test('step: duplicate groups are separated, keeper marked, keep rule goes throug
   env.$('[data-fk="keep-rule"]').setValue('oldest');
   await env.settle();
   assert.deepEqual(last(env, 'selection_apply_keep_rule'), { opportunity_id: 'det:exact_duplicates', rule: { rule: 'oldest' } });
+  // "Preferred folder…" asks the OS folder dialog. Cancelled: the rule in force stays,
+  // nothing is sent, and the list goes back to showing that rule.
+  env.backend.answerDialogs({ folder: null });
+  env.clearCalls();
   env.$('[data-fk="keep-rule"]').setValue('preferred_folder');
   await env.settle();
-  assert.equal(env.state().browser.mode, 'keep');
-  await env.click(env.$('[data-fk="browser-choose"]'));
-  const req = last(env, 'selection_apply_keep_rule');
-  assert.equal(req.rule.rule, 'preferred_folder');
-  assert.equal(typeof req.rule.folder, 'string');
+  assert.deepEqual(env.sent().map((c) => c.cmd), ['dialog_pick_folder']);
+  assert.deepEqual(last(env, 'dialog_pick_folder'), { title: 'Choose the folder whose copies are kept' });
+  assert.equal(env.$('[data-fk="keep-rule"]').value, 'oldest', 'the list shows the rule that is still in force');
+  assert.equal(env.$('.toast'), null);
+  // Chosen: the rule is applied with the folder.
+  env.backend.answerDialogs({ folder: 'D:\\Photos\\Masters' });
+  env.$('[data-fk="keep-rule"]').setValue('preferred_folder');
+  await env.settle();
+  assert.deepEqual(last(env, 'selection_apply_keep_rule'), { opportunity_id: 'det:exact_duplicates', rule: { rule: 'preferred_folder', folder: 'D:\\Photos\\Masters' } });
 });
 
 test('step: keyboard moves between rows, Page Down changes page', async () => {
@@ -444,7 +466,7 @@ test('step: keyboard moves between rows, Page Down changes page', async () => {
   assert.equal(env.doc.activeElement, files[2]);
   env.$('.table').key('PageDown');
   await env.settle();
-  assert.equal(last(env, 'candidates_page').offset, 50);
+  assert.equal(last(env, 'candidates_page').offset, 48, 'the next page starts at the next group (W6-A)');
   assert.match(env.$('.pager__range').textContent, /Page 2 of 5/);
 });
 
@@ -649,8 +671,10 @@ test('every backend error reaches the user as a toast, never as an unhandled rej
     ['job_pause', () => env.actions.pauseJob(1)],
     ['search_run', async () => { env.actions.setSearchOption({ }); env.actions.navigate('clean'); await env.settle(); env.actions.setQuery('ext:log'); await env.settle(); await env.actions.runSearch(); }],
     ['report_get', () => env.actions.viewReport(5)],
-    ['report_export', async () => { await env.actions.startExport({ type: 'audit', format: 'csv' }); await env.settle(); await env.actions.chooseFolder(); }],
-    ['restore_entries', () => env.actions.restoreEntries([1])],
+    ['report_export', () => env.actions.startExport({ type: 'audit', format: 'csv' })],
+    ['dialog_save_file', () => env.actions.startExport({ type: 'audit', format: 'csv' })],
+    ['dialog_pick_folder', () => env.actions.addLocation()],
+    ['restore_entries', () => env.actions.restoreEntries(['1'])],
     ['undo_run', async () => { await env.actions.acceptAsk(); env.store.set({ ask: { kind: 'undo_run', runId: 1 } }); await env.actions.acceptAsk(); }],
     ['presets_list', () => env.actions.loadPresets()],
     ['scope_remove_root', () => env.actions.removeRoot('x')],
@@ -669,7 +693,7 @@ test('not_implemented renders the control disabled with the hint', async () => {
   env.backend.disable('restore_entries');
   await go(env, 'history');
   await env.click(env.$('.run .run__toggle'));
-  const row = env.$$('.entry').find((e) => e.querySelectorAll('button').some((b) => !b.disabled) && /Done/.test(e.textContent));
+  const row = env.$$('.entry').find((e) => Array.from(e.querySelectorAll('button')).some((b) => !b.disabled) && /Done/.test(e.textContent));
   await env.click(row.querySelector('button'));
   assert.ok(env.state().unavail.restore_entries);
   assert.ok(env.$$('.entry button').every((b) => b.disabled));
@@ -677,7 +701,6 @@ test('not_implemented renders the control disabled with the hint', async () => {
   env.backend.disable('report_export');
   await go(env, 'history');
   await env.click(env.$('[data-fk="export-audit"]'));
-  await env.click(env.$('[data-fk="browser-choose"]'));
   assert.ok(env.state().unavail.export);
   assert.equal(env.$('[data-fk="export-audit"]').disabled, true);
   env.backend.disable('quarantine_purge');

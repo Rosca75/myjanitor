@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { squarify, aspect } from './lib/treemap.js';
 import { newCond, newGroup, toRule, fromRule, validate, splitBytes, parseExtensions, dateToNs, addTo, removeAt, updateAt, initialModel, countConds } from './lib/rulebuilder.js';
 import { byteOffset, indexOfByte, segments, applySuggestion, columnOf } from './lib/query.js';
-import { middleEllipsis, joinPath, compressionRate, formatBytes, formatCount, formatPercent } from './format.js';
+import { middleEllipsis, compressionRate, formatBytes, formatCount, formatPercent } from './format.js';
 import { flatten, findNode, replaceNode, needsLoad, treemapItems } from './lib/disktree.js';
 import { runStatus, canRestore } from './lib/history.js';
 import { missingRequirement } from './lib/platform.js';
@@ -121,8 +121,6 @@ test('formatters: middle ellipsis, sizes from bytes to TB, counts, percentages, 
   assert.equal(formatCount(NaN), '0');
   assert.equal(formatPercent(0.004), '0.4 %');
   assert.equal(formatPercent(0.37), '37 %');
-  assert.equal(joinPath('C:\\Users\\Me', 'a.csv', 'windows'), 'C:\\Users\\Me\\a.csv');
-  assert.equal(joinPath('/home/me/', 'a.csv', 'linux'), '/home/me/a.csv');
   assert.equal(compressionRate(100, 54), 0.45999999999999996);
   assert.equal(compressionRate(100, 101), null);
 });

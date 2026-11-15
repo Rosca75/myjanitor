@@ -6,13 +6,28 @@
  * and table component as the step review.
  */
 import { toErrorInfo } from './errors.js';
+import { copy } from './copy.js';
+import { createThumbLoader } from './thumbs.js';
 
 export const PAGE_SIZE = 50;
+
+/**
+ * ENG-9: days the quarantine holds items: the Settings value (read once if Settings was
+ * never opened), not a fixed figure, so the plan, History and the purge agree.
+ * @param {any} api @param {() => any} get
+ */
+export async function quarantineDays(api, get) {
+  const known = get().settings?.general?.quarantine_days;
+  if (known > 0) return known;
+  const settings = await api.settingsGet();
+  return settings.general.quarantine_days;
+}
 
 /** Actions the "What happens to them" panel can pick (permanent delete lives in Advanced). */
 const ACTIONS = {
   trash: () => ({ kind: 'trash' }),
-  quarantine: () => ({ kind: 'quarantine', purge_after_days: 7 }),
+  // ENG-9: held for the Settings value (the undo window promised for these items).
+  quarantine: (_dest, _keep, days = 30) => ({ kind: 'quarantine', purge_after_days: days }),
   permanent_delete: () => ({ kind: 'permanent_delete' }),
   // CLN-ACT-05: folder structure kept by default (the relative path below the scan root).
   move: (dest, keep = true) => ({ kind: 'move', dest, keep_structure: keep }),
@@ -22,8 +37,13 @@ const ACTIONS = {
   reflink: () => ({ kind: 'reflink' }),
 };
 
-/** A fresh step state. @param {string} id */
-export const freshStep = (id) => ({ id, detail: null, page: null, subGroup: null, offset: 0, loading: true, advancedOpen: false, pendingAction: null, preview: null, previewFor: null, sort: 'group', descending: false, filter: '', focusId: null, previewLoading: false });
+/**
+ * A fresh step state. `keepGroups` (W6-A, on by default) keeps duplicate groups
+ * together whatever the sort; `minSize` is the "At least" size filter in bytes.
+ * Both survive paging and selection changes and reset when another step opens.
+ * @param {string} id
+ */
+export const freshStep = (id) => ({ id, detail: null, page: null, subGroup: null, offset: 0, loading: true, advancedOpen: false, pendingAction: null, preview: null, previewFor: null, sort: 'group', descending: false, filter: '', minSize: 0, keepGroups: true, focusId: null, previewLoading: false, error: null, pageError: null });
 
 /**
  * Table operations over one step slot.
@@ -35,23 +55,58 @@ export function createStepOps(c, slot) {
   const cur = () => slot.read();
   const patch = (p) => slot.write({ ...cur(), ...p });
   const oppId = () => cur().id;
+  const thumbs = createThumbLoader(api);
 
-  /** Reload the page of rows for the current group, offset, sort and filter. */
+  /** Reload the page of rows for the current group, offset, sort and filters. */
   async function loadPage() {
     const s = cur();
     const g = gens.next(`${slot.key}:page`);
-    const req = { opportunity_id: s.id, sub_group: s.subGroup, offset: s.offset, limit: PAGE_SIZE, sort: s.sort, descending: s.descending };
+    const req = { opportunity_id: s.id, sub_group: s.subGroup, offset: s.offset, limit: PAGE_SIZE, sort: s.sort, descending: s.descending, keep_groups: s.keepGroups !== false };
     if (s.filter) req.filter = s.filter;
-    const page = await api.candidatesPage(req);
-    if (gens.current(`${slot.key}:page`, g) && cur()?.id === s.id) patch({ page, loading: false });
+    if (s.minSize > 0) req.min_size = s.minSize;
+    let page;
+    try {
+      page = await api.candidatesPage(req);
+    } catch (e) {
+      // UI-10: the table shows the failure with Retry, not a spinner for ever.
+      if (gens.current(`${slot.key}:page`, g) && cur()?.id === s.id) patch({ page: null, loading: false, pageError: toErrorInfo(e) });
+      throw e;
+    }
+    if (!gens.current(`${slot.key}:page`, g) || cur()?.id !== s.id) return;
+    // With groups kept together the engine starts the page at a group boundary.
+    patch({ page, loading: false, pageError: null, offset: typeof page.offset === 'number' ? page.offset : s.offset });
+    // Thumbnails load after the rows are drawn and patch their own cells.
+    if (page.has_groups) void thumbs.load(s.id, page.rows ?? [], page.groups ?? []);
   }
   async function loadDetail() {
     const id = oppId();
     const g = gens.next(`${slot.key}:detail`);
-    const detail = await api.stepDetail({ opportunity_id: id });
-    if (gens.current(`${slot.key}:detail`, g) && cur()?.id === id) patch({ detail });
+    let detail;
+    try {
+      detail = await api.stepDetail({ opportunity_id: id });
+    } catch (e) {
+      // UI-10: an error with Retry instead of "Loading…" for ever; a step a rescan dropped
+      // no longer shows its old rows (UI-6).
+      if (gens.current(`${slot.key}:detail`, g) && cur()?.id === id) patch({ detail: null, page: null, loading: false, error: toErrorInfo(e) });
+      throw e;
+    }
+    if (gens.current(`${slot.key}:detail`, g) && cur()?.id === id) patch({ detail, error: null });
   }
   const reload = () => Promise.all([loadDetail(), loadPage()]);
+
+  /**
+   * UI-6: read the open step again after a rescan or an apply (candidate ids are valid for
+   * one scan generation, applied rows are gone). Paging, sort and filters stay; a page
+   * that no longer exists falls back to the first. Failures show in the view, not as toasts.
+   */
+  async function refresh() {
+    if (!cur()) return;
+    try {
+      await reload();
+      const s = cur();
+      if (s && s.offset > 0 && s.page && !(s.page.rows ?? []).length) { patch({ offset: 0 }); await loadPage(); }
+    } catch { /* shown by the view */ }
+  }
 
   /** Fetch a preview for one row; failures show as "no preview" with the reason. @param {any} row */
   async function loadPreview(row) {
@@ -68,6 +123,7 @@ export function createStepOps(c, slot) {
 
   return {
     reloadStep: guard(reload),
+    refreshStep: refresh,
     /** @param {string|null} key */
     setSubGroup: guard(async (key) => { patch({ subGroup: key, offset: 0 }); await loadPage(); }),
     /** @param {number} offset */
@@ -80,6 +136,12 @@ export function createStepOps(c, slot) {
     }),
     /** "Filter these results": case-insensitive path substring. @param {string} text */
     setFilter: guard(async (text) => { patch({ filter: text, offset: 0 }); await loadPage(); }),
+    /** "At least" size filter in bytes (0: any size). @param {number} bytes */
+    setMinSize: guard(async (bytes) => { patch({ minSize: Math.max(0, Number(bytes) || 0), offset: 0 }); await loadPage(); }),
+    /** "Keep groups together" (W6-A). The sort and filters stay as they are. @param {boolean} on */
+    setKeepGroups: guard(async (on) => { patch({ keepGroups: !!on, offset: 0 }); await loadPage(); }),
+    /** Cached thumbnail of a row: a data URL, null (none), undefined (loading). @param {any} row */
+    thumbFor: (row) => thumbs.get(row),
     /** Check or uncheck one row. @param {number} id @param {boolean} selected */
     toggleRow: guard(async (id, selected) => {
       await api.selectionSet({ opportunity_id: oppId(), ids: [id], selected });
@@ -87,8 +149,14 @@ export function createStepOps(c, slot) {
     }),
     /** "Select all" in the header: the current group, or the whole step. @param {boolean} selected */
     selectAll: guard(async (selected) => {
-      const sub = cur().subGroup;
-      await api.selectionSet({ opportunity_id: oppId(), ...(sub ? { sub_group: sub } : {}), selected });
+      // ENG-3: the same tab, filters and grouping as the table, so "select all" acts on the
+      // rows the table shows and never on rows a filter hides.
+      const s = cur();
+      const req = { opportunity_id: oppId(), ...(s.subGroup ? { sub_group: s.subGroup } : {}), selected };
+      if (s.filter) req.filter = s.filter;
+      if (s.minSize > 0) req.min_size = s.minSize;
+      if (s.filter || s.minSize > 0) req.keep_groups = s.keepGroups !== false;
+      await api.selectionSet(req);
       await reload();
     }),
     /** Re-apply the keep rule through the backend. @param {string} rule @param {string} [folder] */
@@ -134,11 +202,32 @@ export function stepActions(c) {
     setParam: guard(async (key, value) => { await api.stepParamsSet({ opportunity_id: cur().id, params: { [key]: value } }); await ops.reloadStep(); }),
     /** Action choice of a clean step (Recycle Bin / Quarantine / Move / Copy / permanent). @param {keyof typeof ACTIONS} kind @param {string} [dest] @param {boolean} [keep] */
     setStepAction: guard(async (kind, dest, keep) => {
-      const action = ACTIONS[kind](dest, keep);
+      const action = ACTIONS[kind](dest, keep, kind === 'quarantine' ? await quarantineDays(api, get) : undefined);
       const step = get().plan.steps.find((x) => x.opportunity === cur().id);
       if (step) set({ plan: await api.planUpdateStep({ step_id: step.id, action }) });
       ops.patch({ pendingAction: action });
       await ops.loadDetail();
+    }),
+    /**
+     * "Preferred folder…" of the keep rule: choose the folder in the OS folder dialog,
+     * then apply the rule. On cancel the rule in force stays, and the panel is drawn
+     * again so its list shows that rule instead of the entry that was clicked.
+     */
+    chooseKeepFolder: guard(async () => {
+      const params = cur()?.detail?.opportunity?.params ?? {};
+      const rule = params.keep_rule;
+      const folder = await c.pickFolder(copy.dialogs.keepFolder, params.preferred_folder || (typeof rule === 'object' ? rule?.folder : null) || null);
+      if (folder) await c.actions.applyKeepRule('preferred_folder', folder);
+      else if (cur()) set({ step: { ...cur() } });
+    }),
+    /**
+     * Move / Copy (CLN-ACT-05): choose the destination in the OS folder dialog, then set
+     * the action. A cancelled dialog leaves the action as it was.
+     * @param {'move'|'copy'} kind @param {string} [startDir] the destination in force, if any
+     */
+    chooseDestination: guard(async (kind, startDir) => {
+      const dest = await c.pickFolder(copy.dialogs.destination[kind], startDir);
+      if (dest) await c.actions.setStepAction(kind, dest);
     }),
     /** Archive format (plan_update_step when the opportunity is in the plan, else kept for "Add"). @param {string} oppId @param {string} format */
     setArchiveFormat: guard(async (oppId, format) => {

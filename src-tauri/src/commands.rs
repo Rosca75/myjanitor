@@ -1,6 +1,9 @@
 //! Thin `#[tauri::command]` wrappers: one per entry of `mj_engine::api::COMMANDS`,
 //! same name, same request (`req` argument) and response. **Owner: W3-D.**
 //!
+//! The shell commands (`mj_engine::api::SHELL_COMMANDS`, the native file dialogs)
+//! are implemented in `dialogs.rs` and registered here with the engine commands.
+//!
 //! Every wrapper is `async` and runs the engine method on Tauri's blocking pool,
 //! so no command ever runs on the main (UI) thread. Errors are `ErrorInfo`
 //! (`{code, message, hint, path?}`); the JS promise rejects with that object.
@@ -12,9 +15,9 @@ use mj_engine::api::*;
 use mj_engine::Engine;
 use tauri::State;
 
-/// Managed state: the one engine.
+/// Managed state: the one engine, built off the main thread at start-up (IPC-2).
 pub struct AppState {
-    pub engine: Arc<Engine>,
+    pub engine: Arc<crate::startup::EngineSlot>,
 }
 
 async fn run<T, F>(state: State<'_, AppState>, f: F) -> Result<T, ErrorInfo>
@@ -22,9 +25,11 @@ where
     T: Send + 'static,
     F: FnOnce(Arc<Engine>) -> mj_core::Result<T> + Send + 'static,
 {
-    let engine = Arc::clone(&state.engine);
-    match tauri::async_runtime::spawn_blocking(move || f(engine)).await {
-        Ok(r) => r.map_err(|e| e.info()),
+    let slot = Arc::clone(&state.engine);
+    // A command that arrives while the engine is still being built waits for it here,
+    // on the blocking pool (never on the main thread).
+    match tauri::async_runtime::spawn_blocking(move || f(slot.wait()?).map_err(|e| e.info())).await {
+        Ok(r) => r,
         Err(e) => Err(mj_core::Error::Internal(format!("command worker failed: {e}")).info()),
     }
 }
@@ -57,12 +62,6 @@ pub async fn scope_add_root(state: State<'_, AppState>, req: ScopePathRequest) -
 #[tauri::command]
 pub async fn scope_remove_root(state: State<'_, AppState>, req: ScopePathRequest) -> Result<ScanScope, ErrorInfo> {
     run(state, move |e| e.scope_remove_root(req)).await
-}
-
-/// In-app folder browser (D-104): list a folder, or the places when `path` is omitted.
-#[tauri::command]
-pub async fn fs_list_dir(state: State<'_, AppState>, req: FsListDirRequest) -> Result<FsListDirResponse, ErrorInfo> {
-    run(state, move |e| e.fs_list_dir(req)).await
 }
 
 /// Start a scan of the scope; progress via `scan://progress`, `scan://detector`, end via `scan://done`.
@@ -153,6 +152,16 @@ pub async fn step_params_set(
 #[tauri::command]
 pub async fn candidate_preview(state: State<'_, AppState>, req: CandidatePreviewRequest) -> Result<Preview, ErrorInfo> {
     run(state, move |e| e.candidate_preview(req)).await
+}
+
+/// Row thumbnails of the visible page of a duplicates-type step (decoded off the UI
+/// thread, on the blocking pool like every command).
+#[tauri::command]
+pub async fn candidate_thumbnails(
+    state: State<'_, AppState>,
+    req: CandidateThumbnailsRequest,
+) -> Result<CandidateThumbnails, ErrorInfo> {
+    run(state, move |e| e.candidate_thumbnails(req)).await
 }
 
 /// Parse a quick query into a rule tree, with error positions.
@@ -343,13 +352,23 @@ pub async fn report_last(state: State<'_, AppState>) -> Result<Option<Report>, E
 
 /// Write a report (CSV/HTML) or the audit log (CSV, SAF-12).
 #[tauri::command]
-pub async fn report_export(state: State<'_, AppState>, req: ReportExportRequest) -> Result<ExportResult, ErrorInfo> {
+pub async fn report_export(
+    state: State<'_, AppState>,
+    saved: State<'_, crate::dialogs::SavedDestination>,
+    mut req: ReportExportRequest,
+) -> Result<ExportResult, ErrorInfo> {
+    req.overwrite = saved.overwrite_for(&req.dest, req.overwrite);
     run(state, move |e| e.report_export(req)).await
 }
 
 /// Export candidates (CSV/HTML, CLN-ACT-11).
 #[tauri::command]
-pub async fn results_export(state: State<'_, AppState>, req: ResultsExportRequest) -> Result<ExportResult, ErrorInfo> {
+pub async fn results_export(
+    state: State<'_, AppState>,
+    saved: State<'_, crate::dialogs::SavedDestination>,
+    mut req: ResultsExportRequest,
+) -> Result<ExportResult, ErrorInfo> {
+    req.overwrite = saved.overwrite_for(&req.dest, req.overwrite);
     run(state, move |e| e.results_export(req)).await
 }
 
@@ -455,14 +474,14 @@ pub async fn breakdown(state: State<'_, AppState>, req: BreakdownRequest) -> Res
     run(state, move |e| e.breakdown(req)).await
 }
 
-/// Names registered in `lib.rs` (kept equal to `mj_engine::api::COMMANDS` by a test).
+/// Names registered in `lib.rs`: the engine commands, then the shell commands (kept
+/// equal to `mj_engine::api::COMMANDS` followed by `SHELL_COMMANDS` by a test).
 pub const REGISTERED: &[&str] = &[
     "app_info",
     "scope_get",
     "scope_set",
     "scope_add_root",
     "scope_remove_root",
-    "fs_list_dir",
     "scan_start",
     "scan_pause",
     "scan_resume",
@@ -476,6 +495,7 @@ pub const REGISTERED: &[&str] = &[
     "selection_reset",
     "step_params_set",
     "candidate_preview",
+    "candidate_thumbnails",
     "search_parse",
     "search_suggest",
     "search_run",
@@ -523,6 +543,8 @@ pub const REGISTERED: &[&str] = &[
     "drives_list",
     "disk_usage_tree",
     "breakdown",
+    "dialog_pick_folder",
+    "dialog_save_file",
 ];
 
 /// The invoke handler with every command.
@@ -535,7 +557,6 @@ macro_rules! mj_handlers {
             $crate::commands::scope_set,
             $crate::commands::scope_add_root,
             $crate::commands::scope_remove_root,
-            $crate::commands::fs_list_dir,
             $crate::commands::scan_start,
             $crate::commands::scan_pause,
             $crate::commands::scan_resume,
@@ -549,6 +570,7 @@ macro_rules! mj_handlers {
             $crate::commands::selection_reset,
             $crate::commands::step_params_set,
             $crate::commands::candidate_preview,
+            $crate::commands::candidate_thumbnails,
             $crate::commands::search_parse,
             $crate::commands::search_suggest,
             $crate::commands::search_run,
@@ -596,6 +618,8 @@ macro_rules! mj_handlers {
             $crate::commands::drives_list,
             $crate::commands::disk_usage_tree,
             $crate::commands::breakdown,
+            $crate::dialogs::dialog_pick_folder,
+            $crate::dialogs::dialog_save_file,
         ]
     };
 }

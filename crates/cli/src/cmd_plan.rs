@@ -245,6 +245,17 @@ fn apply_loaded(ctx: &Ctx, a: &Parsed, policy: Option<OriginalsPolicy>) -> Res {
 
 /// Print what an apply did and map failures to the exit code.
 pub fn finish(ctx: &Ctx, run_id: u64, jobs: &[Job]) -> Res {
+    finish_run(ctx, Some(run_id), jobs)
+}
+
+/// `finish` for an undo: the counts, without the hint to undo the run again (an undo run is
+/// not undoable) and with the id of the run the job really started.
+pub fn finish_undo(ctx: &Ctx, jobs: &[Job]) -> Res {
+    finish_run(ctx, None, jobs)
+}
+
+fn finish_run(ctx: &Ctx, run: Option<u64>, jobs: &[Job]) -> Res {
+    let run_id = run.or_else(|| jobs.first().and_then(|j| j.run_id).map(|r| r.0)).unwrap_or(0);
     if ctx.json {
         println!("{}", json(&jobs));
     }
@@ -267,15 +278,28 @@ pub fn finish(ctx: &Ctx, run_id: u64, jobs: &[Job]) -> Res {
         }
     }
     if !ctx.json {
-        println!("Run {run_id}: {ok} done, {skipped} skipped, {failed} failed, {} saved. Undo with `myjanitor-cli undo --run {run_id}`.", bytes(saved));
+        let hint =
+            if run.is_some() { format!(" Undo with `myjanitor-cli undo --run {run_id}`.") } else { String::new() };
+        println!("Run {run_id}: {ok} done, {skipped} skipped, {failed} failed, {} saved.{hint}", bytes(saved));
+        if let Some(note) = skipped_note(skipped, failed) {
+            eprintln!("{note}");
+        }
     }
     if jobs.iter().any(|j| j.state == JobState::Failed) && ok == 0 {
         return Err(Fail::Error("the run failed; see `history` and `report --last`".into()));
     }
-    if failed > 0 || jobs.iter().any(|j| j.state == JobState::CompletedWithErrors) {
+    if failed > 0 {
         return Err(Fail::Partial(format!("{failed} item(s) failed; the others were done. See `report --last`.")));
     }
     Ok(())
+}
+
+/// Items skipped on purpose (changed since the scan, protected, already linked, ...) are
+/// not failures: the run exits 0 and says what was left alone (IPC-12). Exit code 3 means
+/// failed items only, as documented.
+fn skipped_note(skipped: u64, failed: u64) -> Option<String> {
+    (skipped > 0 && failed == 0)
+        .then(|| format!("{skipped} item(s) were skipped and left as they were; see `myjanitor-cli report --last`."))
 }
 
 /// `apply`.
@@ -328,5 +352,17 @@ pub fn clean(a: &Parsed) -> Res {
         let r = dry_run_report(&ctx)?;
         print_dry_run(&ctx, &r);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    #[test]
+    fn skipped_only_runs_are_a_note_not_a_failure() {
+        assert!(skipped_note(2, 0).unwrap().contains("2 item(s) were skipped"));
+        assert_eq!(skipped_note(0, 0), None);
+        assert_eq!(skipped_note(2, 1), None);
     }
 }

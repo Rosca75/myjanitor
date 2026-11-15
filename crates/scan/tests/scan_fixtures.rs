@@ -322,3 +322,122 @@ fn freshly_written_files_are_never_cache_hits() {
     assert_eq!(ix.get(&t.join("new.txt")).unwrap().stamp(), st);
     assert_eq!(ix.stats.cache_hits, 0);
 }
+
+/// SCAN-1: a sibling whose name extends a dropped folder's name with a character that
+/// sorts below `/` (`skip.zip`, `skip - Copy`, `.hidden.bak`) sits between `skip` and
+/// `skip/x.jpg` in key order; the fast path must still drop the folder's content.
+#[test]
+fn fast_index_drops_excluded_content_next_to_a_lookalike_sibling() {
+    let t = TempDir::new("it-fast-sib").unwrap();
+    small_tree(&t);
+    write_old(&t, ".hidden/secret.txt", b"s");
+    write_old(&t, ".hidden.bak", b"b");
+    write_old(&t, "photos/skip/x.jpg", b"x");
+    write_old(&t, "photos/skip/sub/y.jpg", b"y");
+    write_old(&t, "photos/skip.zip", b"z");
+    write_old(&t, "photos/skip - Copy/y.jpg", b"c");
+    let mut s = scope(&[t.path()]);
+    s.exclude = vec![t.join("photos/skip").to_string_lossy().into_owned()];
+    s.options.include_hidden = false;
+    let walked = run(&s, &NativePlatform::new()).unwrap();
+    let fast = run(&s, &TestPlatform { fast: Fast::Works, ..Default::default() }).unwrap();
+    assert!(fast.stats.used_fast_index);
+    assert_eq!(paths(&fast, t.path()), paths(&walked, t.path()));
+    assert!(fast.get(&t.join("photos/skip/x.jpg")).is_none());
+    assert!(fast.get(&t.join("photos/skip/sub/y.jpg")).is_none());
+    assert!(fast.get(&t.join(".hidden/secret.txt")).is_none());
+    assert!(fast.get(&t.join("photos/skip - Copy/y.jpg")).is_some());
+    assert!(fast.get(&t.join("photos/skip.zip")).is_some());
+}
+
+/// SCAN-6: names that are not valid Unicode (Latin-1 from an old backup) are counted in
+/// every ancestor's totals and lie inside their folders' subtrees.
+#[cfg(unix)]
+#[test]
+fn non_utf8_names_count_in_every_ancestor() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let t = TempDir::new("it-latin1").unwrap();
+    t.write("a/b/ok.bin", &[1u8; 10]).unwrap();
+    let bad_file = t.join("a/b").join(OsStr::from_bytes(b"\xff.bin"));
+    std::fs::write(&bad_file, [2u8; 100]).unwrap();
+    let bad_dir = t.join("a").join(OsStr::from_bytes(b"\xfedir"));
+    std::fs::create_dir(&bad_dir).unwrap();
+    std::fs::write(bad_dir.join("c.txt"), [3u8; 1000]).unwrap();
+    let ix = run(&scope(&[t.path()]), &NativePlatform::new()).unwrap();
+    assert_eq!(ix.stats.bytes, 1110);
+    let pos = |p: &Path| ix.position(p).unwrap();
+    let root = pos(t.path());
+    assert_eq!(ix.totals(root).bytes, 1110);
+    let tree = FolderTree::build(&ix);
+    assert_eq!(tree.totals(root).bytes, 1110);
+    assert_eq!(tree.totals(pos(&t.join("a"))).bytes, 1110);
+    assert_eq!(tree.totals(pos(&t.join("a/b"))).bytes, 110);
+    assert_eq!(ix.subtree(pos(&t.join("a"))).count(), 5, "b, ok.bin, the bad file, the bad dir and c.txt");
+    assert!(mj_core::pathutil::is_within(t.path(), &bad_file));
+    assert_eq!(ix.parent(pos(&bad_dir.join("c.txt"))), Some(pos(&bad_dir)));
+}
+
+/// SCAN-4: a drive that disappears mid-scan does not produce a complete-looking index, and
+/// the cache keeps the fingerprints of what the walk could no longer reach.
+#[test]
+fn a_volume_that_vanishes_mid_scan_is_not_a_complete_scan() {
+    let t = TempDir::new("it-gone").unwrap();
+    let data = TempDir::new("it-gone-cache").unwrap();
+    for i in 0..30 {
+        write_old(&t, &format!("d{i:02}/sub/f.bin"), &[i as u8; 64]);
+    }
+    let s = scope(&[t.path()]);
+    let cancel = CancelToken::new();
+    let cache = ScanCache::open(&data.join("scan-cache.bin"));
+    let native = NativePlatform::new();
+    let req = ScanRequest { scope: &s, exclusions: &[], platform: &native, cancel: &cancel, progress: &NullProgress };
+    let full = scan_with_cache(&req, &cache).unwrap();
+    assert_eq!(full.stats.files, 30);
+    assert_eq!(cache.prune(&full), 0);
+    let before = cache.len();
+    let gone = TestPlatform { gone_after: Some(1), ..Default::default() };
+    let req = ScanRequest { scope: &s, exclusions: &[], platform: &gone, cancel: &cancel, progress: &NullProgress };
+    match scan_with_cache(&req, &cache) {
+        Err(e) => assert_eq!(e.code(), "not_found", "{e}"),
+        Ok(ix) => {
+            assert!(ix.stats.unreadable >= 1, "{:?}", ix.stats);
+            assert_eq!(cache.prune(&ix), 0, "nothing the walk could not reach is pruned");
+        }
+    }
+    assert_eq!(cache.len(), before);
+}
+
+/// SCAN-8: a location on another filesystem added inside an existing location is scanned
+/// as its own root (it used to collapse into the outer one, which then skipped it), and a
+/// scan of the outer location alone keeps the cache records below the skipped mount.
+#[test]
+fn a_nested_root_on_another_filesystem_is_scanned() {
+    let t = TempDir::new("it-nested-fs").unwrap();
+    let data = TempDir::new("it-nested-fs-cache").unwrap();
+    small_tree(&t);
+    let p = TestPlatform { other_volume: vec![t.join("photos")], ..Default::default() };
+    let both = scope(&[t.path(), &t.join("photos")]);
+    assert_eq!(mj_scan::effective_roots_on(&both, &p).len(), 2);
+    let ix = run(&both, &p).unwrap();
+    assert!(ix.get(&t.join("photos/p1.jpg")).is_some());
+    let all = paths(&ix, t.path());
+    let mut dedup = all.clone();
+    dedup.dedup();
+    assert_eq!(all, dedup, "nothing is indexed twice");
+    assert_eq!(ix.stats.files, 6);
+    // Same volume: still collapsed.
+    let same = TestPlatform::default();
+    assert_eq!(mj_scan::effective_roots_on(&both, &same), vec![t.path().to_path_buf()]);
+    // The outer root alone skips the mount and keeps its cache records.
+    let cache = ScanCache::open(&data.join("scan-cache.bin"));
+    let cancel = CancelToken::new();
+    let req = ScanRequest { scope: &both, exclusions: &[], platform: &p, cancel: &cancel, progress: &NullProgress };
+    let first = scan_with_cache(&req, &cache).unwrap();
+    assert_eq!(cache.prune(&first), 0);
+    let outer = scope(&[t.path()]);
+    let req = ScanRequest { scope: &outer, exclusions: &[], platform: &p, cancel: &cancel, progress: &NullProgress };
+    let second = scan_with_cache(&req, &cache).unwrap();
+    assert!(second.get(&t.join("photos/p1.jpg")).is_none());
+    assert_eq!(cache.prune(&second), 0, "records below a skipped mount point are kept");
+}

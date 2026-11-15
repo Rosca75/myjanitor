@@ -148,10 +148,13 @@ pub mod env {
     /// An absolute entry protects that path and everything below it; any other
     /// entry is a path-mode glob matched against the whole path.
     pub const PROTECTED: &str = "env.protected";
+    /// The user's interface language as a locale name (`fr-FR`), when the OS tells it.
+    pub const SYSTEM_LANGUAGE: &str = "env.system_language";
 
-    /// Encode a list for one of the keys above.
+    /// Encode a list for one of the keys above: entries joined with NUL (empty entries are
+    /// left out).
     pub fn encode(paths: &[impl AsRef<str>]) -> String {
-        paths.iter().map(|p| p.as_ref().to_string()).collect::<Vec<_>>().join("\0")
+        paths.iter().map(|p| p.as_ref()).filter(|p| !p.is_empty()).collect::<Vec<_>>().join("\0")
     }
 
     /// Encode paths with the lossless codec.
@@ -160,9 +163,23 @@ pub mod env {
         encode(&v)
     }
 
-    /// Decode one key's value (entries that do not decode are dropped).
+    /// Decode one key's value. NUL occurs in an entry only as the first character of an
+    /// escaped (non-Unicode) path from [`encode_paths`], and no entry is empty, so an empty
+    /// piece between separators is that marker: it is given back to the next entry (RF-5;
+    /// it used to be dropped, which turned the path into a literal `%XX` string).
     pub fn decode(text: &str) -> Vec<String> {
-        text.split('\0').filter(|s| !s.is_empty()).map(String::from).collect()
+        let mut out = Vec::new();
+        let mut escaped = false;
+        for piece in text.split('\0') {
+            if piece.is_empty() {
+                escaped = true;
+            } else if std::mem::take(&mut escaped) {
+                out.push(format!("{}{piece}", crate::pathutil::ESCAPED_PREFIX));
+            } else {
+                out.push(piece.to_string());
+            }
+        }
+        out
     }
 }
 
@@ -184,8 +201,9 @@ impl DetectContext<'_> {
             return false;
         };
         env::decode(t).iter().any(|entry| match crate::pathutil::decode_path(entry) {
-            Ok(p) if p.is_absolute() && !entry.contains(['*', '?', '[']) => crate::pathutil::is_within(&p, path),
-            _ => crate::glob::Glob::platform(entry, crate::glob::GlobMode::Path).matches_path(path),
+            // RF-2: the shared classifier; an absolute entry is a folder even with `[` in it.
+            Ok(p) if p.is_absolute() && !crate::glob::is_pattern_entry(entry) => crate::pathutil::is_within(&p, path),
+            _ => crate::glob::entry_glob(entry).matches_path(path),
         })
     }
 }

@@ -233,6 +233,7 @@ fn reverse(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
                 return Ok(());
             }
             verify_copy(e, copy)?;
+            original_still_holds_the_copy(e, copy)?;
             fsops::remove_item(copy)?;
             fsops::remove_empty_dirs(&e.created[1..]);
             Ok(())
@@ -276,6 +277,60 @@ fn verify_copy(e: &JournalEntry, copy: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// ACT-4: undoing a copy deletes it permanently, so a file copy goes only while its
+/// original is still there with the same content; otherwise the copy may be the last one.
+/// (A folder copy is compared with the current original by [`verify_copy`] already.)
+fn original_still_holds_the_copy(e: &JournalEntry, copy: &Path) -> Result<()> {
+    if !std::fs::symlink_metadata(copy).is_ok_and(|m| m.is_file()) {
+        return Ok(());
+    }
+    let kept = |why: &str| {
+        Error::Conflict(format!(
+            "{} {why}; the copy at {} was kept because it may be the only one",
+            e.original.display(),
+            copy.display()
+        ))
+    };
+    if !std::fs::symlink_metadata(&e.original).is_ok_and(|m| m.is_file()) {
+        return Err(kept("is no longer there"));
+    }
+    let (a, b) = (fsops::hash_file(&e.original)?, fsops::hash_file(copy)?);
+    if a.sha256 != b.sha256 {
+        return Err(kept("changed since the copy"));
+    }
+    Ok(())
+}
+
+/// How an interrupted move's copy compares with what is left at the source (ACT-5).
+enum CopyState {
+    /// Same content on both sides: the copy finished, the source was not touched.
+    Complete,
+    /// The copy holds every entry of the source and more: the source was being deleted;
+    /// the number of entries left there.
+    SourceLeft(usize),
+    /// Anything else (a copy cut short, unreadable sides, a source that changed).
+    Incomplete,
+}
+
+fn compare_with_copy(original: &Path, copy: &Path) -> CopyState {
+    let is_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir());
+    if is_dir(original) && is_dir(copy) {
+        let (Ok(src), Ok(dst)) = (tree_digest(original), tree_digest(copy)) else { return CopyState::Incomplete };
+        if src == dst {
+            return CopyState::Complete;
+        }
+        let have: std::collections::HashSet<_> = dst.iter().collect();
+        if src.len() < dst.len() && src.iter().all(|e| have.contains(e)) {
+            return CopyState::SourceLeft(src.len());
+        }
+        return CopyState::Incomplete;
+    }
+    match (fsops::hash_file(original), fsops::hash_file(copy)) {
+        (Ok(a), Ok(b)) if a.sha256 == b.sha256 => CopyState::Complete,
+        _ => CopyState::Incomplete,
+    }
 }
 
 /// Sorted (relative path, kind, size, xxh64) of a tree, for comparisons.
@@ -333,7 +388,7 @@ fn unlink_replacement(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
         return Err(err);
     }
     // Replacing the link itself (verified to hold the journalled content) is intended here.
-    if let Err(er) = std::fs::rename(&temp, orig) {
+    if let Err(er) = fsops::rename_replacing(&temp, orig) {
         let _ = std::fs::remove_file(&temp);
         return Err(Error::io(orig, er));
     }
@@ -442,9 +497,30 @@ fn inspect_action(ctx: &ExecContext<'_>, e: &JournalEntry) -> (JournalState, Opt
             match (orig_exists, fsops::exists(r)) {
                 (true, false) => failed("nothing was moved"),
                 (false, true) => (JournalState::Done, Some("completed before the interruption".into()), true),
-                (true, true) => {
-                    failed(&format!("the item is still in place; an incomplete copy may remain at {}", r.display()))
-                }
+                (true, true) => match compare_with_copy(&e.original, r) {
+                    // ACT-5: a cross-volume move deletes the source only after the whole copy
+                    // verified, so a copy holding everything the source still has, and more,
+                    // means the deletion had started: the copy is the only complete one. Same
+                    // state as a live run that could not delete all of its source (F-09).
+                    CopyState::SourceLeft(left) => (
+                        JournalState::Done,
+                        Some(format!(
+                            "interrupted while the source was being removed: the complete copy is at {}, \
+                             but {left} item(s) remain at {}; remove them there by hand (Restore needs \
+                             that place to be free)",
+                            r.display(),
+                            e.original.display()
+                        )),
+                        true,
+                    ),
+                    CopyState::Complete => failed(&format!(
+                        "the item is still in place and a complete copy remains at {}; nothing was removed",
+                        r.display()
+                    )),
+                    CopyState::Incomplete => {
+                        failed(&format!("the item is still in place; an incomplete copy may remain at {}", r.display()))
+                    }
+                },
                 (false, false) => failed("the item was found at neither location"),
             }
         }
@@ -556,12 +632,17 @@ fn same_file(ctx: &ExecContext<'_>, a: &Path, b: &Path) -> bool {
 /// The entry an undo-run entry reverses: same original, action and retained locations.
 fn find_undo_source(ctx: &ExecContext<'_>, u: &JournalEntry) -> Option<JournalEntry> {
     ctx.journal
-        .all_entries()
+        .entries_where(|s| {
+            s.id < u.id
+                && s.run_id != u.run_id
+                && matches!(s.state, JournalState::Done | JournalState::UndoFailed)
+                && s.original == u.original
+                && s.action == u.action
+                && s.retained_at == u.retained_at
+                && s.trash == u.trash
+                && s.link_source == u.link_source
+        })
         .into_iter()
-        .filter(|s| s.id < u.id && s.run_id != u.run_id)
-        .filter(|s| matches!(s.state, JournalState::Done | JournalState::UndoFailed))
-        .filter(|s| s.original == u.original && s.action == u.action)
-        .filter(|s| s.retained_at == u.retained_at && s.trash == u.trash && s.link_source == u.link_source)
         .max_by_key(|s| s.id)
 }
 

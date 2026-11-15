@@ -47,6 +47,9 @@ struct FileState {
     /// Open handle of `entries-<month>.jsonl`.
     entries: Option<File>,
     runs: Option<File>,
+    /// ACT-12: files whose last write failed part-way, so they may end in a fragment
+    /// without its newline; the next record written there starts on a new line.
+    torn: std::collections::BTreeSet<PathBuf>,
 }
 
 /// Journal backend.
@@ -112,12 +115,35 @@ fn open_append(path: &Path) -> Result<(File, bool)> {
     Ok((f, !existed))
 }
 
-fn write_line(f: &mut File, path: &Path, line: &str) -> Result<()> {
+fn write_line(f: &mut File, path: &Path, line: &str, torn: &mut std::collections::BTreeSet<PathBuf>) -> Result<()> {
+    let mut is_torn = torn.contains(path);
+    let r = write_record(f, line, &mut is_torn);
+    if is_torn {
+        torn.insert(path.to_path_buf());
+    } else {
+        torn.remove(path);
+    }
+    r.map_err(|e| Error::io(path, e))?;
+    f.sync_data().map_err(|e| Error::io(path, e))
+}
+
+/// Write one record and its newline. ACT-12: a write that fails part-way (disk full) can
+/// leave a fragment without its newline; `torn` then stays set and the next record first
+/// ends that fragment, so it is not glued to it and lost on replay (the fragment alone is
+/// ignored, as `open` does for a torn last line).
+fn write_record<W: Write>(w: &mut W, line: &str, torn: &mut bool) -> std::io::Result<()> {
+    if *torn {
+        w.write_all(b"\n")?;
+        *torn = false;
+    }
     let mut buf = String::with_capacity(line.len() + 1);
     buf.push_str(line);
     buf.push('\n');
-    f.write_all(buf.as_bytes()).map_err(|e| Error::io(path, e))?;
-    f.sync_data().map_err(|e| Error::io(path, e))
+    let r = w.write_all(buf.as_bytes());
+    if r.is_err() {
+        *torn = true;
+    }
+    r
 }
 
 impl Journal {
@@ -185,6 +211,7 @@ impl Journal {
                     month: months.last().map(|(m, _)| m.clone()),
                     entries: None,
                     runs: None,
+                    torn: Default::default(),
                 }),
             },
             entries: Mutex::new(entries),
@@ -243,8 +270,9 @@ impl Journal {
                 st.entries = Some(f);
                 st.month = Some(month);
             }
+            let st = &mut *st;
             let f = st.entries.as_mut().ok_or_else(|| Error::Internal("journal file not open".into()))?;
-            write_line(f, &path, &line)?;
+            write_line(f, &path, &line, &mut st.torn)?;
         }
         lock(&self.entries).insert(entry.id, entry.clone());
         let run = RunId(entry.id.0 / ENTRIES_PER_RUN);
@@ -268,8 +296,9 @@ impl Journal {
                 }
                 st.runs = Some(f);
             }
+            let st = &mut *st;
             let f = st.runs.as_mut().ok_or_else(|| Error::Internal("runs file not open".into()))?;
-            write_line(f, &path, &line)?;
+            write_line(f, &path, &line, &mut st.torn)?;
         }
         lock(&self.runs).insert(run.run_id, run.clone());
         Ok(())
@@ -290,6 +319,19 @@ impl Journal {
     /// Latest state of every entry, in id order.
     pub fn all_entries(&self) -> Vec<JournalEntry> {
         lock(&self.entries).values().cloned().collect()
+    }
+
+    /// Latest state of the entries `keep` accepts, in id order. Only those are cloned, so a
+    /// query over a long history (XC-4) does not copy every entry ever recorded. `keep` runs
+    /// under the journal lock and must not call back into the journal.
+    pub fn entries_where(&self, keep: impl Fn(&JournalEntry) -> bool) -> Vec<JournalEntry> {
+        lock(&self.entries).values().filter(|e| keep(e)).cloned().collect()
+    }
+
+    /// Visit the latest state of every entry in id order without cloning any. `visit` runs
+    /// under the journal lock and must not call back into the journal.
+    pub fn for_each_entry(&self, mut visit: impl FnMut(&JournalEntry)) {
+        lock(&self.entries).values().for_each(&mut visit);
     }
 
     /// Entries whose latest record is `intent` (left by an interrupted run).
@@ -331,6 +373,43 @@ impl Journal {
 
 #[cfg(test)]
 mod tests {
+
+    /// A writer that accepts `budget` bytes, then fails (a disk that fills up).
+    struct FillsUp {
+        out: Vec<u8>,
+        budget: usize,
+    }
+
+    impl Write for FillsUp {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.budget == 0 {
+                return Err(std::io::Error::other("disk full"));
+            }
+            let n = buf.len().min(self.budget);
+            self.out.extend_from_slice(&buf[..n]);
+            self.budget -= n;
+            Ok(n)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// ACT-12: a record written after a torn one is kept on replay.
+    #[test]
+    fn a_torn_record_does_not_swallow_the_next_one() {
+        let mut w = FillsUp { out: Vec::new(), budget: 18 };
+        let mut torn = false;
+        write_record(&mut w, r#"{"a":1}"#, &mut torn).unwrap();
+        assert!(write_record(&mut w, r#"{"b":2222222}"#, &mut torn).is_err());
+        assert!(torn);
+        w.budget = usize::MAX;
+        write_record(&mut w, r#"{"c":3}"#, &mut torn).unwrap();
+        assert!(!torn);
+        let text = String::from_utf8(w.out).unwrap();
+        let valid: Vec<&str> = text.lines().filter(|l| serde_json::from_str::<serde_json::Value>(l).is_ok()).collect();
+        assert_eq!(valid, [r#"{"a":1}"#, r#"{"c":3}"#], "{text:?}");
+    }
     use super::*;
     use mj_core::testutil::TempDir;
     use mj_core::{ActionKind, FileStamp, JobId, RunKind, TargetKind};
@@ -407,6 +486,13 @@ mod tests {
         assert_eq!(j.replay_stats().ignored, 0);
         let run = es[0].run_id;
         assert_eq!(j.entries_of(run).len(), 2);
+        // XC-4: the filtered and visiting accessors agree with all_entries().
+        let done = j.entries_where(|e| e.state == JournalState::Done);
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].id, es[0].id);
+        let mut seen = Vec::new();
+        j.for_each_entry(|e| seen.push(e.id));
+        assert_eq!(seen, es.iter().map(|e| e.id).collect::<Vec<_>>());
         assert!(j.next_run_id(nov).0 > run.0);
         // Reservations continue after the replayed ids.
         assert_eq!(j.reserve_entry_ids(run, 1).unwrap().0, es[1].id.0 + 1);

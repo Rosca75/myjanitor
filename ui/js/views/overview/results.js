@@ -7,7 +7,7 @@ import { button } from '../../components/controls.js';
 import { select } from '../../components/controls.js';
 import { tabs } from '../../components/tabs.js';
 import { oppCard } from '../../components/card.js';
-import { splitCards } from '../../state.js';
+import { splitCards, completedUndoable } from '../../state.js';
 import { renderHero } from './hero.js';
 import { platformNote } from '../category.js';
 
@@ -20,7 +20,7 @@ function completedBanner(s, actions) {
       c.failed > 0 && h('span', {}, ` ${copy.done.errors(c.failed)}`),
       h('span', { class: 'notice__sub' }, ` ${copy.done.undoHint}`)),
     h('div', { class: 'notice__actions' },
-      button({ label: copy.done.undo, variant: 'secondary', fk: 'done-undo', onClick: () => actions.undoLast() }),
+      button({ label: copy.done.undo, variant: 'secondary', fk: 'done-undo', disabled: !completedUndoable(s), title: completedUndoable(s) ? undefined : copy.done.undoNone, onClick: () => actions.undoRun(c.run_id) }),
       button({ label: copy.done.report, variant: 'link', fk: 'done-report', onClick: () => actions.viewReport(c.run_id) }),
       button({ label: copy.done.dismiss, variant: 'quiet', fk: 'done-dismiss', onClick: () => actions.dismissCompleted() })));
 }
@@ -32,7 +32,7 @@ const tabItems = (counts) => ['all', 'clean', 'optimise', 'review_only'].map((k)
 export function renderResults(s, actions) {
   const { main, small } = splitCards(s.opps.items);
   const handlers = { onReview: (id) => actions.openStep(id), onAdd: (id) => actions.addToPlan(id), platformNote: platformNote(s) };
-  const smallSize = small.reduce((a, o) => a + o.size_before, 0);
+  const smallSize = small.reduce((a, o) => a + o.saving, 0); // the same number the cards show
   const grid = (list) => h('div', { class: 'grid', 'aria-label': copy.tabs.label }, list.map((o) => oppCard(o, handlers)));
   return h('div', { class: 'view view--overview' },
     s.completed && completedBanner(s, actions),

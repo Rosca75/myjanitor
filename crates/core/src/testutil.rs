@@ -129,10 +129,23 @@ pub fn dir_links(target: &Path, link: &Path) -> io::Result<Vec<PathBuf>> {
     }
 }
 
-/// Set a file's modification time (no external crate): uses `File::set_modified`.
+/// Set a file's or a folder's modification time (no external crate): uses
+/// `File::set_modified`.
 pub fn set_mtime(path: &Path, t: std::time::SystemTime) -> io::Result<()> {
-    let f = fs::OpenOptions::new().write(true).open(path)?;
+    let f = if path.is_dir() { open_dir_for_times(path)? } else { fs::OpenOptions::new().write(true).open(path)? };
     f.set_modified(t)
+}
+
+#[cfg(windows)]
+fn open_dir_for_times(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS to open a directory.
+    fs::OpenOptions::new().access_mode(0x0100).custom_flags(0x0200_0000).open(path)
+}
+
+#[cfg(not(windows))]
+fn open_dir_for_times(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
 }
 
 /// Snapshot of a tree for "state before == state after undo" assertions:

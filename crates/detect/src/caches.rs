@@ -36,6 +36,9 @@ const ELECTRON: &[(&str, &str)] = &[
     ("Visual Studio Code", "Code"),
     ("Microsoft Teams (classic)", "Microsoft/Teams"),
 ];
+/// Its `AppData/Roaming` caches belong to `OfficeLeftovers` (office.rs), so only the
+/// `~/.config` rule is generated here: one file, one card.
+const TEAMS_CLASSIC: &str = "Microsoft/Teams";
 const ELECTRON_CACHES: &[&str] = &["Cache", "Code Cache", "GPUCache", "CachedData", "Service Worker/CacheStorage"];
 
 /// The built-in table. Order is priority: specific rules first, the generic `~/.cache/*` last.
@@ -84,7 +87,10 @@ pub fn builtin_rules() -> Vec<RuleDef> {
     ));
     for (app, dir) in ELECTRON {
         for sub in ELECTRON_CACHES {
-            v.push(rule(app, "App cache", "rebuilt on next start", format!("**/AppData/Roaming/{dir}/{sub}"), d));
+            // RF-8: on Windows the classic Teams caches are listed by the Office leftovers card.
+            if *dir != TEAMS_CLASSIC {
+                v.push(rule(app, "App cache", "rebuilt on next start", format!("**/AppData/Roaming/{dir}/{sub}"), d));
+            }
             v.push(rule(app, "App cache", "rebuilt on next start", format!("**/.config/{dir}/{sub}"), d));
         }
     }
@@ -119,28 +125,57 @@ pub fn builtin_rules() -> Vec<RuleDef> {
         v.push(rule(app, "Shader cache", "rebuilt on demand", pat, d));
     }
     // Crash dumps and error reports.
-    v.push(rule("Windows", "Crash dumps", "only useful for debugging", "**/AppData/Local/CrashDumps", d));
-    v.push(rule("Windows", "Crash dumps", "only useful for debugging", "**/Windows/Minidump", d).review());
-    v.push(rule("Windows", "Memory dump", "only useful for debugging", "**/Windows/MEMORY.DMP", Target::File).review());
+    // RF-11: dumps, reports, logs, temp files and an old installation are disposable, not
+    // rebuildable: nothing recreates them, so they carry no `rebuildable` badge.
+    v.push(
+        rule("Windows", "Crash dumps", "only useful for debugging", "**/AppData/Local/CrashDumps", d).not_rebuildable(),
+    );
+    v.push(
+        rule("Windows", "Crash dumps", "only useful for debugging", "**/Windows/Minidump", d)
+            .review()
+            .not_rebuildable(),
+    );
+    v.push(
+        rule("Windows", "Memory dump", "only useful for debugging", "**/Windows/MEMORY.DMP", Target::File)
+            .review()
+            .not_rebuildable(),
+    );
     for sub in ["ReportArchive", "ReportQueue"] {
-        v.push(rule(
-            "Windows Error Reporting",
-            "Error reports",
-            "only useful for debugging",
-            format!("**/Microsoft/Windows/WER/{sub}"),
-            d,
-        ));
+        v.push(
+            rule(
+                "Windows Error Reporting",
+                "Error reports",
+                "only useful for debugging",
+                format!("**/Microsoft/Windows/WER/{sub}"),
+                d,
+            )
+            .not_rebuildable(),
+        );
     }
-    v.push(rule("System", "Crash reports", "only useful for debugging", "**/var/crash", d).review());
-    v.push(rule("System", "Core dumps", "only useful for debugging", "**/var/lib/systemd/coredump", d).review());
+    v.push(rule("System", "Crash reports", "only useful for debugging", "**/var/crash", d).review().not_rebuildable());
+    v.push(
+        rule("System", "Core dumps", "only useful for debugging", "**/var/lib/systemd/coredump", d)
+            .review()
+            .not_rebuildable(),
+    );
     // Logs (rotated and compressed only; live logs are left alone).
     for pat in
         ["**/var/log/*.gz", "**/var/log/**/*.gz", "**/var/log/*.[0-9]", "**/var/log/*.old", "**/var/log/**/*.[0-9]"]
     {
-        v.push(rule("System logs", "Rotated logs", "already archived by logrotate", pat, Target::File).review());
+        v.push(
+            rule("System logs", "Rotated logs", "already archived by logrotate", pat, Target::File)
+                .review()
+                .not_rebuildable(),
+        );
     }
-    v.push(rule("Desktop session", "Old logs", "replaced at every login", "**/.xsession-errors.old", Target::File));
-    v.push(rule("Xorg", "Old logs", "replaced at every start", "**/.local/share/xorg/*.log.old", Target::File));
+    v.push(
+        rule("Desktop session", "Old logs", "replaced at every login", "**/.xsession-errors.old", Target::File)
+            .not_rebuildable(),
+    );
+    v.push(
+        rule("Xorg", "Old logs", "replaced at every start", "**/.local/share/xorg/*.log.old", Target::File)
+            .not_rebuildable(),
+    );
     // Windows Update leftovers (system folders: never pre-selected).
     v.push(
         rule(
@@ -167,7 +202,8 @@ pub fn builtin_rules() -> Vec<RuleDef> {
             "**/Windows.old",
             d,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
     );
     // Temp folders: children only, never the folder itself, and never anything touched recently.
     v.push(
@@ -178,22 +214,26 @@ pub fn builtin_rules() -> Vec<RuleDef> {
             "**/AppData/Local/Temp/*",
             Target::Any,
         )
-        .aged(),
+        .aged()
+        .not_rebuildable(),
     );
     v.push(
         rule("Windows temp", "Temporary file", "programs recreate what they need", "**/Windows/Temp/*", Target::Any)
             .aged()
+            .not_rebuildable()
             .review(),
     );
     v.push(
         rule("Temp files", "Temporary file", "programs recreate what they need", "/tmp/*", Target::Any)
             .aged()
+            .not_rebuildable()
             .review()
             .runtime_tmp(),
     );
     v.push(
         rule("Temp files", "Temporary file", "programs recreate what they need", "/var/tmp/*", Target::Any)
             .aged()
+            .not_rebuildable()
             .review()
             .runtime_tmp(),
     );
@@ -309,6 +349,52 @@ mod tests {
         w("u/Documents/Cache/mine.txt"); // a user folder merely named Cache
         age(&t.join("u/AppData/Local/Temp/old.bin"), 3);
         t
+    }
+
+    /// RF-8: the classic Teams caches under `AppData/Roaming` belong to the Office leftovers
+    /// card; listing them here too counted them twice.
+    #[test]
+    fn teams_classic_roaming_caches_are_left_to_the_office_card() {
+        let t = TempDir::new("caches-teams").unwrap();
+        t.write("u/AppData/Roaming/Microsoft/Teams/Cache/data_0", b"cachedata").unwrap();
+        t.write("u/AppData/Roaming/Microsoft/Teams/GPUCache/data_1", b"cachedata").unwrap();
+        t.write("u/.config/Microsoft/Teams/Cache/data_0", b"cachedata").unwrap();
+        let out = run(&AppCaches, &index_of(t.path()), &Default::default());
+        assert_eq!(rel(&out, t.path()), vec!["u/.config/Microsoft/Teams/Cache"]);
+    }
+
+    /// RF-7: a temp child folder is aged by the newest thing inside it, not by its own
+    /// mtime (which only moves when a direct child is added or removed).
+    #[test]
+    fn rf7_a_temp_folder_with_a_fresh_file_inside_is_not_listed() {
+        let t = TempDir::new("caches-rf7").unwrap();
+        t.write("u/AppData/Local/Temp/work/out/fresh.bin", b"running").unwrap();
+        t.write("u/AppData/Local/Temp/done/out/old.bin", b"finished").unwrap();
+        let old = mj_core::Timestamp::now().add_days(-3).to_system_time();
+        mj_core::testutil::set_mtime(&t.join("u/AppData/Local/Temp/done/out/old.bin"), old).unwrap();
+        for d in ["work/out", "work", "done/out", "done"] {
+            mj_core::testutil::set_mtime(&t.join("u/AppData/Local/Temp").join(d), old).unwrap();
+        }
+        let out = run(&AppCaches, &index_of(t.path()), &Default::default());
+        assert_eq!(rel(&out, t.path()), vec!["u/AppData/Local/Temp/done"]);
+        assert_eq!(out.diagnostics.skipped["recently_modified"], 1);
+        // RF-11: a temp folder is disposable, not rebuildable.
+        assert!(!out.candidates[0].badges.contains(mj_core::Badges::REBUILDABLE));
+    }
+
+    /// RF-11: a previous Windows installation holds the old user profile; it is never
+    /// labelled rebuildable, and its row does not own a repository inside it.
+    #[test]
+    fn rf11_windows_old_is_not_rebuildable() {
+        let t = TempDir::new("caches-rf11").unwrap();
+        t.write("Windows.old/Users/me/Documents/a.txt", b"old profile").unwrap();
+        t.write("u/AppData/Local/CrashDumps/app.dmp", b"dump").unwrap();
+        let out = run(&AppCaches, &index_of(t.path()), &Default::default());
+        for c in &out.candidates {
+            assert!(!c.badges.contains(mj_core::Badges::REBUILDABLE), "{:?}", c.path);
+            assert_eq!(c.safety_override(), Some(mj_core::SafetyClass::Reversible), "{:?}", c.path);
+        }
+        assert_eq!(out.candidates.len(), 2);
     }
 
     #[test]

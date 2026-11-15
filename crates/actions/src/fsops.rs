@@ -31,9 +31,25 @@ pub struct ContentHash {
     pub sha256: String,
 }
 
+std::thread_local! {
+    static CONTENT_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Number of files this thread opened to read their whole content ([`hash_file`],
+/// [`compare_files`]). Diagnostics and tests (ACT-8: an item is read once, not three or four
+/// times); per thread so that tests running side by side do not disturb each other.
+pub fn content_reads_on_this_thread() -> u64 {
+    CONTENT_READS.with(|c| c.get())
+}
+
+fn count_content_reads(n: u64) {
+    CONTENT_READS.with(|c| c.set(c.get() + n));
+}
+
 /// Stream a file once, computing xxh64 and SHA-256.
 pub fn hash_file(path: &Path) -> Result<ContentHash> {
     let mut f = File::open(path).map_err(|e| Error::io(path, e))?;
+    count_content_reads(1);
     let mut x = Xxh64::new(0);
     let mut s = Sha256::new();
     let mut buf = vec![0u8; BUF];
@@ -52,14 +68,23 @@ pub fn hash_file(path: &Path) -> Result<ContentHash> {
 
 /// Byte-compare two files; returns `Some(sha256 of a)` when equal, `None` when not.
 pub fn compare_files(a: &Path, b: &Path) -> Result<Option<String>> {
+    Ok(compare_files_hashed(a, b)?.map(|h| h.sha256))
+}
+
+/// [`compare_files`] returning the full [`ContentHash`] of the (equal) content, computed in
+/// the same pass, so the caller need not read either file again (ACT-8).
+pub fn compare_files_hashed(a: &Path, b: &Path) -> Result<Option<ContentHash>> {
     let mut fa = File::open(a).map_err(|e| Error::io(a, e))?;
     let mut fb = File::open(b).map_err(|e| Error::io(b, e))?;
+    count_content_reads(2);
     let la = fa.metadata().map_err(|e| Error::io(a, e))?.len();
     let lb = fb.metadata().map_err(|e| Error::io(b, e))?.len();
     if la != lb {
         return Ok(None);
     }
     let mut s = Sha256::new();
+    let mut x = Xxh64::new(0);
+    let mut size = 0u64;
     let mut ba = vec![0u8; BUF];
     let mut bb = vec![0u8; BUF];
     loop {
@@ -69,9 +94,11 @@ pub fn compare_files(a: &Path, b: &Path) -> Result<Option<String>> {
             return Ok(None);
         }
         if n == 0 {
-            return Ok(Some(s.finish_hex()));
+            return Ok(Some(ContentHash { size, xxh64: x.finish(), sha256: s.finish_hex() }));
         }
         s.update(&ba[..n]);
+        x.update(&ba[..n]);
+        size += n as u64;
     }
 }
 
@@ -183,8 +210,62 @@ pub fn set_file_mode(path: &Path, mode: u32) -> Result<()> {
 
 /// Set a file's modification time.
 pub fn set_mtime(path: &Path, t: Timestamp) -> Result<()> {
-    let f = OpenOptions::new().write(true).open(path).map_err(|e| Error::io(path, e))?;
-    f.set_modified(t.to_system_time()).map_err(|e| Error::io(path, e))
+    with_write_handle(path, |f| f.set_modified(t.to_system_time()))
+}
+
+/// Run `op` on a writable handle of one of MyJanitor's own new files (an optimiser output,
+/// a link replacement, an archive). ACT-3: such a file may already carry the read-only
+/// permissions copied from the user's original, which refuse a writable handle (the
+/// read-only attribute on Windows, a mode without the owner's write bit on Unix for anyone
+/// but root). The file is then made owner-writable for the call and its permissions are put
+/// back afterwards (which changes neither its content nor its modification time).
+fn with_write_handle(path: &Path, op: impl Fn(&File) -> std::io::Result<()>) -> Result<()> {
+    let first = OpenOptions::new().write(true).open(path);
+    let err = match first {
+        Ok(f) => return op(&f).map_err(|e| Error::io(path, e)),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => e,
+        Err(e) => return Err(Error::io(path, e)),
+    };
+    let Ok(perms) = fs::metadata(path).map(|m| m.permissions()) else { return Err(Error::io(path, err)) };
+    fs::set_permissions(path, owner_writable(&perms)).map_err(|_| Error::io(path, err))?;
+    let r = OpenOptions::new().write(true).open(path).and_then(|f| op(&f));
+    let back = fs::set_permissions(path, perms);
+    r.map_err(|e| Error::io(path, e))?;
+    back.map_err(|e| Error::io(path, e))
+}
+
+#[cfg(unix)]
+fn owner_writable(p: &fs::Permissions) -> fs::Permissions {
+    use std::os::unix::fs::PermissionsExt;
+    fs::Permissions::from_mode(p.mode() | 0o200)
+}
+
+#[cfg(not(unix))]
+fn owner_writable(p: &fs::Permissions) -> fs::Permissions {
+    let mut w = p.clone();
+    // Windows: clears only the read-only attribute (no world-writable bits exist there).
+    #[allow(clippy::permissions_set_readonly_false)]
+    w.set_readonly(false);
+    w
+}
+
+/// Rename one of MyJanitor's own new files over `dst`, replacing it (the caller has verified
+/// that replacing is intended). Windows refuses to replace a file that carries the read-only
+/// attribute, so there the attribute is cleared on `dst` for the retry and put back if the
+/// retry fails too. Unix replaces a read-only file by rename as usual.
+pub fn rename_replacing(temp: &Path, dst: &Path) -> std::io::Result<()> {
+    let err = match fs::rename(temp, dst) {
+        Ok(()) => return Ok(()),
+        Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied => e,
+        Err(e) => return Err(e),
+    };
+    let Ok(perms) = fs::symlink_metadata(dst).map(|m| m.permissions()) else { return Err(err) };
+    if !perms.readonly() || fs::set_permissions(dst, owner_writable(&perms)).is_err() {
+        return Err(err);
+    }
+    fs::rename(temp, dst).inspect_err(|_| {
+        let _ = fs::set_permissions(dst, perms);
+    })
 }
 
 /// A free sibling name: `name.ext`, `name (1).ext`, ... (lstat existence; Windows reserved
@@ -604,8 +685,7 @@ pub static SYNCED_OUTPUTS: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 /// journal record. Failure is an error: the original then stays where it is.
 pub fn sync_output(path: &Path) -> Result<()> {
     // Opened for writing (never truncated): Windows flushes only a writable handle.
-    let f = OpenOptions::new().write(true).open(path).map_err(|e| Error::io(path, e))?;
-    f.sync_all().map_err(|e| Error::io(path, e))?;
+    with_write_handle(path, |f| f.sync_all())?;
     SYNCED_OUTPUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }

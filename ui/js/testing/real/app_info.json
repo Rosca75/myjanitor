@@ -15,5 +15,6 @@
   "name": "MyJanitor",
   "platform": "linux",
   "portable": false,
+  "trash_route": "quarantine",
   "version": "0.1.0"
 }

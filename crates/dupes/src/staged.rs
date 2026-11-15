@@ -26,6 +26,7 @@
 //! `skipped["changed_during_scan"]`. Neither is ever treated as "unique".
 
 pub mod adaptive;
+mod flight;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
@@ -129,13 +130,25 @@ pub fn exact_groups(ctx: &DetectContext<'_>, files: &[&FileEntry], diag: &mut Di
     // Stage 3: partial hashes.
     ctx.cancel.checkpoint()?;
     let need: Vec<usize> = candidates.iter().copied().filter(|k| state[k].partial.is_none()).collect();
-    let results = read_all(ctx, &need, &eligible, diag, |e| read_partial(&e.path, e.size))?;
+    // DUP-7: reads are single-flight across concurrent detectors and stored as they land.
+    let results = read_all(ctx, &need, &eligible, diag, |e| {
+        flight::shared(
+            ctx.fingerprints,
+            ctx.cancel,
+            e,
+            flight::Stage::Partial,
+            |fp| fp.partial.map(|p| State { partial: Some(p), full: fp.full, sha: fp.sha256 }),
+            || {
+                let st = read_partial(&e.path, e.size)?;
+                let fp = Fingerprints { partial: st.partial, full: st.full, sha256: st.sha, ..Default::default() };
+                Ok((st, fp))
+            },
+        )
+    })?;
     for (k, r) in need.iter().zip(results) {
         let e = eligible[*k];
         match r {
             Ok(st) => {
-                let fp = Fingerprints { partial: st.partial, full: st.full, sha256: st.sha, ..Default::default() };
-                ctx.fingerprints.put(&e.path, e.stamp(), fp);
                 state.insert(*k, st);
             }
             Err(err) => {
@@ -156,13 +169,23 @@ pub fn exact_groups(ctx: &DetectContext<'_>, files: &[&FileEntry], diag: &mut Di
     ctx.cancel.checkpoint()?;
     let need: Vec<usize> =
         colliding.iter().copied().filter(|k| state[k].full.is_none() || state[k].sha.is_none()).collect();
-    let results = read_all(ctx, &need, &eligible, diag, |e| hash_full(&e.path, e.size))?;
+    let results = read_all(ctx, &need, &eligible, diag, |e| {
+        flight::shared(
+            ctx.fingerprints,
+            ctx.cancel,
+            e,
+            flight::Stage::Full,
+            |fp| fp.full.zip(fp.sha256),
+            || {
+                let (full, sha) = hash_full(&e.path, e.size)?;
+                Ok(((full, sha), Fingerprints { full: Some(full), sha256: Some(sha), ..Default::default() }))
+            },
+        )
+    })?;
     for (k, r) in need.iter().zip(results) {
         let e = eligible[*k];
         match r {
             Ok((full, sha)) => {
-                let fp = Fingerprints { full: Some(full), sha256: Some(sha), ..Default::default() };
-                ctx.fingerprints.put(&e.path, e.stamp(), fp);
                 let s = state.entry(*k).or_default();
                 s.full = Some(full);
                 s.sha = Some(sha);

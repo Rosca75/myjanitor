@@ -14,6 +14,7 @@ import { reportActions } from './ctl-report.js';
 import { searchActions } from './ctl-search.js';
 import { diskActions } from './ctl-disk.js';
 import { copy } from './copy.js';
+import { lastReportOf } from './lib/last-report.js';
 import { createGens } from './lib/gens.js';
 import { toErrorInfo, isUnavailable } from './errors.js';
 
@@ -71,6 +72,15 @@ export function createController({ api, store }) {
     }
   };
 
+  /**
+   * Ask for a folder in the operating system's own folder dialog (docs/IPC.md 3.1).
+   * Resolves to the chosen path, or null when the user cancelled: callers then do
+   * nothing at all. Errors (a dialog is already open) reject like any command.
+   * @param {string} title @param {string | null} [startDir] folder the dialog opens in
+   * @returns {Promise<string | null>}
+   */
+  ctx.pickFolder = async (title, startDir) => (await api.dialogPickFolder({ title, ...(startDir ? { start_dir: startDir } : {}) })) ?? null;
+
   const a = ctx.actions;
   Object.assign(a, coreActions(ctx), stepActions(ctx), applyActions(ctx), miscActions(ctx), historyActions(ctx), reportActions(ctx), searchActions(ctx), diskActions(ctx), { notify: ctx.notify });
   return a;
@@ -79,7 +89,7 @@ export function createController({ api, store }) {
 /** Drop `progress` from a ScanStatus: it lives in `scanProgress`. @param {any} status */
 export const withoutProgress = (status) => { const { progress, ...rest } = status; void progress; return rest; };
 
-/** Start-up, navigation, scan, scope, folder browser, overview data and plan. @param {any} c */
+/** Start-up, navigation, scan, scope, overview data and plan. @param {any} c */
 function coreActions(c) {
   const { api, set, get, guard } = c;
   /** @template T @param {Promise<T>} p @param {any} fallback */
@@ -92,9 +102,28 @@ function coreActions(c) {
     if (c.gens.current('opps', g)) set({ opps, drives }); // a newer refresh is on its way: ignore this stale answer
   };
 
+  /** Has scan://done of `generation` (or a newer one) already arrived? @param {number} generation */
+  const doneAlready = (generation) => (get().scanDoneGen ?? 0) >= generation;
+  /**
+   * The answer of scan_pause / scan_resume / scan_stop, unless it is older news than a
+   * scan://done that overtook it (UI-4: else the overview would stay "Stopping…").
+   * @param {any} status
+   */
+  const applyScanAnswer = (status) => {
+    if (['scanning', 'paused', 'stopping'].includes(status.state) && doneAlready(status.generation)) return;
+    set({ scan: withoutProgress(status) });
+  };
+
+  /** Overview cards, plus the category list when one is shown (UI-5). */
+  const refreshVisible = async () => {
+    const name = get().route.name;
+    await Promise.all([refreshOpps(), ['clean', 'optimise', 'archive'].includes(name) ? c.actions.loadCategory(name) : null]);
+  };
+  let stepRefreshQueued = false;
+
   const refreshHistory = async () => {
-    const [history, lastReport] = await Promise.all([soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] }), soft(api.reportLast(), null)]);
-    set({ history, lastReport, undoable: history.runs.some((r) => r.undoable) });
+    const history = await soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] });
+    set({ history, lastReport: lastReportOf(history), undoable: history.runs.some((r) => r.undoable) });
   };
   /** A start-up read that may fail without stopping the app: toast it, use the fallback. */
   const startup = (p, fallback) => p.catch((e) => { c.fail(e); return fallback; });
@@ -114,8 +143,26 @@ function coreActions(c) {
       if (info?.launch?.mode === 'optimise') c.actions.navigate('optimise');
       else if (info?.launch?.mode === 'duplicates') c.actions.navigate('clean');
     },
-    refreshOpps: guard(refreshOpps),
+    /**
+     * Re-read the cards the user can see: the Overview's and, on Clean / Optimise /
+     * Archive, that list too (UI-5: else "+ Add" stays after adding and sizes go stale).
+     */
+    refreshOpps: guard(refreshVisible),
     refreshHistory: guard(refreshHistory),
+    /**
+     * UI-6: re-read the open step review and the Custom-search results after a rescan or
+     * an apply. Events of one change arrive together: they make one refresh.
+     */
+    refreshOpenStep() {
+      if (stepRefreshQueued) return;
+      stepRefreshQueued = true;
+      setTimeout(() => {
+        stepRefreshQueued = false;
+        const s = get();
+        if (s.route.name === 'step' && s.step) void c.actions.refreshStep();
+        if (s.custom?.step) void c.actions.custom_refreshStep();
+      }, 0);
+    },
 
     /** Hash-free router: the route lives in the store. @param {string} name @param {object} [params] */
     navigate(name, params = {}) {
@@ -135,62 +182,36 @@ function coreActions(c) {
     // ---------------------------------------------------------------- scope
     removeRoot: guard(async (path) => set({ scope: await api.scopeRemoveRoot({ path }) })),
     /**
-     * Open the in-app folder browser. Modes: scope (add a location), move, keep
-     * (preferred folder of a keep rule) and export (choose where to save; also
-     * carries the file name and what to export).
-     * @param {{ mode?: 'scope'|'move'|'copy'|'keep'|'export', exportJob?: any, filename?: string }} [opts]
+     * "+ Add location": choose a folder in the operating system's folder dialog and
+     * add it to the scan scope. A cancelled dialog changes nothing.
      */
-    async openBrowser(opts = {}) {
-      const mode = opts.mode ?? 'scope';
-      const extra = { exportJob: opts.exportJob ?? null, filename: opts.filename ?? '' };
-      set({ browser: { mode, ...extra, path: '', parent: null, entries: [], places: [], loading: true } });
+    addLocation: guard(async () => {
+      const path = await c.pickFolder(copy.dialogs.addLocation);
+      if (path) set({ scope: await api.scopeAddRoot({ path }) });
+    }),
+    /**
+     * IPC-7: re-read the engine's scope after a scan. A scheduled run scans its own
+     * folders and the session scope becomes theirs; the chips follow so they always
+     * name the folders the results describe. A failed read keeps the chips as they are.
+     */
+    async refreshScope() {
       try {
-        const first = await api.fsListDir({});
-        set({ browser: { mode, ...extra, path: '', parent: null, entries: [], places: first.places, loading: false } });
-        const start = (mode === 'export' && first.places.find((p) => p.kind === 'documents')) || first.places[0];
-        if (start) await c.actions.browseTo(start.path);
-      } catch (e) {
-        c.fail(e);
-        set({ browser: null });
-      }
+        const scope = await api.scopeGet();
+        if (JSON.stringify(scope) !== JSON.stringify(get().scope)) set({ scope });
+      } catch { /* the next scan or scope change refreshes it */ }
     },
-    /** @param {string} path */
-    browseTo: guard(async (path) => {
-      const prev = get().browser;
-      set({ browser: { ...prev, loading: true } });
-      const r = await api.fsListDir({ path, show_hidden: false, include_files: false });
-      set({ browser: { ...prev, path: r.path, parent: r.parent ?? null, entries: r.entries, places: r.places, loading: false } });
-    }),
-    closeBrowser: () => set({ browser: null }),
-    /** "Choose this folder": add it to the scan scope. */
-    chooseFolder: guard(async () => {
-      const b = get().browser;
-      if (!b?.path) return;
-      if (b.mode === 'move' || b.mode === 'copy') {
-        set({ browser: null });
-        await c.actions.setStepAction(b.mode, b.path);
-        return;
-      }
-      if (b.mode === 'keep') {
-        set({ browser: null });
-        await c.actions.applyKeepRule('preferred_folder', b.path);
-        return;
-      }
-      if (b.mode === 'export') {
-        await c.actions.finishExport();
-        return;
-      }
-      set({ scope: await api.scopeAddRoot({ path: b.path }), browser: null });
-    }),
 
     // ----------------------------------------------------------------- scan
     startScan: guard(async () => {
       const r = await api.scanStart({});
-      set({ scan: { ...get().scan, state: 'scanning', generation: r.generation }, scanProgress: null, detectors: {}, completed: null });
+      // UI-4: events and command answers travel on separate channels; a scan this short may
+      // already have reported done, and that state must stay.
+      if (doneAlready(r.generation)) set({ completed: null });
+      else set({ scan: { ...get().scan, state: 'scanning', generation: r.generation }, scanProgress: null, detectors: {}, completed: null });
     }),
-    pauseScan: guard(async () => set({ scan: withoutProgress(await api.scanPause()) })),
-    resumeScan: guard(async () => set({ scan: withoutProgress(await api.scanResume()) })),
-    stopScan: guard(async () => set({ scan: withoutProgress(await api.scanStop()) })),
+    pauseScan: guard(async () => applyScanAnswer(await api.scanPause())),
+    resumeScan: guard(async () => applyScanAnswer(await api.scanResume())),
+    stopScan: guard(async () => applyScanAnswer(await api.scanStop())),
 
     // ------------------------------------------------------------- overview
     /** @param {string} tab */
@@ -204,10 +225,10 @@ function coreActions(c) {
     addToPlan: guard(async (id) => {
       const action = get().pendingActions[id];
       set({ plan: await api.planAddStep({ opportunity_id: id, ...(action ? { action } : {}) }) });
-      await refreshOpps();
+      await refreshVisible();
     }),
     /** @param {number} stepId */
-    removeStep: guard(async (stepId) => { set({ plan: await api.planRemoveStep({ step_id: stepId }) }); await refreshOpps(); }),
+    removeStep: guard(async (stepId) => { set({ plan: await api.planRemoveStep({ step_id: stepId }) }); await refreshVisible(); }),
     /** Move a step up (-1) or down (+1) with the arrow buttons or the keyboard. @param {number} stepId @param {number} delta */
     moveStep: guard(async (stepId, delta) => {
       const ids = get().plan.steps.map((s) => s.id);

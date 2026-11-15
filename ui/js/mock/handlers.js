@@ -3,8 +3,10 @@
  * The command table of the mock backend. Every handler takes the request and
  * returns exactly the docs/IPC.md response type; failures throw ErrorInfo.
  */
-import { FS, GB } from './fixtures.js';
+import { GB } from './fixtures.js';
 import { buildCandidates } from './candidates.js';
+import { orderPage } from './review-order.js';
+import { PNG_B64 } from './preview-data.js';
 
 /** @param {string} code @param {string} message @param {string} [hint] */
 export const fail = (code, message, hint = 'Check the request and try again.') => ({ code, message, hint });
@@ -62,6 +64,26 @@ function keeperOf(members, rule) {
 }
 
 /** Deterministic waveform for the preview. @param {any} row */
+/**
+ * ENG-7: the kept badge follows the selection, as in the engine: in every group the member
+ * that survives the removal of the selected rows carries it (unchanged when all are selected).
+ * @param {any} m @param {string} oppId
+ */
+function syncKeepers(m, oppId) {
+  const sel = m.selection.get(oppId) ?? new Set();
+  for (const g of m.groups.get(oppId) ?? []) {
+    const members = (m.rows.get(oppId) ?? []).filter((r) => r.group === g.id);
+    const left = (r) => !sel.has(r.id);
+    const survivor = members.find((r) => r.path === g.keeper && left(r)) ?? members.find(left);
+    if (!survivor) continue;
+    g.keeper = survivor.path;
+    for (const r of members) {
+      const others = (r.badges ?? []).filter((b) => b !== 'keeper');
+      r.badges = r === survivor ? [...others, 'keeper'] : others;
+    }
+  }
+}
+
 function waveform(row) {
   const peaks = [];
   let x = row.id * 9301 + 49297;
@@ -137,14 +159,6 @@ export function createHandlers(m, sim, emit) {
       return m.scope;
     },
     scope_remove_root: (req) => { m.scope.roots = m.scope.roots.filter((r) => lc(r) !== lc(req.path)); return m.scope; },
-    fs_list_dir: (req) => {
-      if (!req.path) return { path: '', entries: [], places: FS.places };
-      const p = String(req.path);
-      const names = FS.dirs[p] ?? FS.dirs[p.replace(/[\\/]+$/, '')] ?? [];
-      const parent = p.length <= 3 ? undefined : p.slice(0, Math.max(p.lastIndexOf('\\'), 2) + (p.lastIndexOf('\\') === 2 ? 1 : 0));
-      const join = (n) => `${p.replace(/\\$/, '')}\\${n}`;
-      return { path: p, ...(parent ? { parent } : {}), entries: names.map((n) => ({ name: n, path: join(n), is_dir: true, is_link: false, hidden: false })), places: FS.places };
-    },
 
     scan_start: (req) => {
       if (m.scan.state === 'scanning' || m.scan.state === 'paused') throw fail('conflict', 'A scan is already running', 'Wait for it to finish or stop it.');
@@ -169,22 +183,28 @@ export function createHandlers(m, sim, emit) {
     },
     candidates_page: (req) => {
       const o = needOpp(req.opportunity_id);
-      let list = [...(m.rows.get(o.id) ?? [])];
-      if (req.sub_group) list = list.filter((r) => r.sub_group === req.sub_group);
-      if (req.filter) list = list.filter((r) => lc(r.path).includes(lc(req.filter)));
-      const key = { saving: (r) => r.size - r.size_after, size: (r) => r.size, modified: (r) => r.modified, name: (r) => lc(r.path.split('\\').pop()), path: (r) => lc(r.path) }[req.sort ?? 'group'];
-      if (key) list.sort((a, b) => (key(a) > key(b) ? 1 : key(a) < key(b) ? -1 : 0));
-      if (req.descending) list.reverse();
+      const groups = m.groups.get(o.id) ?? [];
       const limit = Math.min(500, Math.max(1, req.limit ?? 100));
-      const page = list.slice(req.offset ?? 0, (req.offset ?? 0) + limit);
-      const gs = new Set(page.map((r) => r.group).filter(Boolean));
-      return { opportunity_id: o.id, total: list.length, offset: req.offset ?? 0, rows: page.map((r) => rowJson(m, o.id, r)), groups: (m.groups.get(o.id) ?? []).filter((g) => gs.has(g.id)) };
+      const res = orderPage([...(m.rows.get(o.id) ?? [])], req, limit, groups.length > 0);
+      const gs = new Set(res.rows.map((r) => r.group).filter(Boolean));
+      return { opportunity_id: o.id, total: res.total, offset: res.offset, rows: res.rows.map((r) => rowJson(m, o.id, r)), groups: groups.filter((g) => gs.has(g.id)), group_stats: res.stats.filter((g) => gs.has(g.id)), has_groups: groups.length > 0, keep_groups: res.grouped, page: res.page, pages: res.pages, next_offset: res.next, prev_offset: res.prev };
+    },
+    // W6-A stand-in: every image row gets the same small generated PNG.
+    candidate_thumbnails: (req) => {
+      if ((req.candidate_ids ?? []).length > 100) throw fail('invalid_input', 'at most 100 thumbnails per call');
+      const list = m.rows.get(needOpp(req.opportunity_id).id) ?? [];
+      return { thumbnails: (req.candidate_ids ?? []).map((id) => {
+        const r = list.find((x) => x.id === id);
+        if (!r) return { candidate_id: id, reason: 'unknown' };
+        return /\.(jpe?g|png|gif|webp|bmp)$/i.test(r.path) ? { candidate_id: id, data_url: `data:image/png;base64,${PNG_B64}` } : { candidate_id: id, reason: 'not_image' };
+      }) };
     },
     selection_set: (req) => {
       const o = needOpp(req.opportunity_id);
       const sel = m.selection.get(o.id) ?? new Set();
       let list = m.rows.get(o.id) ?? [];
-      if (req.ids) { const ids = new Set(req.ids); list = list.filter((r) => ids.has(r.id)); } else if (req.sub_group) list = list.filter((r) => r.sub_group === req.sub_group);
+      // ENG-3: without ids, exactly the rows the table query shows (tab, filters, grouping).
+      if (req.ids) { const ids = new Set(req.ids); list = list.filter((r) => ids.has(r.id)); } else list = orderPage([...list], { sub_group: req.sub_group, filter: req.filter, min_size: req.min_size, keep_groups: req.keep_groups, sort: 'path', offset: 0 }, Number.MAX_SAFE_INTEGER, (m.groups.get(o.id) ?? []).length > 0).rows;
       for (const r of list) {
         if (r.badges.includes('protected') || o.safety === 'review_only') continue;
         // F-02: "Select all" (no ids) never selects the copy a group keeps.
@@ -192,6 +212,7 @@ export function createHandlers(m, sim, emit) {
         if (req.selected) sel.add(r.id); else sel.delete(r.id);
       }
       m.selection.set(o.id, sel);
+      syncKeepers(m, o.id);
       touched(o.id);
       return m.summary(o.id);
     },
@@ -210,15 +231,18 @@ export function createHandlers(m, sim, emit) {
         g.keeper = keeper.path;
       }
       m.selection.set(o.id, sel);
-      o.params = { ...o.params, keep_rule: req.rule.rule };
+      // DUP-2, as the engine: the rule (and its folder) become the opportunity's parameters.
+      const recorded = { keep_rule: req.rule.rule, ...(req.rule.rule === 'preferred_folder' ? { preferred_folder: req.rule.folder } : {}) };
+      o.params = { ...o.params, ...recorded };
       const st = m.step(o.id);
-      if (st) st.params = { ...st.params, keep_rule: req.rule.rule };
+      if (st) st.params = { ...st.params, ...recorded };
       touched(o.id);
       return m.summary(o.id);
     },
     selection_reset: (req) => {
       const o = needOpp(req.opportunity_id);
       m.selection.set(o.id, new Set((m.rows.get(o.id) ?? []).filter((r) => r.default_selected).map((r) => r.id)));
+      syncKeepers(m, o.id);
       touched(o.id);
       return m.summary(o.id);
     },
@@ -265,7 +289,7 @@ export function createHandlers(m, sim, emit) {
       return structuredClone(o);
     },
     presets_list: () => [
-      { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Anything in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }] }, topmost_only: false, builtin: true },
+      { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Files in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'kind', kind: 'file' } }, { cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }] }, topmost_only: false, builtin: true },
       ...m.presets,
     ],
     preset_save: notYet('preset_save'),
@@ -407,6 +431,7 @@ export function createHandlers(m, sim, emit) {
       if (!s.name) throw fail('invalid_input', 'A schedule needs a name', 'Type a name.');
       if (!s.steps?.length) throw fail('invalid_input', 'A schedule needs at least one step', 'Save it from a plan.');
       if (s.steps.some((st) => st.action?.kind === 'permanent_delete' || st.action?.originals?.policy === 'delete')) throw fail('invalid_input', 'Lossy and permanent steps never run unattended', 'Remove those steps.');
+      if (s.steps.some((st) => String(st.opportunity).startsWith('custom:'))) throw fail('invalid_input', 'A custom search cannot be scheduled (its rule is not saved with a schedule)', 'Remove it from the plan first.');
       if (m.schedules.some((x) => x.id !== s.id && x.name.toLowerCase() === s.name.toLowerCase())) throw fail('invalid_input', `A schedule named "${s.name}" already exists`, 'Choose another name.');
       if (!s.id) s.id = `sched_${m.schedules.reduce((a, x) => Math.max(a, Number(String(x.id).replace('sched_', '')) || 0), 0) + 1}`;
       s.next_run = s.enabled ? m.nowNs() + 7 * 86_400_000_000_000 : null;
@@ -423,6 +448,7 @@ export function createHandlers(m, sim, emit) {
     schedule_from_plan: (req) => {
       if (m.plan.steps.some((s) => s.safety === 'lossy_opt_in' || s.safety === 'permanent')) throw fail('invalid_input', 'Lossy and permanent steps never run unattended', 'Remove those steps from the plan to save a schedule.');
       if (!m.plan.steps.length) throw fail('invalid_input', 'The plan is empty', 'Add a step first.');
+      if (m.plan.steps.some((st) => String(st.opportunity).startsWith('custom:'))) throw fail('invalid_input', 'A custom search cannot be scheduled (its rule is not saved with a schedule)', 'Remove it from the plan first.');
       const s = { id: `sched_${m.schedules.length + 1}`, name: req.name, enabled: true, cadence: req.cadence, scope: { roots: m.scope.roots }, steps: m.plan.steps.map((st) => ({ opportunity: st.opportunity, action: st.action, params: st.params })), last_run: null, next_run: m.nowNs() + 7 * 86_400_000_000_000 };
       m.schedules.push(s);
       return structuredClone(s);
@@ -431,6 +457,8 @@ export function createHandlers(m, sim, emit) {
       const s = m.schedules.find((x) => x.id === req.id) ?? (() => { throw fail('invalid_input', `Unknown schedule ${req.id}`, 'Reload the list.'); })();
       if (m.plan.steps.length) throw fail('conflict', 'A plan is in progress: apply or clear it before running a schedule', 'Apply or clear the plan first.');
       s.last_run = m.nowNs();
+      // Like the engine: the run scans the schedule's folders, which become the session scope.
+      m.scope = { ...m.scope, roots: [...s.scope.roots] };
       return sim.startScheduleJob(s);
     },
     tools_list: () => m.tools,

@@ -24,14 +24,11 @@ async function open(query) {
 }
 const shot = (page, name) => page.screenshot({ path: join(out, `${name}.png`) });
 
-// 1. empty state, then the folder browser
+// 1. empty state, then a location added (the mock stands in for the OS folder dialog)
 let page = await open('scenario=empty');
 await page.waitForSelector('.welcome');
 await shot(page, 'empty-state');
 await page.click('[data-fk="add-folder"]');
-await page.waitForSelector('.browser__entry');
-await shot(page, 'folder-browser');
-await page.click('[data-fk="browser-choose"]');
 await page.waitForSelector('.chip');
 await shot(page, 'empty-state-with-folder');
 

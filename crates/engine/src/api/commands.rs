@@ -1,5 +1,10 @@
 //! The command and event registry (names, request and response type names).
 //! Every Tauri command, CLI sub-command and mock handler maps to one entry.
+//!
+//! Two tables: [`COMMANDS`] are the engine operations (one `Engine` method each,
+//! shared by the GUI, the CLI and schedules); [`SHELL_COMMANDS`] are the few
+//! commands only the GUI shell can answer because they need its window (the
+//! native file dialogs). Both are part of the one IPC contract in `docs/IPC.md`.
 
 /// One command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,6 +19,18 @@ pub struct CommandSpec {
     pub module: &'static str,
     /// Long-running: the engine method takes `self: &Arc<Engine>` and returns at once.
     pub spawns: bool,
+}
+
+/// One shell command: implemented by the GUI shell (`src-tauri/src/dialogs.rs`),
+/// not by an `Engine` method, and absent from the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellCommandSpec {
+    /// Command name (`invoke` name).
+    pub name: &'static str,
+    /// Request type (sent as the `req` argument).
+    pub request: &'static str,
+    /// Response type.
+    pub response: &'static str,
 }
 
 /// One event.
@@ -46,13 +63,6 @@ pub const COMMANDS: &[CommandSpec] = &[
         request: Some("ScopePathRequest"),
         response: "ScanScope",
         module: "scope",
-        spawns: false,
-    },
-    CommandSpec {
-        name: "fs_list_dir",
-        request: Some("FsListDirRequest"),
-        response: "FsListDirResponse",
-        module: "fsbrowse",
         spawns: false,
     },
     CommandSpec {
@@ -120,6 +130,13 @@ pub const COMMANDS: &[CommandSpec] = &[
         request: Some("CandidatePreviewRequest"),
         response: "Preview",
         module: "steps",
+        spawns: false,
+    },
+    CommandSpec {
+        name: "candidate_thumbnails",
+        request: Some("CandidateThumbnailsRequest"),
+        response: "CandidateThumbnails",
+        module: "thumbs",
         spawns: false,
     },
     CommandSpec {
@@ -349,6 +366,12 @@ pub const COMMANDS: &[CommandSpec] = &[
         module: "disk",
         spawns: false,
     },
+];
+
+/// Every shell command, in IPC.md order (documented after the engine commands).
+pub const SHELL_COMMANDS: &[ShellCommandSpec] = &[
+    ShellCommandSpec { name: "dialog_pick_folder", request: "DialogPickFolderRequest", response: "DialogPath" },
+    ShellCommandSpec { name: "dialog_save_file", request: "DialogSaveFileRequest", response: "DialogPath" },
 ];
 
 /// Every event, in IPC.md order.

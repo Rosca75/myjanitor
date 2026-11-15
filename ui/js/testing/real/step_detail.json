@@ -15,6 +15,7 @@
       "quarantine",
       "permanent_delete",
       "move",
+      "copy",
       "hardlink",
       "reflink"
     ],
@@ -38,6 +39,7 @@
     ],
     "id": "det:exact_duplicates",
     "in_plan": true,
+    "overlap": 0,
     "params": {
       "keep_rule": "oldest",
       "preferred_folder": ""
@@ -99,6 +101,8 @@
     },
     "sub_groups": [],
     "title": "Exact duplicates",
+    "to_review": 0,
+    "to_review_count": 0,
     "unit": "files"
   },
   "safety": "reversible",

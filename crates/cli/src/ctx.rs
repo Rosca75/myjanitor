@@ -124,6 +124,14 @@ impl Ctx {
         cfg.purge_at_start = false;
         let engine = Engine::new(cfg)?;
         if is_acting(a) {
+            // IPC-6: another MyJanitor holds the data folder: say so before any rescan,
+            // dry run or typed confirmation, not after them.
+            if let Some(why) = engine.instance_conflict() {
+                return Err(Fail::Error(format!(
+                    "{why}: close it or wait for it to finish, then try again (only one MyJanitor may change \
+                     files at a time)"
+                )));
+            }
             engine.quarantine_auto_purge();
         }
         // AUT-07: a configured temp folder becomes this process's temp folder.

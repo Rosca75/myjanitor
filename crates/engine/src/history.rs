@@ -175,8 +175,11 @@ impl Engine {
             let _ = engine.journal.put_run(&finished);
             engine.emit(Event::HistoryChanged(HistoryChanged { run_id: Some(run.run_id) }));
             match res {
-                Ok(o) => JobResult { outcome: Some(o), error: None, report: true },
-                Err(e) => JobResult { outcome: None, error: Some(e), report: true },
+                Ok(o) => {
+                    let complete = o.succeeded + o.skipped + o.failed >= entries.len() as u64;
+                    JobResult { outcome: Some(o), error: None, report: true, complete }
+                }
+                Err(e) => JobResult { outcome: None, error: Some(e), report: true, complete: false },
             }
         });
         self.enqueue(vec![(job.clone(), body)])?;
@@ -260,6 +263,23 @@ impl Engine {
         freed
     }
 
+    /// IPC-2: the GUI's start-up purge. The engine is built with `purge_at_start` off (the
+    /// window must not wait for it) and the shell calls this once the engine is managed:
+    /// when at least one quarantined item has passed its retention, the same purge as the
+    /// automatic one (each item's own retention) is queued as a job, so it runs in queue
+    /// order with applies and undos and reports through `job://` events. `None` when
+    /// nothing has expired (no empty job on a normal start) or files may not be changed.
+    pub fn quarantine_purge_if_due(self: &Arc<Self>) -> Result<Option<Job>> {
+        if self.require_writable().is_err() {
+            return Ok(None);
+        }
+        let now = Timestamp::now();
+        if !self.quarantine_items().iter().any(|i| i.expires <= now) {
+            return Ok(None);
+        }
+        self.quarantine_purge(QuarantinePurgeRequest { older_than_days: None }).map(Some)
+    }
+
     /// Every item held in the quarantine (CLI `quarantine list`), oldest first.
     pub fn quarantine_items(&self) -> Vec<crate::api::QuarantineItem> {
         let default_days = lock(&self.settings).general.quarantine_days;
@@ -289,23 +309,22 @@ impl Engine {
         let explicit = req.older_than_days;
         let info = self.quarantine_info()?;
         let job = self.new_job(JobKind::PurgeQuarantine, None, None, "Empty quarantine", info.items, info.bytes);
-        let body: Work = Box::new(move |engine, _ctx| {
+        let body: Work = Box::new(move |engine, ctx| {
             // F-15: without an explicit age, each item keeps its own step's retention.
+            // ENG-10: pause and cancel act between items.
             let (j, q, now) = (&engine.journal, &engine.cfg.quarantine_dir, Timestamp::now());
-            let res = match explicit {
-                Some(days) => mj_actions::quarantine::purge(j, q, now, days),
-                None => mj_actions::quarantine::purge_expired(j, q, now, default_days),
-            };
+            let res = mj_actions::quarantine::purge_with(j, q, now, explicit, default_days, ctx.cancel);
             match res {
-                Ok(freed) => {
-                    engine.emit(Event::HistoryChanged(HistoryChanged { run_id: None }));
-                    JobResult {
-                        outcome: Some(mj_core::JobOutcome { bytes_saved: freed, ..Default::default() }),
-                        error: None,
-                        report: false,
+                Ok(o) => {
+                    if o.items > 0 {
+                        engine.emit(Event::HistoryChanged(HistoryChanged { run_id: None }));
                     }
+                    let outcome =
+                        mj_core::JobOutcome { succeeded: o.items, bytes_saved: o.bytes, ..Default::default() };
+                    let error = o.stopped.then_some(Error::Cancelled);
+                    JobResult { outcome: Some(outcome), error, report: false, complete: !o.stopped }
                 }
-                Err(e) => JobResult { outcome: None, error: Some(e), report: false },
+                Err(e) => JobResult { outcome: None, error: Some(e), report: false, complete: false },
             }
         });
         self.enqueue(vec![(job.clone(), body)])?;

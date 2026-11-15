@@ -26,6 +26,9 @@ pub(crate) struct JobResult {
     pub error: Option<Error>,
     /// `report_get` works for the job's run.
     pub report: bool,
+    /// ENG-10: the body did all its work. A job whose token was cancelled after its last
+    /// item is reported by what it did (completed), not as cancelled.
+    pub complete: bool,
 }
 
 /// Body of a job.
@@ -186,9 +189,13 @@ impl Engine {
             me.emit(Event::JobProgress(ev));
         });
         let ctx = JobCtx { job_id: id, cancel: &token, progress: &progress };
-        let result = catch_unwind(AssertUnwindSafe(|| work(self, &ctx))).unwrap_or_else(|_| JobResult {
-            error: Some(Error::Internal("the job stopped unexpectedly".into())),
-            ..Default::default()
+        let result = catch_unwind(AssertUnwindSafe(|| work(self, &ctx))).unwrap_or_else(|p| {
+            let text = mj_core::diag::panic_text(&*p);
+            self.log("ERROR", &format!("job {} stopped unexpectedly: {text}", id.0));
+            JobResult {
+                error: Some(Error::Internal(format!("the job stopped unexpectedly: {text}"))),
+                ..Default::default()
+            }
         });
         let job = {
             let mut st = lock(&self.jobs);
@@ -198,7 +205,7 @@ impl Engine {
             j.state = match (&result.error, &result.outcome) {
                 (Some(Error::Cancelled), _) => JobState::Cancelled,
                 (Some(_), _) => JobState::Failed,
-                _ if token.is_cancelled() => JobState::Cancelled,
+                _ if token.is_cancelled() && !result.complete => JobState::Cancelled,
                 (None, Some(o)) if o.failed > 0 || o.skipped > 0 => JobState::CompletedWithErrors,
                 _ => JobState::Completed,
             };

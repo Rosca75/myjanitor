@@ -229,6 +229,8 @@ fn scan_list_apply_undo_pipeline() {
     assert_eq!(report.code, 0, "{}", report.err);
     let undo = cli(&data, &home, &["undo", "--last"]);
     assert_eq!(undo.code, 0, "{}{}", undo.out, undo.err);
+    assert!(!undo.out.contains("Run 0") && !undo.out.contains("undo --run"), "IPC-12: {}", undo.out);
+    assert!(undo.out.contains("Restored 1 item(s)."), "{}", undo.out);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap(), before, "undo restores the tree");
     assert_eq!(cli(&data, &home, &["undo", "--last"]).code, 1, "nothing left to undo");
 
@@ -268,4 +270,27 @@ fn quarantine_list_and_purge() {
     assert_eq!(all.code, 0, "{}{}", all.out, all.err);
     assert!(all.out.contains("0 item(s) remain"), "{}", all.out);
     assert_eq!(mj_core::testutil::snapshot(&tree).unwrap().len(), 1, "the kept copy is untouched");
+}
+
+/// IPC-6: a command that changes files refuses at once while another MyJanitor holds the
+/// data folder, before it rescans, measures or asks for a confirmation.
+#[test]
+fn acting_commands_refuse_at_once_while_another_myjanitor_holds_the_data_folder() {
+    let (t, data, home) = sandbox("cli-held");
+    let tree = t.mkdir("tree").unwrap();
+    let tmp = t.write("tree/old.tmp", b"scratch").unwrap();
+    mj_core::testutil::set_mtime(&tmp, std::time::SystemTime::now() - std::time::Duration::from_secs(86_400 * 5))
+        .unwrap();
+    let root = tree.to_str().unwrap();
+    assert_eq!(cli(&data, &home, &["scan", root]).code, 0);
+    let _held = mj_engine::instance::acquire(&data).unwrap();
+    for args in [vec!["apply", "--yes"], vec!["clean", root, "--detectors", "temp_files", "--apply", "--yes"]] {
+        let r = cli(&data, &home, &args);
+        assert_eq!(r.code, 1, "{args:?}: {}", r.err);
+        assert!(r.err.contains("another MyJanitor"), "{}", r.err);
+        assert!(!r.err.to_lowercase().contains("scan"), "refused before any scan: {}", r.err);
+    }
+    assert!(tmp.exists());
+    // Reading still works while the folder is held.
+    assert_eq!(cli(&data, &home, &["list"]).code, 0);
 }

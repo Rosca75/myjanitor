@@ -115,6 +115,9 @@ pub struct Engine {
     pub(crate) tools: Mutex<Vec<ExternalTool>>,
     /// Run metadata the journal does not hold (scope roots, step titles), persisted.
     pub(crate) run_meta: Mutex<std::collections::BTreeMap<u64, crate::history::RunMeta>>,
+    /// The cards' shares of the hero total, with the hash of what they were computed
+    /// from (`Engine::card_shares`): the overview asks for them on every tab change.
+    pub(crate) shares: Mutex<Option<crate::opportunities::SharesCache>>,
     /// Bytes freed by runs applied this session.
     pub(crate) reclaimed: AtomicU64,
     pub(crate) shutting_down: AtomicBool,
@@ -127,6 +130,10 @@ pub struct Engine {
     #[allow(dead_code)]
     instance: Option<crate::instance::InstanceLock>,
     pub(crate) instance_error: Option<String>,
+    /// Last step-table order (W6-A: paging re-uses it).
+    pub(crate) review_order: Mutex<crate::review_order::OrderCache>,
+    /// Review thumbnails (W6-A): byte-capped LRU and the large-decode gate.
+    pub(crate) thumbs: crate::thumbs::ThumbCache,
     next_id: AtomicU64,
 }
 
@@ -138,6 +145,9 @@ impl Engine {
             for d in [&cfg.data_dir, &cfg.cache_dir, &cfg.journal_dir, &cfg.quarantine_dir] {
                 std::fs::create_dir_all(d).map_err(|e| mj_core::Error::io(d, e))?;
             }
+        }
+        if cfg.persist {
+            mj_core::diag::init(&cfg.data_dir); // XC-3: panic hook and the log file
         }
         // F-13: one acting process per data folder (GUI, CLI and scheduled runs alike).
         let (instance, instance_error) = if cfg.persist {
@@ -178,15 +188,21 @@ impl Engine {
             schedules: Mutex::new(Vec::new()),
             tools: Mutex::new(Vec::new()),
             run_meta: Mutex::new(Default::default()),
+            shares: Mutex::new(None),
             reclaimed: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
             journal_error,
             instance,
             instance_error,
+            review_order: Mutex::new(Default::default()),
+            thumbs: Default::default(),
             next_id: AtomicU64::new(1),
             cfg,
         };
         engine.load_state();
+        // SCAN-5: Settings > Scanning are the session scope's options (an explicit
+        // `scope_set` from the CLI or a schedule still replaces them for its own scan).
+        mj_core::lock(&engine.scope).options = mj_core::lock(&engine.settings).scan.clone();
         // Recovery settles dangling intents; only the process holding the lock may do it
         // (another live process's intents are in flight, not dangling).
         if engine.instance_error.is_none() {
@@ -199,7 +215,8 @@ impl Engine {
         }
         if let Some(l) = engine.cfg.launch.clone() {
             // Preselect the scope only; an invalid path is dropped (the app opens normally).
-            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], ..mj_core::ScanScope::default() };
+            let options = mj_core::lock(&engine.settings).scan.clone();
+            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], options, ..mj_core::ScanScope::default() };
             let exists = std::fs::symlink_metadata(&l.path).is_ok();
             if !exists || engine.scope_set(crate::api::ScopeSetRequest { scope }).is_err() {
                 let mut e = engine;
@@ -252,6 +269,13 @@ impl Engine {
     }
 
     /// Emit an event (never while holding a lock).
+    /// One line in the data folder's log (XC-3); nothing when the engine does not persist.
+    pub(crate) fn log(&self, level: &str, message: &str) {
+        if self.cfg.persist {
+            mj_core::diag::LogFile::in_dir(&self.cfg.data_dir).log(level, message);
+        }
+    }
+
     pub(crate) fn emit(&self, event: Event) {
         self.cfg.events.emit(&event);
     }

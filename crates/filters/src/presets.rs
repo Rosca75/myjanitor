@@ -45,8 +45,10 @@ pub fn builtin() -> Vec<RulePreset> {
         preset(
             "downloads_older_90d",
             "Downloads older than 90 days",
-            "Anything in a Downloads folder not modified for 90 days",
+            "Files in a Downloads folder not modified for 90 days",
             Rule::All(vec![
+                // RF-1: a folder's own mtime is not the age of what it holds.
+                kind(EntryKind::File),
                 Rule::Cond(Condition::Path {
                     mode: TextMode::Wildcard,
                     pattern: "**/Downloads/**".into(),
@@ -169,6 +171,7 @@ pub fn builtin() -> Vec<RulePreset> {
             "Hidden system files",
             "Files with both the hidden and the system attribute",
             Rule::All(vec![
+                kind(EntryKind::File),
                 Rule::Cond(Condition::Attribute { attr: Attributes::HIDDEN, set: true }),
                 Rule::Cond(Condition::Attribute { attr: Attributes::SYSTEM, set: true }),
             ]),

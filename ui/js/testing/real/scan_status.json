@@ -1,18 +1,18 @@
 {
   "cached": false,
-  "finished": 1794663949550995670,
+  "finished": 1794774292882511987,
   "generation": 1,
   "progress": {
     "bytes": 0,
     "dirs": 11,
     "done": 37,
-    "elapsed_ms": 39,
+    "elapsed_ms": 20,
     "files": 10,
     "generation": 1,
     "phase": "detecting",
     "total": 37
   },
-  "started": 1794663949505500132,
+  "started": 1794774292861145040,
   "state": "done",
   "stats": {
     "allocated": 749568,

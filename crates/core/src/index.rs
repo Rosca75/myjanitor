@@ -173,7 +173,13 @@ impl FileIndex {
         let add = |t: &mut SubtreeTotals, e: &FileEntry| match e.kind {
             EntryKind::File => {
                 t.files += 1;
-                t.bytes += e.size;
+                // SCAN-7: like the scan summary and `FolderTree`, an online-only file's bytes
+                // are not on this disk.
+                if e.is_online_only() {
+                    t.online_only_bytes += e.size;
+                } else {
+                    t.bytes += e.size;
+                }
                 t.reclaimable += e.reclaimable();
                 t.newest_modified = t.newest_modified.max(e.modified);
                 t.newest_accessed = t.newest_accessed.max(e.accessed);
@@ -192,10 +198,16 @@ impl FileIndex {
 /// Aggregates over a subtree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SubtreeTotals {
+    /// Files, online-only placeholders included.
     pub files: u64,
     pub dirs: u64,
+    /// Logical size of the files stored on this disk (online-only placeholders excluded,
+    /// as in `ScanStats::bytes` and the scan's folder tree).
     pub bytes: u64,
     pub reclaimable: u64,
+    /// Logical size of the online-only placeholders (not on this disk).
+    #[serde(default)]
+    pub online_only_bytes: u64,
     pub newest_modified: Option<Timestamp>,
     pub newest_accessed: Option<Timestamp>,
 }

@@ -37,9 +37,8 @@ await page.click('.run:first-child [data-fk^="report-"]');
 await page.waitForSelector('[role="dialog"] .rsec');
 await shot(page, 'W3-report');
 await page.click('[data-fk="report-csv"]');
-await page.waitForSelector('[data-fk="export-name"]');
-await shot(page, 'W3-export-picker');
-await page.click('[data-fk="browser-choose"]');
+// The export goes through the OS "Save as" dialog (mock: answered at once), so there
+// is no in-app picker to capture any more.
 await page.waitForSelector('.toast');
 await page.close();
 

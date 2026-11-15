@@ -1,6 +1,6 @@
 # External dependencies
 
-Rule (build prompt 7): an external crate is added only when a correct in-house replacement, with thorough tests, would take more than about 5 hours. Every crate below has its reason. Versions are pinned with `=`, `Cargo.lock` is committed, and the manifests were parsed to check that this file lists exactly the external crates they declare (7 direct crates, none missing, none extra).
+Rule (build prompt 7): an external crate is added only when a correct in-house replacement, with thorough tests, would take more than about 5 hours. Every crate below has its reason. Versions are pinned with `=`, `Cargo.lock` is committed, and the manifests were parsed to check that this file lists exactly the external crates they declare (8 direct crates, none missing, none extra).
 
 The in-house replacements that were written instead are in the second table. The optional external programs that MyJanitor can run, but never links or downloads, are in the third.
 
@@ -14,6 +14,7 @@ The in-house replacements that were written instead are in the second table. The
 | `serde_json` | `=1.0.154` | `mj-engine`, `mj-actions`, `mj-cli`, `mj-filters`, `myjanitor`; `mj-core` (tests only) | JSON for IPC, settings, presets, schedules and the journal | A conformant JSON parser and writer with number edge cases and serde integration: over 5 h | MIT OR Apache-2.0 | 10 (the 6 of `serde`, plus `itoa`, `memchr`, `zmij`) |
 | `miniz_oxide` | `=0.8.9` | `mj-formats` (ZIP, OOXML, PDF streams, PNG), `mj-dupes` (PNG decode) | DEFLATE inflate and a high-ratio deflate encoder | A robust inflater plus a good encoder (level 10 matters for the savings): over 5 h. Fixed by the build prompt | MIT OR Zlib OR Apache-2.0 | 2 (`adler2`, `simd-adler32`; the second is switched on only by the Tauri stack) |
 | `regex` | `=1.13.1` | `mj-filters` | Regular-expression name and path filters | A linear-time engine with Unicode classes: far over 5 h. Fixed by the build prompt | MIT OR Apache-2.0 | 4 (`regex-automata`, `regex-syntax`, `aho-corasick`, `memchr`) |
+| `rfd` (features `gtk3` only, default features off) | `=0.17.2` | `myjanitor` (GUI shell, `src-tauri/src/dialogs.rs`) | The operating system's own file dialogs: folder picker and "Save as" (Windows `IFileOpenDialog` / `IFileSaveDialog` through COM; Linux `GtkFileChooserNative`, which uses the desktop portal when sandboxed), owned by the main window. Owner requirement: the standard Windows dialog, not one made for the app (W6-A D-6A1) | COM bindings for the Windows Shell dialogs and the GTK FFI with a future driven by the GTK main loop: several days to write and test on both systems. It is the same crate, same version line, that `tauri-plugin-dialog` 2.8.4 wraps; using it directly avoids the plugin, `tauri-plugin-fs` and `tauri-plugin` (W6-A D-6A2). Uses `unsafe` internally for FFI; our crate keeps its own code safe | MIT | 78 over all targets (mostly the macOS and wasm back ends, never built); 13 on Linux (`gtk-sys` and the other GTK 0.18 `-sys` crates, `glib-sys`, `gobject-sys`, `libc`, `log`, `percent-encoding`, `raw-window-handle`) and 4 on Windows (`windows-sys` 0.61, `windows-link`, `log`, `raw-window-handle`), all of them already in the lock through Tauri: `Cargo.lock` grew by exactly one package |
 | `zune-jpeg` | `=0.5.15` | `mj-dupes` (perceptual hashing of JPEG without an EXIF thumbnail) | Decode JPEG to luma for dHash and pHash | A correct baseline and progressive decoder (Huffman with restart markers, successive approximation, subsampling variants, CMYK) plus a fuzz-hardened test corpus is several days. Pure Rust; uses `unsafe` internally for SIMD, our own crates stay `forbid(unsafe_code)` and every decode runs inside `catch_unwind`. Details: [`docs/dependencies/W2-B.md`](dependencies/W2-B.md) | MIT OR Apache-2.0 OR Zlib | 1 (`zune-core` 0.5.3, same licence) |
 
 ### How the counts were measured
@@ -31,16 +32,16 @@ That is distinct crates reachable from the crate, excluding itself, over all tar
 
 | Scope | External crates | Method |
 |---|---|---|
-| Whole workspace, all targets, every edge kind | **408** | `Cargo.lock` has 420 packages, minus the 12 workspace members |
+| Whole workspace, all targets, every edge kind | **409** | `Cargo.lock` has 421 packages, minus the 12 workspace members |
 | Without the Tauri stack (the 11 library and CLI crates: `mj-core` to `mj-engine`, `mj-cli`) | **19** | union of `cargo tree -p <member> -e normal,build --prefix none --target all` over those members, minus the members |
-| Tauri stack (GUI only) | **389** | 408 minus 19 |
-| GUI closure on Linux / on Windows | 262 / 221 | `cargo tree -p myjanitor -e normal,build --prefix none --target <triple>` |
+| Tauri stack and `rfd` (GUI only) | **390** | 409 minus 19 |
+| GUI closure on Linux / on Windows | 263 / 222 | `cargo tree -p myjanitor -e normal,build --prefix none --target <triple>` |
 
 The 19 crates without Tauri are the 5 direct ones (`serde`, `serde_json`, `miniz_oxide`, `regex`, `zune-jpeg`) and 14 transitive ones. `myjanitor-cli` therefore links only those 19.
 
 ### Licences across the whole lock
 
-All 408 external crates are permissive (MIT, Apache-2.0, Zlib, BSD, ISC, Unicode-3.0, Unlicense and combinations) with two things to know:
+All 409 external crates are permissive (MIT, Apache-2.0, Zlib, BSD, ISC, Unicode-3.0, Unlicense and combinations) with two things to know:
 
 - 5 crates are MPL-2.0 (`cssparser`, `cssparser-macros`, `dtoa-short`, `option-ext`, `selectors`). They arrive through the Tauri stack and are used unmodified. MPL-2.0 is file-level copyleft.
 - `r-efi` offers `LGPL-2.1-or-later` as one option of a three-way choice (`MIT OR Apache-2.0 OR LGPL-2.1-or-later`); the permissive options apply.
@@ -49,7 +50,7 @@ The list comes from `cargo metadata` over the locked graph, all targets.
 
 ### Network code
 
-No MyJanitor crate opens a network connection. The Tauri dependency tree does contain an HTTP client (`reqwest` and `hyper` appear in `Cargo.lock`, reached through `tauri`); the app never calls it, and the webview policy in `src-tauri/tauri.conf.json` allows no external origin. The Tauri capability is `core:default` only (no filesystem, dialog or shell plugin).
+No MyJanitor crate opens a network connection. The Tauri dependency tree does contain an HTTP client (`reqwest` and `hyper` appear in `Cargo.lock`, reached through `tauri`); the app never calls it, and the webview policy in `src-tauri/tauri.conf.json` allows no external origin. The Tauri capability is `core:default` only (no filesystem, dialog or shell plugin). The native file dialogs are opened from Rust through `rfd`, so the webview needs no dialog permission (W6-A D-6A3).
 
 ### Corrections to earlier notes
 
@@ -61,7 +62,7 @@ No MyJanitor crate opens a network connection. The Tauri dependency tree does co
 
 | Need | Decision |
 |---|---|
-| Folder picker (`tauri-plugin-dialog` 2.8.2) | Not added (D-104): an in-app folder browser over the `fs_list_dir` command costs well under 5 h, keeps capabilities at `core:default` and avoids `tauri-plugin-fs`, `rfd` and their trees. |
+| Folder and save dialogs (`tauri-plugin-dialog` 2.8.4) | Not added (W6-A D-6A2). The owner asked for the standard OS dialog, which replaced the in-app folder browser of D-104 (superseded). The plugin's desktop code is a thin layer over `rfd` 0.17; it would add `tauri-plugin-dialog`, `tauri-plugin-fs` and `tauri-plugin` (3 more crates, measured with `cargo tree --offline`), register the plugin's own webview commands (`plugin:dialog\|open`, `save`, `message`, ...) and generate their permission schemas. `rfd` is used directly from our own two commands instead. Before W6-A this row read "not added (D-104)" for version 2.8.2; that is no longer the reason. |
 | `mimalloc` | Not added; no allocator work was done. The large-tree benchmark (D-4I10) found its hot spot in the code. |
 | `image`, `png`, `jpeg-decoder` | Not added. PNG decode is in-house on top of `miniz_oxide`; JPEG uses the smaller `zune-jpeg`. |
 | `lopdf`, `pdf` | Not added (D-3B01). The PDF pass needs an object-level reader and writer under strict refuse-rather-than-repair rules; a general parser's recovery heuristics would have to be switched off. |

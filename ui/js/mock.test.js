@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockBackend } from './mock/backend.js';
+import { dialogAnswersFromUrl } from './mock/dialogs.js';
 import { COMMANDS } from './api.js';
 import { formatBytes } from './format.js';
 
@@ -13,7 +14,7 @@ const ackOf = async (b, step_id) => ({ step_id, acknowledged: true, selection_di
 
 test('the mock answers every command of IPC.md or says not_implemented, never crashes', async () => {
   const b = mk();
-  const reqs = { scope_set: { scope: { roots: ['C:\\a'], include: [], exclude: [] } }, scope_add_root: { path: 'C:\\x' }, scope_remove_root: { path: 'C:\\x' }, fs_list_dir: {}, opportunities_list: {}, step_detail: { opportunity_id: 'opt:audio' }, candidates_page: { opportunity_id: 'opt:audio' }, selection_set: { opportunity_id: 'opt:audio', selected: true }, selection_apply_keep_rule: { opportunity_id: 'det:exact_duplicates', rule: { rule: 'newest' } }, selection_reset: { opportunity_id: 'opt:audio' }, step_params_set: { opportunity_id: 'opt:audio' }, candidate_preview: { candidate_id: 1041 }, search_parse: { query: 'a' }, search_suggest: { query: 'ex', cursor: 2 }, plan_confirmation_info: { step_id: 12 }, history_run_detail: { run_id: 1 }, settings_set: { settings: {} }, protected_paths_set: { user: [] } };
+  const reqs = { scope_set: { scope: { roots: ['C:\\a'], include: [], exclude: [] } }, scope_add_root: { path: 'C:\\x' }, scope_remove_root: { path: 'C:\\x' }, opportunities_list: {}, step_detail: { opportunity_id: 'opt:audio' }, candidates_page: { opportunity_id: 'opt:audio' }, selection_set: { opportunity_id: 'opt:audio', selected: true }, selection_apply_keep_rule: { opportunity_id: 'det:exact_duplicates', rule: { rule: 'newest' } }, selection_reset: { opportunity_id: 'opt:audio' }, step_params_set: { opportunity_id: 'opt:audio' }, candidate_preview: { candidate_id: 1041 }, search_parse: { query: 'a' }, search_suggest: { query: 'ex', cursor: 2 }, plan_confirmation_info: { step_id: 12 }, history_run_detail: { run_id: 1 }, settings_set: { settings: {} }, protected_paths_set: { user: [] } };
   for (const cmd of COMMANDS) {
     if (['scan_start', 'plan_apply', 'plan_dry_run', 'undo_last', 'job_pause', 'job_resume', 'job_cancel', 'jobs_reorder', 'undo_run', 'report_get', 'schedule_from_plan', 'search_run', 'plan_add_step', 'plan_update_step', 'plan_remove_step', 'plan_reorder', 'history_run_detail', 'plan_confirmation_info', 'report_export'].includes(cmd)) continue;
     try {
@@ -25,31 +26,58 @@ test('the mock answers every command of IPC.md or says not_implemented, never cr
   }
 });
 
-test('fixtures: 18 opportunities, 48.6 GB, the wireframe counts', async () => {
+test('fixtures: 18 opportunities, the hero is the sum of the cards (savings invariant, W6-B)', async () => {
   const b = mk();
   const all = await b.call('opportunities_list', { tab: 'all', sort: 'saving' });
   assert.equal(all.items.length, 18);
-  assert.equal(formatBytes(all.summary.total), '48.6 GB');
-  assert.equal(formatBytes(all.summary.reversible), '41.2 GB');
-  assert.equal(formatBytes(all.summary.opt_in), '5.1 GB');
-  assert.equal(formatBytes(all.summary.review_only), '2.3 GB');
+  const s = all.summary;
+  const available = all.items.filter((o) => o.availability.state === 'available');
+  assert.equal(s.total, available.reduce((a, o) => a + o.saving, 0), 'hero = sum of the cards');
+  assert.equal(s.total, s.reversible + s.opt_in + s.review_only, 'buckets add up');
+  assert.equal(s.to_review, available.reduce((a, o) => a + o.to_review, 0));
+  assert.equal(formatBytes(s.total), '52.5 GB');
+  assert.equal(formatBytes(s.reversible), '43.5 GB');
+  assert.equal(formatBytes(s.opt_in), '9.0 GB');
+  assert.equal(s.review_only, 0, 'review-only cards pre-select nothing');
+  assert.equal(formatBytes(s.to_review), '712 MB');
+  assert.equal(s.opportunities, 15);
+  assert.equal(s.review_opportunities, 4);
   assert.deepEqual(all.counts, { all: 18, clean: 8, optimise: 6, archive: 1, review_only: 3 });
-  assert.deepEqual(all.items.slice(0, 9).map((o) => o.title), ['Exact duplicates', 'Transparent compression', 'Developer artefacts', 'App caches & junk', 'Screen recordings', 'Inactive engagements', 'Meeting recordings', 'Office decks & workbooks', 'Old installers']);
-  assert.equal(formatBytes(all.items.slice(9).reduce((a, o) => a + o.size_before, 0)), '1.9 GB');
+  // Biggest saving first, by what the card frees (not the size of its files).
+  assert.deepEqual(all.items.slice(0, 9).map((o) => o.title), ['Exact duplicates', 'Developer artefacts', 'App caches & junk', 'Transparent compression', 'Screen recordings', 'Meeting recordings', 'Inactive engagements', 'Old installers', 'Temporary files']);
+  // An optimisation frees its estimate, not the size of the files it rewrites.
+  const fsc = all.items.find((o) => o.id === 'opt:fs_compress');
+  assert.ok(fsc.saving < fsc.size_before && fsc.saving > 0);
+  // A light copy leaves the original in place: it frees nothing.
+  const office = all.items.find((o) => o.id === 'opt:office');
+  assert.equal(office.saving, 0);
+  assert.ok(office.size_before > 0 && office.selected > 0);
+  // Review-only cards count nothing and list their rows for review.
+  for (const o of all.items.filter((x) => x.safety === 'review_only')) {
+    assert.equal(o.saving, 0, o.id);
+    assert.ok(o.to_review > 0 && o.to_review_count > 0, o.id);
+  }
   const clean = await b.call('opportunities_list', { tab: 'clean' });
   assert.ok(clean.items.every((o) => o.category === 'clean' && o.safety !== 'review_only'));
+  assert.deepEqual(clean.summary, s, 'the summary does not depend on the tab');
   const review = await b.call('opportunities_list', { tab: 'review_only' });
   assert.equal(review.items.length, 3);
 });
 
 test('fixtures: drives C: and D:, the plan, the meeting recordings step with 23 selected rows', async () => {
   const b = mk();
+  const all = await b.call('opportunities_list', { tab: 'all', sort: 'saving' });
   const drives = await b.call('drives_list');
   assert.deepEqual(drives.map((d) => d.id), ['C:', 'D:']);
-  assert.equal(formatBytes(drives[0].free_after_plan), '86.0 GB');
   const plan = await b.call('plan_get');
   assert.equal(plan.steps.length, 4);
-  assert.equal(formatBytes(plan.estimate.bytes_before - plan.estimate.bytes_after), '29.3 GB');
+  const planSaving = plan.estimate.bytes_before - plan.estimate.bytes_after;
+  assert.equal(formatBytes(planSaving), '33.1 GB');
+  // Each step says what its card shows; the drive bars add up to the plan total.
+  for (const st of plan.steps) assert.equal(st.estimate.bytes_before - st.estimate.bytes_after, all.items.find((o) => o.id === st.opportunity).saving, st.title);
+  assert.equal(drives.reduce((a, d) => a + d.plan_saving, 0), planSaving);
+  for (const d of drives) assert.equal(d.free_after_plan, d.free + d.plan_saving);
+  assert.equal(formatBytes(drives[0].free_after_plan), '72.7 GB');
   const detail = await b.call('step_detail', { opportunity_id: 'opt:audio' });
   assert.equal(detail.summary.selected, 23);
   assert.equal(detail.summary.candidates, 24);
@@ -198,13 +226,45 @@ test('plan_confirmation_info matches the dialog copy of the wireframe', async ()
   assert.equal(info.permanent, false);
 });
 
-test('fs_list_dir without a path returns places; with a path, its folders', async () => {
+test('native dialogs have a deterministic stand-in: the proposal, a fixed path, or a cancel', async () => {
+  // By default the stand-in accepts what the dialog proposes.
   const b = mk('empty');
-  const places = await b.call('fs_list_dir', {});
-  assert.ok(places.places.length >= 5);
-  const home = await b.call('fs_list_dir', { path: 'C:\\Users\\Michel' });
-  assert.ok(home.entries.some((e) => e.name === 'Documents' && e.is_dir));
-  assert.equal(home.parent, 'C:\\Users');
+  assert.equal(await b.call('dialog_pick_folder', {}), 'C:\\Users\\Michel\\Documents');
+  assert.equal(await b.call('dialog_pick_folder', { title: 'T', start_dir: 'D:\\Projects' }), 'D:\\Projects');
+  assert.equal(await b.call('dialog_save_file', { file_name: 'a.csv' }), 'C:\\Users\\Michel\\Documents\\a.csv');
+  assert.equal(await b.call('dialog_save_file', { start_dir: 'D:\\', file_name: 'a.csv', filters: [{ name: 'CSV file', extensions: ['csv'] }] }), 'D:\\a.csv');
+  const linux = createMockBackend({ scenario: 'empty', speed: 0, platform: 'linux' });
+  assert.equal(await linux.call('dialog_pick_folder', {}), '/home/michel/Documents');
+  assert.equal(await linux.call('dialog_save_file', { file_name: 'a.csv' }), '/home/michel/Documents/a.csv');
+  // A fixed answer, then a cancel (null, not an error), then the proposal again.
+  b.answerDialogs({ folder: 'E:\\Photos', file: 'E:\\out.html' });
+  assert.equal(await b.call('dialog_pick_folder', { start_dir: 'D:\\Projects' }), 'E:\\Photos');
+  assert.equal(await b.call('dialog_save_file', { file_name: 'a.csv' }), 'E:\\out.html');
+  b.answerDialogs({ folder: null, file: null });
+  assert.equal(await b.call('dialog_pick_folder', {}), null);
+  assert.equal(await b.call('dialog_save_file', {}), null);
+  b.answerDialogs({ folder: undefined, file: undefined });
+  assert.equal(await b.call('dialog_pick_folder', {}), 'C:\\Users\\Michel\\Documents');
+  // Configured at creation (tests) ...
+  const cancelled = createMockBackend({ scenario: 'empty', speed: 0, dialog: { folder: null } });
+  assert.equal(await cancelled.call('dialog_pick_folder', {}), null);
+  assert.equal(await cancelled.call('dialog_save_file', { file_name: 'a.csv' }), 'C:\\Users\\Michel\\Documents\\a.csv');
+  // ... or from the page URL (browser dev mode).
+  assert.deepEqual(dialogAnswersFromUrl(null), {});
+  assert.deepEqual(dialogAnswersFromUrl('cancel'), { folder: null, file: null });
+  assert.deepEqual(dialogAnswersFromUrl('D:\\Projects'), { folder: 'D:\\Projects' });
+  // Requests are checked like the shell checks them: unknown fields are rejected.
+  await assert.rejects(b.call('dialog_pick_folder', { path: 'C:\\x' }), (e) => e.code === 'invalid_input' && /path/.test(e.message));
+  await assert.rejects(b.call('dialog_save_file', { dest: 'C:\\x' }), (e) => e.code === 'invalid_input');
+  await assert.rejects(b.call('dialog_save_file', { filters: [{ name: 'CSV' }] }), (e) => e.code === 'invalid_input');
+});
+
+test('exports never overwrite, except when the save dialog confirmed the replacement', async () => {
+  const b = mk();
+  const dest = 'C:\\Users\\Michel\\Documents\\results.csv';
+  assert.equal((await b.call('results_export', { format: 'csv', dest })).path, dest);
+  assert.equal((await b.call('results_export', { format: 'csv', dest })).path, 'C:\\Users\\Michel\\Documents\\results (1).csv');
+  assert.equal((await b.call('results_export', { format: 'csv', dest, overwrite: true })).path, dest);
 });
 
 test('scope_add_root collapses nested roots and rejects relative paths', async () => {

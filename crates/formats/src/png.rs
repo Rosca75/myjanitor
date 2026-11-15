@@ -258,6 +258,46 @@ pub fn chunk_removed(kind: &[u8; 4], policy: MetadataPolicy) -> bool {
     }
 }
 
+/// What a chunk holds, for [`same_metadata`]: the profile of an `iCCP` and the text of a `zTXt`
+/// inflated (a recompressor may re-deflate them), every other chunk byte for byte.
+fn metadata_key(c: &Chunk) -> Option<([u8; 4], Vec<u8>)> {
+    const LIMIT: usize = 64 * 1024 * 1024;
+    let data = match &c.kind {
+        b"iCCP" | b"zTXt" => {
+            let nul = c.data.iter().position(|&b| b == 0)?;
+            let (name, rest) = (&c.data[..=nul], c.data.get(nul + 1..)?);
+            let (&method, z) = rest.split_first()?;
+            let mut v = name.to_vec();
+            v.push(method);
+            v.extend(miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(z, LIMIT).ok()?);
+            v
+        }
+        _ => c.data.clone(),
+    };
+    Some((c.kind, data))
+}
+
+/// True when `cand` holds every chunk of `want` other than the pixels and the chunks a colour-type
+/// reduction legitimately rewrites (`IHDR`, `PLTE`, `IDAT`, `IEND`, `tRNS`: verified by comparing the
+/// decoded pixels; `bKGD`, `sBIT`, `hIST`: only their presence is compared), no chunk `want` lacks,
+/// and exactly the same data after `IEND`. Used to accept an external recompressor's output: equal
+/// pixels alone cannot show that a text note, a profile or an appended trailer survived.
+pub fn same_metadata(want: &Png, cand: &Png) -> bool {
+    const PIXEL: [&[u8; 4]; 5] = [b"IHDR", b"PLTE", b"IDAT", b"IEND", b"tRNS"];
+    const REDUCED: [&[u8; 4]; 3] = [b"bKGD", b"sBIT", b"hIST"];
+    let keys = |p: &Png| -> Option<Vec<([u8; 4], Vec<u8>)>> {
+        let mut v = p
+            .chunks
+            .iter()
+            .filter(|c| !PIXEL.contains(&&c.kind))
+            .map(|c| if REDUCED.contains(&&c.kind) { Some((c.kind, Vec::new())) } else { metadata_key(c) })
+            .collect::<Option<Vec<_>>>()?;
+        v.sort();
+        Some(v)
+    };
+    want.trailing == cand.trailing && keys(want).is_some_and(|k| Some(k) == keys(cand))
+}
+
 impl Png {
     /// The header.
     pub fn ihdr(&self) -> Result<Ihdr> {
@@ -355,7 +395,15 @@ pub fn recompress(buf: &[u8], policy: MetadataPolicy, level: u8, try_refilter: b
             chunks.push(c.clone());
         }
     }
-    let trailing: &[u8] = if policy == MetadataPolicy::KeepAll { &png.trailing } else { &[] };
+    // Data after IEND is no metadata the user can ask to strip (it can be an appended video or
+    // archive): it is kept under every policy. Only zero padding goes, and only when stripping.
+    let padding = !png.trailing.is_empty() && png.trailing.iter().all(|&b| b == 0);
+    let trailing: &[u8] = if padding && policy != MetadataPolicy::KeepAll {
+        removed.push("padding after IEND".into());
+        &[]
+    } else {
+        &png.trailing
+    };
     let bytes = write(&chunks, trailing);
     verify_same_pixels(&png, &bytes, &ihdr, refiltered)?;
     Ok(Recompressed { bytes, raw_len: raw.len(), refiltered, removed, colour_changed })
@@ -714,11 +762,42 @@ mod tests {
     }
 
     #[test]
+    fn same_metadata_sees_dropped_chunks_and_trailers_but_not_recompressed_profiles() {
+        let icc = |level: u8| {
+            let mut d = b"sRGB\0\0".to_vec();
+            d.extend(miniz_oxide::deflate::compress_to_vec_zlib(&[7u8; 300], level));
+            chunk(b"iCCP", &d)
+        };
+        let base = |extra: &[Chunk], trailer: &[u8]| {
+            let mut v = rgb_png(8, 8, extra, 1);
+            v.extend_from_slice(trailer);
+            parse(&v).unwrap()
+        };
+        let want = base(&[icc(1), chunk(b"tEXt", b"k\0v"), chunk(b"bKGD", &[0, 1, 0, 2, 0, 3])], b"TAIL");
+        // Re-deflated profile, rewritten background colour: the same metadata.
+        let ok = base(&[chunk(b"bKGD", &[0, 9]), chunk(b"tEXt", b"k\0v"), icc(10)], b"TAIL");
+        assert!(same_metadata(&want, &ok));
+        assert!(!same_metadata(&want, &base(&[icc(10), chunk(b"bKGD", &[0, 9])], b"TAIL")));
+        assert!(!same_metadata(&want, &base(&[icc(10), chunk(b"tEXt", b"k\0v"), chunk(b"bKGD", &[0, 9])], b"")));
+        assert!(!same_metadata(&want, &base(&[chunk(b"tEXt", b"k\0v"), chunk(b"bKGD", &[0, 9])], b"TAIL")));
+        let extra = [icc(10), chunk(b"tEXt", b"k\0v"), chunk(b"bKGD", &[0, 9]), chunk(b"tIME", &[0; 7])];
+        assert!(!same_metadata(&want, &base(&extra, b"TAIL")));
+    }
+
+    #[test]
     fn trailing_bytes_follow_the_policy() {
         let mut src = rgb_png(8, 8, &[], 1);
         src.extend_from_slice(b"TRAILER");
         assert!(recompress(&src, MetadataPolicy::KeepAll, 6, false).unwrap().bytes.ends_with(b"TRAILER"));
-        assert!(!recompress(&src, MetadataPolicy::StripText, 6, false).unwrap().bytes.ends_with(b"TRAILER"));
+        // OPT-1: an appended trailer is kept by every policy, zero padding only by "keep everything".
+        for policy in [MetadataPolicy::StripText, MetadataPolicy::StripAll { colour: true }] {
+            assert!(recompress(&src, policy, 6, false).unwrap().bytes.ends_with(b"TRAILER"));
+        }
+        let mut padded = rgb_png(8, 8, &[], 1);
+        padded.extend_from_slice(&[0; 64]);
+        assert!(recompress(&padded, MetadataPolicy::KeepAll, 6, false).unwrap().bytes.ends_with(&[0; 64]));
+        let r = recompress(&padded, MetadataPolicy::StripText, 6, false).unwrap();
+        assert!(parse(&r.bytes).unwrap().trailing.is_empty() && r.removed.contains(&"padding after IEND".to_string()));
     }
 
     #[test]

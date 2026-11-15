@@ -70,7 +70,10 @@ fn ext_name_path_regex() {
         ok("name:*.tmp,*.bak"),
         Rule::Any(vec![name(TextMode::Wildcard, "*.tmp"), name(TextMode::Wildcard, "*.bak")])
     );
-    assert_eq!(ok("path:*/Photos/*"), path(TextMode::Wildcard, "*/Photos/*"));
+    assert_eq!(ok("path:*/Photos/*"), path(TextMode::Wildcard, "**/Photos/**"));
+    assert_eq!(ok("path:Photos/*.jpg"), path(TextMode::Wildcard, "**/Photos/*.jpg"));
+    assert_eq!(ok("path:/home/*/Photos/*"), path(TextMode::Wildcard, "/home/*/Photos/**"));
+    assert_eq!(ok(r"path:C:\Users\*"), path(TextMode::Wildcard, "C:/Users/**"));
     assert_eq!(ok("path:*Photos*"), path(TextMode::Wildcard, "**Photos**"));
     assert_eq!(ok("path:*.tmp"), path(TextMode::Wildcard, "**.tmp"));
     assert_eq!(ok("path:Photos"), path(TextMode::Contains, "Photos"));
@@ -207,7 +210,7 @@ fn boolean_structure() {
         ok("ext:jpg,png -path:*/Photos/*"),
         Rule::All(vec![
             c(Condition::Extension { values: vec!["jpg".into(), "png".into()] }),
-            Rule::Not(Box::new(path(TextMode::Wildcard, "*/Photos/*"))),
+            Rule::Not(Box::new(path(TextMode::Wildcard, "**/Photos/**"))),
         ])
     );
 }

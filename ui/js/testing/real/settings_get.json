@@ -6,7 +6,8 @@
     "kept_languages": [],
     "light_copy_suffix": "_light",
     "quarantine_days": 30,
-    "undo_days": 30
+    "undo_days": 30,
+    "windows_recycle_bin": false
   },
   "integration": {
     "context_menu": false,

@@ -20,7 +20,10 @@ use mj_core::{
 use mj_formats::media::MediaInfo;
 
 use super::estimate::{info_of, video_after, VideoPlan};
-use super::ffmpeg::{base_args, clock, input_args, intersect, parse_freezes, parse_silences, run_analysis, run_encode};
+use super::ffmpeg::{
+    base_args, check_length, clock, input_args, intersect, parse_freezes, parse_silences, probe_input, run_analysis,
+    run_encode,
+};
 use super::video::{run_video_job, VideoSettings};
 use crate::external::{args, path_arg};
 use crate::images::common::{self, spec};
@@ -422,10 +425,30 @@ fn audio_only(job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
     // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
     let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "screen-audio")?;
     let out = scratch.join("out.opus");
-    run_encode(job, exe, &audio_only_args(job.src, &out), info.as_ref().and_then(|i| i.duration_ms))?;
+    // OPT-4: the voice must cover the whole recording; lengths come from ffmpeg when the in-house
+    // prober cannot read the container, and an unknown length fails the check.
+    let dur = match info.as_ref().and_then(|i| i.duration_ms) {
+        Some(d) => Some(d),
+        None => probe_input(exe, job.src, job.cancel)?.duration_ms,
+    };
+    if dur.is_none() {
+        return Ok(common::skipped(
+            before,
+            "The length of the recording could not be read, so the result could not be checked",
+        ));
+    }
+    run_encode(job, exe, &audio_only_args(job.src, &out), dur)?;
     let after = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
     if after == 0 {
         return Err(super::ffmpeg::empty_output("ffmpeg"));
+    }
+    let d_out = match info_of(&out).and_then(|i| i.duration_ms) {
+        Some(d) => Some(d),
+        None => probe_input(exe, &out, job.cancel).ok().and_then(|r| r.duration_ms),
+    };
+    if let Err(e) = check_length(dur, d_out, dur.map_or(0, |d| (d / 50).max(1000)), "audio") {
+        let _ = std::fs::remove_file(&out);
+        return Err(e);
     }
     if after >= before {
         let _ = std::fs::remove_file(&out);

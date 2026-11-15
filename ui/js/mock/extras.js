@@ -5,6 +5,7 @@
  * the `rich` scenario (disabled cards, faults, a long history).
  */
 import { GB } from './fixtures.js';
+import { entryId } from './model.js';
 import { buildCandidates } from './candidates.js';
 import { PNG_B64 } from './preview-data.js';
 import { diskTree, breakdown } from './disk.js';
@@ -102,16 +103,17 @@ const SAMPLE_TEXT = 'Setup log\n2026-09-14 08:12:01 INFO  Starting installer\n20
 /** Build the overrides. @param {any} m @param {any} sim @param {(e: string, p: any) => void} emit @param {Record<string, (r: any) => any>} base */
 export function createExtras(m, sim, emit, base) {
   const builtin = [
-    { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Anything in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }, { cond: { field: 'date', which: 'modified', cmp: 'lt', value: { ago: { amount: 90, unit: 'days' } } } }] }, topmost_only: false, builtin: true },
+    { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Files in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'kind', kind: 'file' } }, { cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }, { cond: { field: 'date', which: 'modified', cmp: 'lt', value: { ago: { amount: 90, unit: 'days' } } } }] }, topmost_only: false, builtin: true },
     { id: 'dev_junk', name: 'Dev junk', description: 'node_modules, target and build output folders', rule: { any: [{ cond: { field: 'name', mode: 'exact', pattern: 'node_modules', case_sensitive: true } }, { cond: { field: 'name', mode: 'exact', pattern: 'target', case_sensitive: true } }] }, topmost_only: true, builtin: true },
     { id: 'big_videos', name: 'Big old videos', description: 'Videos over 1 GB not touched for a year', rule: { all: [{ cond: { field: 'type_group', group: 'video' } }, { cond: { field: 'size', cmp: 'gt', bytes: GB } }] }, topmost_only: false, builtin: true },
   ];
   m.presets ??= [];
   m.exported = new Set();
   const exportTo = (req, rows) => {
-    if (!/^([A-Za-z]:\\|\/)/.test(String(req.dest))) throw fail('invalid_input', `Not an absolute path: ${req.dest}`, 'Choose a folder in the list.');
+    if (!/^([A-Za-z]:\\|\/)/.test(String(req.dest))) throw fail('invalid_input', `Not an absolute path: ${req.dest}`, 'Choose where to save the file.');
     let path = String(req.dest);
-    if (m.exported.has(path)) path = path.replace(/(\.\w+)$/, ' (1)$1');
+    // Never overwrites, unless the user confirmed the replacement in the save dialog.
+    if (m.exported.has(path) && !req.overwrite) path = path.replace(/(\.\w+)$/, ' (1)$1');
     m.exported.add(path);
     return { path, bytes: 1200 + rows * 140, rows };
   };
@@ -234,7 +236,7 @@ export function applyRich(m) {
       const rows = (m.rows.get(sp.opp) ?? []).slice(0, sp.n);
       rows.forEach((r, i) => {
         const state = i < sp.failed ? 'failed' : i < sp.failed + sp.skipped ? 'skipped' : i < sp.failed + sp.skipped + (sp.refused ?? 0) ? 'undo_failed' : 'done';
-        const e = { id: run_id * 1000 + entries.length + 1, run_id, job_id: 1, step_id: 1, step_title: sp.title, at: now - daysAgo * DAY + i * 1e9, state, action: sp.action ?? 'trash', target: r.target === 'dir' ? 'folder' : 'file', original: r.path, original_stamp: r.stamp, bytes_before: r.size, bytes_after: 0, reversible: state === 'done' || state === 'undo_failed', undo_deadline: now - daysAgo * DAY + undoDays * DAY };
+        const e = { id: entryId(run_id, entries.length), run_id, job_id: 1, step_id: 1, step_title: sp.title, at: now - daysAgo * DAY + i * 1e9, state, action: sp.action ?? 'trash', target: r.target === 'dir' ? 'folder' : 'file', original: r.path, original_stamp: r.stamp, bytes_before: r.size, bytes_after: 0, reversible: state === 'done' || state === 'undo_failed', undo_deadline: now - daysAgo * DAY + undoDays * DAY };
         if (state === 'failed') e.error = { code: 'permission_denied', message: `Permission denied: ${r.path}`, hint: 'MyJanitor has no access to this path. Skip it, or run with access to it.' };
         if (state === 'skipped') e.error = { code: i % 2 ? 'protected' : 'changed', message: i % 2 ? `Protected path: ${r.path}` : `Changed since the scan: ${r.path}`, hint: i % 2 ? 'Protected paths are never touched. Edit them in Settings.' : 'The file changed after the scan, so it was skipped. Scan again.' };
         if (state === 'undo_failed') { e.error = { code: 'conflict', message: `The original location is occupied: ${r.path}`, hint: 'Move or rename the file that is there, then restore again.' }; m.occupied.add(e.id); }

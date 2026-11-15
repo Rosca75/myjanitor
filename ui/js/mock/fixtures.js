@@ -102,8 +102,6 @@ export const PLAN_BASE = {
   'opt:audio': { before: 5153960755, after: 644245094, summary: 'Opus 24 kbps mono · originals to Recycle Bin', params: { codec: 'opus', bitrate_kbps: 24 }, files: 23 },
 };
 
-/** Summary of the hero (fixed numbers of the wireframe: 41.2 + 5.1 + 2.3 = 48.6 GB). */
-export const HERO_SUMMARY = { total: 52183474995, reversible: 44238230323, opt_in: 5476083302, review_only: 2469606195, opportunities: 18 };
 
 /** Volumes. `plan_saving` is for the full wireframe plan; the backend scales it. */
 export const DRIVES = [
@@ -127,24 +125,4 @@ export const SETTINGS = {
   tool_paths: {},
   integration: { context_menu: false, fs_compression_watcher: false, watched_folders: [] },
   type_groups: { installers: ['msi', 'exe', 'iso'] },
-};
-
-/** Folder tree for the in-app browser (Windows-style paths). */
-export const FS = {
-  places: [
-    { label: 'Home', path: 'C:\\Users\\Michel', kind: 'home' },
-    { label: 'Desktop', path: 'C:\\Users\\Michel\\Desktop', kind: 'desktop' },
-    { label: 'Documents', path: 'C:\\Users\\Michel\\Documents', kind: 'documents' },
-    { label: 'Downloads', path: 'C:\\Users\\Michel\\Downloads', kind: 'downloads' },
-    { label: 'Recordings', path: 'C:\\Users\\Michel\\Recordings', kind: 'videos' },
-    { label: 'System (C:)', path: 'C:\\', kind: 'drive' },
-    { label: 'Projects (D:)', path: 'D:\\', kind: 'drive' },
-  ],
-  dirs: {
-    'C:\\': ['Users', 'Program Files', 'Windows'],
-    'C:\\Users': ['Michel'],
-    'C:\\Users\\Michel': ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Recordings', 'Projects'],
-    'D:\\': ['Projects', 'Archive', 'Clients'],
-    'D:\\Projects': ['app', 'website', 'notes'],
-  },
 };

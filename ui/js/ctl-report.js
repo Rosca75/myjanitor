@@ -1,6 +1,5 @@
 // @ts-check
-/** Reports (SAF-04), exports (CLN-ACT-11, SAF-12) and the export destination flow. */
-import { joinPath } from './format.js';
+/** Reports (SAF-04) and exports (CLN-ACT-11, SAF-12). */
 import { copy } from './copy.js';
 
 /** @param {string} s */
@@ -32,26 +31,17 @@ export function reportActions(c) {
       set({ reportUi: { ...ui, shown: { ...ui.shown, [section]: (ui.shown[section] ?? 100) + 200 } } });
     },
     /**
-     * Start an export: choose the folder (and file name) in the in-app browser.
+     * Export: choose the target in the operating system's "Save as" dialog, then write
+     * it. A cancelled dialog writes nothing and says nothing. The dialog itself asks
+     * before an existing file is chosen, hence `overwrite`.
      * @param {{ type: 'report'|'audit'|'results', format: 'csv'|'html'|'pdf', run_id?: number, opportunity_id?: string, selected_only?: boolean }} job
      */
-    startExport: guard(async (job) => { await c.actions.openBrowser({ mode: 'export', exportJob: job, filename: exportName(job) }); }),
-    /** @param {string} filename */
-    setExportName(filename) {
-      const b = get().browser;
-      if (b) set({ browser: { ...b, filename } });
-    },
-    /** "Save here" in the browser: write the export. */
-    finishExport: c.feature('export', async () => {
-      const b = get().browser;
-      const name = String(b?.filename ?? '').trim();
-      if (!b?.path || !name || /[\\/]/.test(name)) { c.fail({ message: copy.report.badName, hint: copy.report.badNameHint }); return; }
-      const job = b.exportJob;
-      const dest = joinPath(b.path, name, get().info?.platform);
-      set({ browser: null });
+    startExport: c.feature('export', async (job) => {
+      const dest = await api.dialogSaveFile({ title: copy.dialogs.saveExport[job.type], file_name: exportName(job), filters: [{ name: copy.dialogs.fileTypes[job.format], extensions: [job.format] }] });
+      if (!dest) return;
       const r = job.type === 'results'
-        ? await api.resultsExport({ ...(job.opportunity_id ? { opportunity_id: job.opportunity_id } : {}), selected_only: !!job.selected_only, format: job.format, dest })
-        : await api.reportExport({ ...(job.run_id ? { run_id: job.run_id } : {}), kind: job.type, format: job.format, dest });
+        ? await api.resultsExport({ ...(job.opportunity_id ? { opportunity_id: job.opportunity_id } : {}), selected_only: !!job.selected_only, format: job.format, dest, overwrite: true })
+        : await api.reportExport({ ...(job.run_id ? { run_id: job.run_id } : {}), kind: job.type, format: job.format, dest, overwrite: true });
       c.notify(copy.report.saved(r.rows, r.path), 'success');
     }),
   };

@@ -4,11 +4,16 @@
 //! depth (1, 2, 4, 8, 16), non-interlaced. Interlaced (Adam7) files are
 //! reported as unsupported (skipped for perceptual matching, still
 //! exact-matched). Alpha is ignored and CRCs are not verified (a corrupt
-//! stream fails inflate or the size checks). Rows are unfiltered one at a time
-//! and fed straight into the grid accumulator, so no full-size grey buffer is
-//! kept. Hardened: chunk lengths are bounds-checked, the inflated size is
-//! limited to exactly what the header implies, and dimensions are checked
-//! against [`super::within_limits`] before inflating.
+//! stream fails inflate or the size checks). The IDAT stream is inflated one
+//! scanline at a time and unfiltered against the previous one; the fingerprint
+//! feeds each row straight into the grid accumulator and the review thumbnail
+//! (`thumb::png`) into its box scaler, so memory is O(width): the raw image is
+//! never kept. Hardened: chunk lengths are bounds-checked, dimensions are
+//! checked against [`super::within_limits`] before inflating, and the zlib
+//! stream must hold exactly the scanlines the header implies and end there.
+
+use miniz_oxide::inflate::stream::{inflate, InflateState};
+use miniz_oxide::{DataFormat, MZError, MZFlush, MZStatus};
 
 use super::{luma16, within_limits, DecodeError, Decoded};
 use crate::perceptual::{dhash, phash, GridAccumulator};
@@ -62,66 +67,177 @@ pub fn header(buf: &[u8]) -> Option<Header> {
 
 /// Decode a whole PNG file and fingerprint it.
 pub fn decode(buf: &[u8]) -> Result<Decoded, DecodeError> {
-    let hdr = header(buf).ok_or_else(|| DecodeError::Corrupt("missing IHDR".into()))?;
-    if !within_limits(hdr.width, hdr.height) {
-        return Err(DecodeError::TooLarge);
-    }
-    if hdr.interlaced {
-        return Err(DecodeError::Unsupported("interlaced PNG"));
-    }
-    let channels = hdr.channels().ok_or_else(|| DecodeError::Corrupt("invalid colour type / depth".into()))?;
-    let (w, h) = (hdr.width as usize, hdr.height as usize);
-    let bits_per_pixel = channels * hdr.bit_depth as usize;
-    let row_bytes = (w * bits_per_pixel).div_ceil(8);
-    let expected = (row_bytes + 1).checked_mul(h).ok_or(DecodeError::TooLarge)?;
-
-    // Collect IDAT and PLTE.
-    let mut pos = 8usize;
-    let mut idat = Vec::new();
-    let mut palette: Vec<[u8; 3]> = Vec::new();
-    loop {
-        let len = buf.get(pos..pos + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
-        let Some(len) = len else { break };
-        let typ = buf.get(pos + 4..pos + 8).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
-        let data_end = pos.checked_add(8 + len).ok_or_else(|| DecodeError::Corrupt("chunk length".into()))?;
-        let data = buf.get(pos + 8..data_end).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
-        match typ {
-            b"IDAT" => {
-                if idat.len() + data.len() > expected.saturating_mul(2) + 1024 * 1024 {
-                    return Err(DecodeError::Corrupt("IDAT larger than the image".into()));
-                }
-                idat.extend_from_slice(data);
-            }
-            b"PLTE" => palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
-            b"IEND" => break,
-            _ => {}
-        }
-        pos = data_end + 4; // skip CRC
-    }
-    if hdr.color_type == 3 && palette.is_empty() {
-        return Err(DecodeError::Corrupt("palette image without PLTE".into()));
-    }
-    let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(&idat, expected)
-        .map_err(|e| DecodeError::Corrupt(format!("inflate: {:?}", e.status)))?;
-    if raw.len() < expected {
-        return Err(DecodeError::Corrupt("image data truncated".into()));
-    }
-
-    let bpp = bits_per_pixel.div_ceil(8).max(1);
-    let mut prev = vec![0u8; row_bytes];
-    let mut cur = vec![0u8; row_bytes];
+    let img = Prepared::new(buf, super::MAX_PIXELS)?;
+    let (w, h) = (img.hdr.width as usize, img.hdr.height as usize);
     let mut gray = vec![0u8; w];
     let mut acc = GridAccumulator::new(w, h);
-    for y in 0..h {
-        let line = &raw[y * (row_bytes + 1)..(y + 1) * (row_bytes + 1)];
-        cur.copy_from_slice(&line[1..]);
-        unfilter(line[0], &mut cur, &prev, bpp)?;
-        row_to_gray(&hdr, channels, &cur, &palette, &mut gray);
+    img.for_each_row(|row| {
+        row_to_gray(&img.hdr, img.channels, row, &img.palette, &mut gray);
         acc.push_row(&gray);
-        std::mem::swap(&mut prev, &mut cur);
-    }
+    })?;
     let g = acc.finish();
-    Ok(Decoded { width: hdr.width, height: hdr.height, dhash: dhash(&g.g9), phash: phash(&g.g32) })
+    Ok(Decoded { width: img.hdr.width, height: img.hdr.height, dhash: dhash(&g.g9), phash: phash(&g.g32) })
+}
+
+/// A PNG whose header, palette and IDAT chunks are located and checked, ready to be
+/// inflated and unfiltered row by row (shared by the fingerprint and the thumbnail
+/// decoders). Nothing is inflated or copied up front (DUP-5).
+pub(crate) struct Prepared<'a> {
+    pub hdr: Header,
+    pub channels: usize,
+    pub palette: Vec<[u8; 3]>,
+    /// Palette alpha (`tRNS` of a palette image); missing entries are opaque.
+    pub palette_alpha: Vec<u8>,
+    /// The IDAT chunk payloads, in file order, borrowed from the file buffer.
+    idat: Vec<&'a [u8]>,
+    row_bytes: usize,
+    bpp: usize,
+}
+
+impl<'a> Prepared<'a> {
+    /// Check the header against `max_pixels` (and [`within_limits`]) before inflating.
+    pub fn new(buf: &'a [u8], max_pixels: u64) -> Result<Prepared<'a>, DecodeError> {
+        let hdr = header(buf).ok_or_else(|| DecodeError::Corrupt("missing IHDR".into()))?;
+        if !within_limits(hdr.width, hdr.height) || hdr.width as u64 * hdr.height as u64 > max_pixels {
+            return Err(DecodeError::TooLarge);
+        }
+        if hdr.interlaced {
+            return Err(DecodeError::Unsupported("interlaced PNG"));
+        }
+        let channels = hdr.channels().ok_or_else(|| DecodeError::Corrupt("invalid colour type / depth".into()))?;
+        let (w, h) = (hdr.width as usize, hdr.height as usize);
+        let bits_per_pixel = channels * hdr.bit_depth as usize;
+        let row_bytes = (w * bits_per_pixel).div_ceil(8);
+        let expected = (row_bytes + 1).checked_mul(h).ok_or(DecodeError::TooLarge)?;
+
+        // Locate the IDAT chunks (no copy), PLTE and tRNS.
+        let mut pos = 8usize;
+        let mut idat: Vec<&[u8]> = Vec::new();
+        let mut idat_len = 0usize;
+        let mut palette: Vec<[u8; 3]> = Vec::new();
+        let mut palette_alpha: Vec<u8> = Vec::new();
+        loop {
+            let len = buf.get(pos..pos + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
+            let Some(len) = len else { break };
+            let typ = buf.get(pos + 4..pos + 8).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
+            let data_end = pos.checked_add(8 + len).ok_or_else(|| DecodeError::Corrupt("chunk length".into()))?;
+            let data = buf.get(pos + 8..data_end).ok_or_else(|| DecodeError::Corrupt("truncated chunk".into()))?;
+            match typ {
+                b"IDAT" => {
+                    idat_len += data.len();
+                    if idat_len > expected.saturating_mul(2) + 1024 * 1024 {
+                        return Err(DecodeError::Corrupt("IDAT larger than the image".into()));
+                    }
+                    idat.push(data);
+                }
+                b"PLTE" => palette = data.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+                b"tRNS" if hdr.color_type == 3 => palette_alpha = data.iter().take(256).copied().collect(),
+                b"IEND" => break,
+                _ => {}
+            }
+            pos = data_end + 4; // skip CRC
+        }
+        if hdr.color_type == 3 && palette.is_empty() {
+            return Err(DecodeError::Corrupt("palette image without PLTE".into()));
+        }
+        let bpp = bits_per_pixel.div_ceil(8).max(1);
+        Ok(Prepared { hdr, channels, palette, palette_alpha, idat, row_bytes, bpp })
+    }
+
+    /// Inflate, unfilter and hand every row in order to `f` (raw samples at the file's
+    /// depth). DUP-5: one scanline is inflated at a time and unfiltered against the
+    /// previous one, so memory is O(width) however large the raw image is (it was the
+    /// whole raw image, 8 bytes a pixel for RGBA16, from a file that compresses ~1000:1).
+    pub fn for_each_row(&self, mut f: impl FnMut(&[u8])) -> Result<(), DecodeError> {
+        let h = self.hdr.height as usize;
+        let mut prev = vec![0u8; self.row_bytes];
+        let mut line = vec![0u8; self.row_bytes + 1];
+        let mut state = InflateState::new_boxed(DataFormat::Zlib);
+        let (mut filled, mut y, mut ended) = (0usize, 0usize, false);
+        let mut chunks = self.idat.iter().copied();
+        let mut input: &[u8] = chunks.next().unwrap_or(&[]);
+        while y < h && !ended {
+            let r = inflate(&mut state, input, &mut line[filled..], MZFlush::None);
+            input = &input[r.bytes_consumed..];
+            filled += r.bytes_written;
+            if filled == line.len() {
+                let (filter, cur) = line.split_at_mut(1);
+                unfilter(filter[0], cur, &prev, self.bpp)?;
+                f(cur);
+                prev.copy_from_slice(cur);
+                filled = 0;
+                y += 1;
+            }
+            match r.status {
+                Ok(MZStatus::StreamEnd) => ended = true,
+                Ok(_) | Err(MZError::Buf) => {}
+                Err(e) => return Err(DecodeError::Corrupt(format!("inflate: {e:?}"))),
+            }
+            if r.bytes_consumed == 0 && r.bytes_written == 0 {
+                if !input.is_empty() {
+                    return Err(DecodeError::Corrupt("inflate made no progress".into()));
+                }
+                // Everything buffered is out: feed the next chunk, or stop.
+                match chunks.next() {
+                    Some(c) => input = c,
+                    None => break,
+                }
+            }
+        }
+        if y < h {
+            return Err(DecodeError::Corrupt("image data truncated".into()));
+        }
+        // The stream must end right after the last row, with its checksum: a stream cut
+        // short, holding more than the header announces or followed by more data is a
+        // malformed file, never a fingerprint or a thumbnail.
+        let mut probe = [0u8; 1];
+        while !ended {
+            let r = inflate(&mut state, input, &mut probe, MZFlush::None);
+            input = &input[r.bytes_consumed..];
+            if r.bytes_written > 0 {
+                return Err(DecodeError::Corrupt("image data longer than the header".into()));
+            }
+            match r.status {
+                Ok(MZStatus::StreamEnd) => ended = true,
+                Ok(_) | Err(MZError::Buf) => {}
+                Err(e) => return Err(DecodeError::Corrupt(format!("inflate: {e:?}"))),
+            }
+            if !ended && r.bytes_consumed == 0 {
+                if !input.is_empty() {
+                    return Err(DecodeError::Corrupt("inflate made no progress".into()));
+                }
+                match chunks.next() {
+                    Some(c) => input = c,
+                    None => return Err(DecodeError::Corrupt("image data stream not terminated".into())),
+                }
+            }
+        }
+        if !input.is_empty() || chunks.any(|c| !c.is_empty()) {
+            return Err(DecodeError::Corrupt("data after the end of the image stream".into()));
+        }
+        Ok(())
+    }
+
+    /// One unfiltered row as 8-bit RGBA (palette alpha from `tRNS`).
+    pub fn row_to_rgba(&self, row: &[u8], out: &mut [u8]) {
+        let d = self.hdr.bit_depth;
+        let ch = self.channels;
+        for (x, o) in out.chunks_exact_mut(4).enumerate() {
+            let s = |i: usize| (sample(row, d, x * ch + i) >> 8) as u8;
+            let px = match self.hdr.color_type {
+                0 => [s(0), s(0), s(0), 255],
+                4 => [s(0), s(0), s(0), s(1)],
+                2 => [s(0), s(1), s(2), 255],
+                6 => [s(0), s(1), s(2), s(3)],
+                _ => {
+                    let i = index(row, d, x);
+                    let p = self.palette.get(i).copied().unwrap_or([0, 0, 0]);
+                    [p[0], p[1], p[2], self.palette_alpha.get(i).copied().unwrap_or(255)]
+                }
+            };
+            o.copy_from_slice(&px);
+        }
+    }
 }
 
 fn unfilter(filter: u8, cur: &mut [u8], prev: &[u8], bpp: usize) -> Result<(), DecodeError> {
@@ -252,6 +368,86 @@ mod tests {
 
     fn scene(w: usize, h: usize) -> Vec<u8> {
         (0..w * h).map(|i| (((i % w) * 255 / w) as u8) ^ (((i / w) * 7) as u8 & 0x30)).collect()
+    }
+
+    /// Re-chunk the IDAT stream of `file` into pieces of `n` bytes.
+    fn split_idat(file: &[u8], n: usize) -> Vec<u8> {
+        let mut pos = 8;
+        let (mut head, mut z, mut tail) = (file[..8].to_vec(), Vec::new(), Vec::new());
+        while pos + 8 <= file.len() {
+            let len = u32::from_be_bytes(file[pos..pos + 4].try_into().unwrap()) as usize;
+            let chunk = &file[pos..pos + 12 + len];
+            match &file[pos + 4..pos + 8] {
+                b"IDAT" => z.extend_from_slice(&chunk[8..8 + len]),
+                _ if z.is_empty() => head.extend_from_slice(chunk),
+                _ => tail.extend_from_slice(chunk),
+            }
+            pos += 12 + len;
+        }
+        for part in z.chunks(n) {
+            head.extend_from_slice(&(part.len() as u32).to_be_bytes());
+            head.extend_from_slice(b"IDAT");
+            head.extend_from_slice(part);
+            head.extend_from_slice(&[0; 4]);
+        }
+        head.extend_from_slice(&tail);
+        head
+    }
+
+    /// The image data must be exactly one zlib stream holding exactly the scanlines the
+    /// header announces: a stream that ends short of its end (cut after the last row, the
+    /// checksum missing) or that holds more rows than the header is malformed, never a
+    /// fingerprint (or a thumbnail) a similar-image group could pre-select.
+    #[test]
+    fn image_data_must_end_exactly_with_the_last_row() {
+        let (w, h) = (40usize, 30usize);
+        let g = scene(w, h);
+        let ok = encode(w as u32, h as u32, 1, &g, true);
+        assert!(decode(&ok).is_ok());
+        // Over-long: the header says one row less than the stream holds.
+        let mut long = ok.clone();
+        long[20..24].copy_from_slice(&(h as u32 - 1).to_be_bytes());
+        assert!(matches!(decode(&long), Err(DecodeError::Corrupt(_))), "{:?}", decode(&long));
+        // Truncated: every row is there but the stream stops before its end (no Adler-32).
+        let mut raw = Vec::new();
+        for row in g.chunks_exact(w) {
+            raw.push(0);
+            raw.extend_from_slice(row);
+        }
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        let mut cut = ok[..33].to_vec();
+        let idat = &z[..z.len() - 4];
+        cut.extend_from_slice(&(idat.len() as u32).to_be_bytes());
+        cut.extend_from_slice(b"IDAT");
+        cut.extend_from_slice(idat);
+        cut.extend_from_slice(&[0; 4]);
+        cut.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0, 0, 0, 0]);
+        assert!(matches!(decode(&cut), Err(DecodeError::Corrupt(_))), "{:?}", decode(&cut));
+        // Trailing data after the end of the stream is not image data either.
+        let mut extra = ok[..33].to_vec();
+        let mut z2 = z.clone();
+        z2.extend_from_slice(&[0x55; 16]);
+        extra.extend_from_slice(&(z2.len() as u32).to_be_bytes());
+        extra.extend_from_slice(b"IDAT");
+        extra.extend_from_slice(&z2);
+        extra.extend_from_slice(&[0; 4]);
+        extra.extend_from_slice(&[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0, 0, 0, 0]);
+        assert!(matches!(decode(&extra), Err(DecodeError::Corrupt(_))), "{:?}", decode(&extra));
+    }
+
+    #[test]
+    fn idat_split_anywhere_decodes_the_same() {
+        let (w, h) = (70, 50);
+        let g = scene(w, h);
+        let file = encode(w as u32, h as u32, 1, &g, true);
+        let whole = decode(&file).unwrap();
+        for n in [1, 7, 100, 4096] {
+            assert_eq!(decode(&split_idat(&file, n)).unwrap(), whole, "chunks of {n}");
+        }
+        // A stream cut short is corrupt, never a panic or a hang.
+        let cut = split_idat(&file, 7);
+        let short: Vec<u8> = cut[..cut.len() / 2].to_vec();
+        assert!(matches!(decode(&short), Err(DecodeError::Corrupt(_))));
     }
 
     #[test]

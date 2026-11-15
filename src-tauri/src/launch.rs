@@ -72,6 +72,14 @@ mod tests {
         assert_eq!(a.intent, Some(LaunchIntent { mode: LaunchMode::Duplicates, path: "/work/Pictures".into() }));
     }
 
+    /// IPC-11: the inline form keeps a folder named like a flag a path.
+    #[test]
+    fn an_inline_value_that_looks_like_a_flag_stays_a_path() {
+        let a = p(&["--duplicates=/work/--data-dir=x"]);
+        assert_eq!(a.intent, Some(LaunchIntent { mode: LaunchMode::Duplicates, path: "/work/--data-dir=x".into() }));
+        assert_eq!(a.data_dir, None);
+    }
+
     #[test]
     fn unknown_and_valueless_flags_are_ignored() {
         assert_eq!(p(&["--foo", "bar", "--optimise"]), LaunchArgs::default());

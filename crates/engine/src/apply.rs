@@ -19,8 +19,8 @@ use std::sync::Arc;
 use mj_actions::{ExecContext, ExecOptions, Guard, ProtectedPaths, Services};
 use mj_core::{
     lock, Action, ActionItem, Badges, CancelToken, Confidence, Error, Estimate, FileStamp, GroupKind, ItemStatus, Job,
-    JobId, JobKind, JobOutcome, JournalState, KeepCopy, OriginalsPolicy, PlanStep, ProgressSink, Result, RunId,
-    RunKind, RunRecord, SafetyClass, StepConfirmation, StepId, TargetKind, Timestamp,
+    JobId, JobKind, JournalState, KeepCopy, OriginalsPolicy, PlanStep, ProgressSink, Result, RunId, RunKind, RunRecord,
+    SafetyClass, StepConfirmation, StepId, TargetKind, Timestamp,
 };
 
 use crate::api::{
@@ -30,6 +30,7 @@ use crate::api::{
 use crate::jobs::{JobResult, Work};
 use crate::plan::removes;
 use crate::results::{is_selected, skip_badges};
+use crate::savings::{frees, takes_copy_away, Frees};
 use crate::Engine;
 
 /// A step expanded into action items.
@@ -41,6 +42,11 @@ pub(crate) struct StepWork {
     pub warnings: Vec<String>,
     /// Bytes the index says each item occupies, and its (file id, link count).
     pub sizes: Vec<(u64, Option<(mj_core::FileId, u32)>)>,
+    /// `plan::measure_key` of the record the items were built from (same lock).
+    pub key: u64,
+    /// `Tally::shared` of the step when a dry run left out the rows another step counts
+    /// (`leave_shared_rows_out`); `(0, 0)` otherwise.
+    pub shared: (u64, u64),
 }
 
 /// The action a step runs with the dialog's originals choice applied.
@@ -142,6 +148,8 @@ impl Engine {
             roots: index.roots.clone(),
             warnings: Vec::new(),
             sizes: Vec::new(),
+            key: crate::plan::measure_key(rec, skip),
+            shared: (0, 0),
         };
         work.step.action = action.clone();
         if matches!(action, Action::None) {
@@ -159,6 +167,9 @@ impl Engine {
         };
         let mut warned: std::collections::BTreeMap<String, u64> = std::collections::BTreeMap::new();
         let locked = rec.candidates.iter().filter(|c| !(c.badges & skip).is_empty()).count();
+        // ENG-5: one lookup per group id instead of a scan of every group per row.
+        let groups: HashMap<mj_core::GroupId, &mj_core::CandidateGroup> =
+            rec.groups.iter().map(|g| (g.id, g)).collect();
         for c in rec.candidates.iter().filter(|c| is_selected(rec, c, skip)) {
             if c.badges.contains(Badges::ONLINE_ONLY) && !matches!(action, Action::Copy { .. }) {
                 online += 1;
@@ -169,7 +180,7 @@ impl Engine {
                 continue;
             };
             let link_source = if matches!(action, Action::Hardlink | Action::Reflink) {
-                match c.group.and_then(|g| rec.groups.iter().find(|x| x.id == g)).and_then(|g| g.keeper.clone()) {
+                match c.group.and_then(|g| groups.get(&g)).and_then(|g| g.keeper.clone()) {
                     Some(k) if k != c.path => Some(k),
                     _ => {
                         no_keeper += 1;
@@ -185,7 +196,7 @@ impl Engine {
                     continue;
                 }
                 Some((g, Some(k))) => {
-                    let exact = rec.groups.iter().find(|x| x.id == g).is_some_and(|x| x.kind == GroupKind::Exact);
+                    let exact = groups.get(&g).is_some_and(|x| x.kind == GroupKind::Exact);
                     // A survivor the index does not know cannot be verified: skip.
                     let Some(ke) = index.get(k) else {
                         last_copy += 1;
@@ -254,6 +265,8 @@ impl Engine {
         }
         let mut works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
         skip_kept_copies(works.iter_mut());
+        skip_items_other_steps_remove(works.iter_mut());
+        self.leave_shared_rows_out(&plan.steps, &mut works);
         let total: u64 = works.iter().map(|w| w.items.len() as u64).sum();
         let job = self.new_job(JobKind::DryRun, None, None, "Dry run", total, plan.estimate.bytes_before);
         let plan_id = plan.id;
@@ -285,27 +298,34 @@ impl Engine {
                     if removes(&w.step.action) {
                         // Removals: the scan's allocated sizes (folders = subtree totals) of the
                         // items that pass every check, minus what other hard links keep.
+                        let skipped: std::collections::HashSet<&Path> =
+                            r.skipped.iter().map(|s| s.path.as_path()).collect();
                         let mut before = 0u64;
                         for (item, (size, _)) in w.items.iter().zip(&w.sizes) {
-                            if !r.skipped.iter().any(|s| s.path == item.path) {
+                            if !skipped.contains(item.path.as_path()) {
                                 before += size;
                             }
                         }
                         est.bytes_before = before;
                         est.bytes_after = hardlink_not_freed(w, &r.skipped).min(before);
                     }
-                    if matches!(w.step.action, Action::Copy { .. }) {
+                    if frees(&w.step.action) == Frees::Nothing {
+                        // Copies, light copies and archives that keep their sources leave
+                        // the original in place: nothing is freed.
                         est.bytes_after = est.bytes_before;
                     }
                     total = total.add(&est);
-                    let sel = self
-                        .results
-                        .read()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get(&w.step.opportunity)
-                        .map(|x| x.selection.clone())
-                        .unwrap_or_default();
-                    lock(&self.plan).measured.insert(w.step.id, (w.step.action.clone(), sel, est));
+                    // ENG-4: the measurement stands for the items built above, not for
+                    // whatever the selection is when the dry run ends.
+                    lock(&self.plan).measured.insert(
+                        w.step.id,
+                        crate::plan::Measured {
+                            action: w.step.action.clone(),
+                            key: w.key,
+                            shared: w.shared,
+                            estimate: est,
+                        },
+                    );
                     steps.push(DryRunStep {
                         step_id: w.step.id,
                         title: w.step.title.clone(),
@@ -329,7 +349,46 @@ impl Engine {
         let plan = self.refresh_plan();
         let _ = self.plan_changed(plan);
         self.emit(Event::DryRun(report));
-        JobResult { outcome: None, error, report: false }
+        JobResult { outcome: None, error, report: false, complete: false }
+    }
+
+    /// A dry run measures every file once: a row another step of the plan counts (the same
+    /// file where that step frees more, or a file inside a folder it removes) is left out
+    /// of this step's measurement, exactly as it is left out of the step's estimate. Only
+    /// the measurement changes: apply still runs every step on its whole selection.
+    fn leave_shared_rows_out(&self, steps: &[PlanStep], works: &mut [StepWork]) {
+        let skip = skip_badges(&lock(&self.settings));
+        let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+        let tallies = crate::plan::step_tallies(&results, steps, skip);
+        for ((step, t), w) in steps.iter().zip(&tallies).zip(works.iter_mut()) {
+            let (Some(rec), Some(t)) = (results.get(&step.opportunity), t) else { continue };
+            w.shared = t.shared;
+            if t.shared.0 == 0 {
+                continue;
+            }
+            let shared: std::collections::HashSet<&Path> = rec
+                .candidates
+                .iter()
+                .zip(&t.rows)
+                .filter(|(_, r)| r.0 == crate::savings::RowState::Shared)
+                .map(|(c, _)| c.path.as_path())
+                .collect();
+            let before = w.items.len();
+            let (items, sizes): (Vec<_>, Vec<_>) = std::mem::take(&mut w.items)
+                .into_iter()
+                .zip(std::mem::take(&mut w.sizes))
+                .filter(|(i, _)| !shared.contains(i.path.as_path()))
+                .unzip();
+            w.items = items;
+            w.sizes = sizes;
+            let left = before - w.items.len();
+            if left > 0 {
+                w.warnings.push(format!(
+                    "{left} item(s) not measured here: another step of the plan frees more for them, so they are \
+                     counted there"
+                ));
+            }
+        }
     }
 
     /// Content of the confirmation dialog for one step (SAF-10/11).
@@ -343,8 +402,29 @@ impl Engine {
             .ok_or_else(|| crate::plan::unknown_step(req.step_id))?;
         let settings = lock(&self.settings).clone();
         let work = self.build_step(&step, None)?;
-        let e = step.estimate;
-        let files = e.files;
+        // ENG-4: every figure of the dialog describes the items its digest binds: the count
+        // is the number of items, the bytes come from the same record state (a matching
+        // dry-run measurement, else the live estimate), never from a cached plan figure.
+        let e = {
+            let skip = skip_badges(&settings);
+            let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+            let rec = results.get(&step.opportunity).ok_or_else(|| crate::results::unknown(&step.opportunity))?;
+            if crate::plan::measure_key(rec, skip) != work.key {
+                return Err(Error::Conflict("the step changed while the confirmation was prepared; try again".into()));
+            }
+            let measured = lock(&self.plan).measured.get(&step.id).cloned();
+            // The step's share of the plan's one account of savings (a file two steps list
+            // is counted once, by the step that frees most for it), as on the plan card.
+            let steps = lock(&self.plan).plan.steps.clone();
+            let i = steps.iter().position(|s| s.id == step.id).ok_or_else(|| crate::plan::unknown_step(step.id))?;
+            let t = crate::plan::step_tallies(&results, &steps, skip).swap_remove(i);
+            let t = t.ok_or_else(|| crate::results::unknown(&step.opportunity))?;
+            match measured {
+                Some(m) if m.action == step.action && m.key == work.key && m.shared == t.shared => m.estimate,
+                _ => t.estimate(),
+            }
+        };
+        let files = work.items.len() as u64;
         let permanent = step.safety == SafetyClass::Permanent
             || matches!(step.action, Action::PermanentDelete)
             || (!step.lossy && !matches!(step.action, Action::Hardlink) && !step.action.safety(false).is_undoable());
@@ -437,6 +517,13 @@ impl Engine {
                 )
             } else if permanent {
                 "Every change is logged in History, but permanently deleted files cannot be restored.".into()
+            } else if has_originals && settings.general.quarantine_days < settings.general.undo_days {
+                // ACT-10: originals held in the quarantine are purged after its retention.
+                format!(
+                    "Every change is logged; History → Restore brings the originals back for {} days \
+                     ({} days for originals kept in the quarantine).",
+                    settings.general.undo_days, settings.general.quarantine_days
+                )
             } else {
                 format!(
                     "Every change is logged; History → Restore brings the originals back for {} days.",
@@ -451,11 +538,24 @@ impl Engine {
 
     /// Apply the plan: one job per step, in plan order.
     pub fn plan_apply(self: &Arc<Self>, req: PlanApplyRequest) -> Result<ApplyStarted> {
+        self.apply_plan_steps(req, None)
+    }
+
+    /// Apply the plan's steps, or only the steps in `only` (ENG-8: a scheduled run applies
+    /// the steps it added and never a step the user added meanwhile).
+    pub(crate) fn apply_plan_steps(
+        self: &Arc<Self>,
+        req: PlanApplyRequest,
+        only: Option<&[StepId]>,
+    ) -> Result<ApplyStarted> {
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(Error::Conflict("MyJanitor is shutting down".into()));
         }
         self.require_writable()?;
-        let plan = lock(&self.plan).plan.clone();
+        let mut plan = lock(&self.plan).plan.clone();
+        if let Some(only) = only {
+            plan.steps.retain(|s| only.contains(&s.id));
+        }
         if plan.steps.is_empty() {
             return Err(Error::InvalidInput("the plan is empty".into()));
         }
@@ -484,6 +584,8 @@ impl Engine {
         }
         // G-03: the copy one step keeps is kept by every other step of the run too.
         skip_kept_copies(works.iter_mut().map(|(w, _)| w));
+        // RF-8: a file two steps list is acted on once.
+        skip_items_other_steps_remove(works.iter_mut().map(|(w, _)| w));
         let now = Timestamp::now();
         let run_id = self.journal.next_run_id(now);
         let titles: Vec<String> = plan.steps.iter().map(|s| s.title.clone()).collect();
@@ -541,11 +643,15 @@ impl Engine {
         // CLN-ACT-04: expired quarantine items are purged after each completed step.
         self.quarantine_auto_purge();
         self.emit(Event::HistoryChanged(HistoryChanged { run_id: Some(run.run_id) }));
-        JobResult { outcome: outcome.or_else(|| Some(JobOutcome::default())), error, report: true }
+        let outcome = outcome.unwrap_or_default();
+        let complete = error.is_none() && outcome.succeeded + outcome.skipped + outcome.failed >= w.items.len() as u64;
+        JobResult { outcome: Some(outcome), error, report: true, complete }
     }
 
-    /// Applied items leave their cards (and the index); the applied step leaves the plan.
-    fn after_apply_step(&self, run_id: RunId, w: &StepWork) -> Vec<PathBuf> {
+    /// Applied items leave their cards (ENG-11: with the groups they leave too small), and
+    /// those no longer at their place are remembered so a re-analysis or a search on the
+    /// unchanged index does not bring them back; the applied step leaves the plan.
+    fn after_apply_step(&self, run_id: RunId, w: &StepWork) -> std::collections::HashSet<PathBuf> {
         let done: Vec<PathBuf> = self
             .journal
             .entries_of(run_id)
@@ -554,20 +660,19 @@ impl Engine {
             .map(|e| e.original)
             .collect();
         let skip = skip_badges(&lock(&self.settings));
+        // ENG-5: keyed once, before the write lock is taken.
+        let done_set = DoneSet::new(&done);
         let generation = {
             let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
-            if !done.is_empty() {
-                let gone = |p: &Path| done.iter().any(|d| mj_core::pathutil::is_within(d, p));
+            if !done_set.is_empty() {
+                let gone = |p: &Path| done_set.covers(p);
                 for rec in &mut results.opportunities {
-                    let before = rec.candidates.len();
-                    rec.candidates.retain(|c| !gone(&c.path));
-                    if rec.candidates.len() != before {
-                        for g in &mut rec.groups {
-                            g.members.retain(|m| !gone(m));
-                        }
-                        crate::opportunities::recompute(rec, skip);
-                    }
+                    crate::results::drop_gone(rec, &gone, skip);
                 }
+                // An in-place change (optimised under the same name) is still there.
+                let vacated = done.iter().filter(|d| std::fs::symlink_metadata(d).is_err());
+                let vacated: Vec<String> = vacated.map(|d| mj_core::pathutil::path_key(d)).collect();
+                results.removed.extend(vacated);
             }
             results.generation
         };
@@ -579,7 +684,7 @@ impl Engine {
         let plan = self.refresh_plan();
         let _ = self.plan_changed(plan);
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
-        done
+        done.into_iter().collect()
     }
 }
 
@@ -611,18 +716,6 @@ pub(crate) fn selection_digest(w: &StepWork) -> String {
         h.update(b"\n");
     }
     h.finish_hex()
-}
-
-/// True when `action`, run on a kept copy (or a folder holding one), could leave no copy of
-/// its group where the user can reach it: removals, moves, archives that take their
-/// sources away, and optimisations or archives that delete the originals (G-03).
-fn takes_copy_away(action: &Action) -> bool {
-    match action {
-        Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete | Action::Move { .. } => true,
-        Action::Archive { keep_sources, originals, .. } => !keep_sources || *originals == OriginalsPolicy::Delete,
-        Action::Optimise { originals, .. } => *originals == OriginalsPolicy::Delete,
-        _ => false,
-    }
 }
 
 /// G-03: "one copy is always kept" across the whole run. Every copy a step keeps (the
@@ -673,14 +766,60 @@ pub(crate) fn skip_kept_copies<'a>(works: impl Iterator<Item = &'a mut StepWork>
     }
 }
 
+/// RF-8: a file is acted on once per run. Detectors overlap (a `.tmp` in the temp folder
+/// is a temporary file and an app-cache row; a `node_modules` may sit inside a cache folder
+/// another card removes), so an item is dropped from its step when another step removes
+/// the same path (the first removing step in plan order keeps it), or when any step
+/// removes a folder holding it. Without this the later step fails on a file that is already
+/// gone, or optimises a file that is then removed. This matches the savings account
+/// (`savings::tally`), where the removal of a path or of the folder holding it frees at
+/// least as much as anything else done to it. Runs after [`skip_kept_copies`], so a folder
+/// that step refused is not counted as removed.
+pub(crate) fn skip_items_other_steps_remove<'a>(works: impl Iterator<Item = &'a mut StepWork>) {
+    use mj_core::pathutil::path_key;
+    let mut works: Vec<&mut StepWork> = works.collect();
+    // The key of every removed path, with the first step that removes it.
+    let mut removed: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (si, w) in works.iter().enumerate() {
+        for i in w.items.iter().filter(|i| removes(&i.action)) {
+            removed.entry(path_key(&i.path)).or_insert(si);
+        }
+    }
+    if removed.is_empty() {
+        return;
+    }
+    for (si, w) in works.iter_mut().enumerate() {
+        let mut skipped = 0u64;
+        let mut items = Vec::with_capacity(w.items.len());
+        let mut sizes = Vec::with_capacity(w.sizes.len());
+        for (item, size) in w.items.drain(..).zip(w.sizes.drain(..)) {
+            let same = removed.get(&path_key(&item.path)).is_some_and(|&owner| owner != si);
+            let inside = item.path.ancestors().skip(1).any(|a| removed.contains_key(&path_key(a)));
+            if same || inside {
+                skipped += 1;
+            } else {
+                items.push(item);
+                sizes.push(size);
+            }
+        }
+        w.items = items;
+        w.sizes = sizes;
+        if skipped > 0 {
+            w.warnings.push(format!(
+                "{skipped} item(s) left to another step of the plan, which removes them or the folder holding them"
+            ));
+        }
+    }
+}
+
 /// Bytes a removal does not free because other hard links to the same file stay
 /// (only some of a file's links are in the step), or counted once per link when all are.
 fn hardlink_not_freed(w: &StepWork, skipped: &[mj_core::ItemOutcome]) -> u64 {
     let mut by_id: HashMap<mj_core::FileId, (u32, u32, u64)> = HashMap::new();
+    let not_done: std::collections::HashSet<&Path> =
+        skipped.iter().filter(|s| s.status != ItemStatus::Done).map(|s| s.path.as_path()).collect();
     for (item, (size, id)) in w.items.iter().zip(&w.sizes) {
-        if item.target != TargetKind::File
-            || skipped.iter().any(|s| s.path == item.path && s.status != ItemStatus::Done)
-        {
+        if item.target != TargetKind::File || not_done.contains(item.path.as_path()) {
             continue;
         }
         if let Some((id, links)) = id {
@@ -694,4 +833,89 @@ fn hardlink_not_freed(w: &StepWork, skipped: &[mj_core::ItemOutcome]) -> u64 {
         .values()
         .map(|(links, n, size)| if n < links { size * u64::from(*n) } else { size * u64::from(n.saturating_sub(1)) })
         .sum()
+}
+
+/// ENG-5 / IPC-3 / ACT-6: the paths a step removed, for the "is this candidate gone?"
+/// test run on every candidate of every card under the results write lock. Same rule as
+/// `is_within` (the path itself or anything below it, by component, case-insensitive on
+/// Windows), in O(depth) per candidate instead of a scan of every removed path.
+pub(crate) struct DoneSet {
+    /// `path_key` of every removed path.
+    keys: std::collections::HashSet<String>,
+}
+
+impl DoneSet {
+    pub(crate) fn new(done: &[PathBuf]) -> DoneSet {
+        DoneSet { keys: done.iter().map(|d| mj_core::pathutil::path_key(d)).collect() }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// True when `p` is a removed path or lies below one: its key or the key of one of its
+    /// ancestors is in the set (a root's key keeps its separator: `/`, `c:/`).
+    pub(crate) fn covers(&self, p: &Path) -> bool {
+        if self.keys.is_empty() {
+            return false;
+        }
+        let key = mj_core::pathutil::path_key(p);
+        let mut s = key.as_str();
+        loop {
+            if self.keys.contains(s) {
+                return true;
+            }
+            let Some(i) = s.rfind('/') else { return false };
+            if self.keys.contains(&s[..=i]) {
+                return true;
+            }
+            if i == 0 {
+                return false;
+            }
+            s = &s[..i];
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn done_set_follows_is_within() {
+        let done = DoneSet::new(&[PathBuf::from("/a/b"), PathBuf::from("/x/y/"), PathBuf::from("/m/n/../o")]);
+        assert!(done.covers(Path::new("/a/b")));
+        assert!(done.covers(Path::new("/a/b/c/d.txt")));
+        assert!(!done.covers(Path::new("/a/bc")), "a sibling sharing a prefix");
+        assert!(!done.covers(Path::new("/a")));
+        assert!(done.covers(Path::new("/x/y/z")));
+        assert!(done.covers(Path::new("/m/o/p")));
+        assert!(!done.covers(Path::new("/m/n/p")));
+        assert!(DoneSet::new(&[PathBuf::from("/")]).covers(Path::new("/q")));
+        assert!(!DoneSet::new(&[]).covers(Path::new("/q")));
+        #[cfg(windows)]
+        {
+            let done = DoneSet::new(&[PathBuf::from(r"C:\Users\Me\Old"), PathBuf::from(r"D:\")]);
+            assert!(done.covers(Path::new(r"c:\users\me\old\a.txt")));
+            assert!(!done.covers(Path::new(r"C:\Users\Me\Older")));
+            assert!(done.covers(Path::new(r"D:\x")));
+        }
+    }
+
+    /// The lookup stays fast at the sizes the app is built for (200 000 candidates, 50 000
+    /// removed paths): the old any-of-done scan needed about 1e10 path comparisons here.
+    #[test]
+    fn done_set_is_fast_on_large_steps() {
+        let done: Vec<PathBuf> = (0..50_000).map(|i| PathBuf::from(format!("/data/d{}/f{i}.bin", i % 97))).collect();
+        let set = DoneSet::new(&done);
+        let started = std::time::Instant::now();
+        let mut hits = 0;
+        for i in 0..200_000 {
+            if set.covers(Path::new(&format!("/data/d{}/f{i}.bin", i % 97))) {
+                hits += 1;
+            }
+        }
+        assert_eq!(hits, 50_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    }
 }

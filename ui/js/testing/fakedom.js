@@ -97,6 +97,29 @@ function matchParts(el, parts, i) {
   return false;
 }
 
+/**
+ * What a real `querySelectorAll` returns: a static NodeList. It has `length`, indexed access,
+ * `item`, `forEach`, `entries`, `keys`, `values` and iteration, and none of the Array methods
+ * (`filter`, `map`, `indexOf`, `find`...), so production code that treats it as an Array fails
+ * here as it would in the WebView (UI-3).
+ */
+export class FakeNodeList {
+  /** @param {any[]} nodes */
+  constructor(nodes) {
+    nodes.forEach((n, i) => { this[i] = n; });
+    Object.defineProperty(this, 'length', { value: nodes.length });
+    Object.freeze(this);
+  }
+  /** @param {number} i */
+  item(i) { return this[i] ?? null; }
+  /** @param {(n: any, i: number, list: FakeNodeList) => void} fn @param {any} [self] */
+  forEach(fn, self) { for (let i = 0; i < this.length; i++) fn.call(self, this[i], i, this); }
+  *values() { for (let i = 0; i < this.length; i++) yield this[i]; }
+  *keys() { for (let i = 0; i < this.length; i++) yield i; }
+  *entries() { for (let i = 0; i < this.length; i++) yield [i, this[i]]; }
+  [Symbol.iterator]() { return this.values(); }
+}
+
 export class FakeElement {
   /** @param {string} tag @param {any} doc @param {string|null} [ns] */
   constructor(tag, doc, ns = null) {
@@ -137,6 +160,16 @@ export class FakeElement {
   setAttribute(k, v) { this.attributes.set(k, String(v)); }
   getAttribute(k) { return this.attributes.has(k) ? this.attributes.get(k) : null; }
   hasAttribute(k) { return this.attributes.has(k); }
+  getAttributeNames() { return [...this.attributes.keys()]; }
+  insertBefore(n, ref) {
+    if (!ref) return this.appendChild(n);
+    if (n.parentNode) n.parentNode.removeChild(n);
+    const i = this.childNodes.indexOf(ref);
+    if (i < 0) throw new Error('insertBefore: the reference is not a child');
+    n.parentNode = this;
+    this.childNodes.splice(i, 0, n);
+    return n;
+  }
   removeAttribute(k) { this.attributes.delete(k); }
   appendChild(n) {
     if (n.parentNode) n.parentNode.removeChild(n);
@@ -161,7 +194,7 @@ export class FakeElement {
     const out = [];
     const walk = (n) => { for (const c of n.childNodes) if (isEl(c)) { if (c.matches(sel)) out.push(c); walk(c); } };
     walk(this);
-    return out;
+    return new FakeNodeList(out);
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] ?? null; }
   addEventListener(type, fn) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(fn); }

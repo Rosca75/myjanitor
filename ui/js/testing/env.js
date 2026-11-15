@@ -11,11 +11,13 @@ import { mountApp } from '../app.js';
 const snake = (name) => name.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
 /**
- * @param {{ scenario?: 'empty'|'fresh'|'results'|'rich', mount?: boolean, speed?: number, now?: () => number, platform?: string, disabled?: string[] }} [opts]
+ * @param {{ scenario?: 'empty'|'fresh'|'results'|'rich', mount?: boolean, speed?: number, now?: () => number, platform?: string, disabled?: string[], dialog?: { folder?: string | null, file?: string | null } }} [opts]
+ *   `dialog`: what the stand-in for the native file dialogs answers (`null`: the user
+ *   cancelled); change it later with `env.backend.answerDialogs(...)`.
  */
 export async function makeEnv(opts = {}) {
   const doc = installFakeDom();
-  const backend = createMockBackend({ scenario: opts.scenario ?? 'results', speed: opts.speed ?? 0, now: opts.now, platform: opts.platform, disabled: opts.disabled });
+  const backend = createMockBackend({ scenario: opts.scenario ?? 'results', speed: opts.speed ?? 0, now: opts.now, platform: opts.platform, disabled: opts.disabled, dialog: opts.dialog });
   /** @type {{ cmd: string, req: any }[]} */
   const calls = [];
   const api = new Proxy({}, {
@@ -43,10 +45,11 @@ export async function makeEnv(opts = {}) {
       }
     },
     $: (sel, from = root) => from.querySelector(sel),
-    $$: (sel, from = root) => from.querySelectorAll(sel),
+    /** Test helper: the matches as an Array (the DOM gives a NodeList, see FakeNodeList). */
+    $$: (sel, from = root) => Array.from(from.querySelectorAll(sel)),
     /** First element whose own tag matches and whose text includes `text`. */
     byText(tag, text, from = root) {
-      return from.querySelectorAll(tag).find((e) => e.textContent.includes(text)) ?? null;
+      return Array.from(from.querySelectorAll(tag)).find((e) => e.textContent.includes(text)) ?? null;
     },
     /** Click an element and let the effects settle. @param {any} el */
     async click(el) {

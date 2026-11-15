@@ -71,8 +71,9 @@ fn ipc_age_key(k: &str) -> &str {
 }
 
 impl Engine {
-    /// Volumes with the plan's effect: each plan step's saving attributed to the volume
-    /// holding each selected item (longest mount point wins), scaled to the step estimate.
+    /// Volumes with the plan's effect: each row the plan counts (every file once, as in
+    /// the plan total) is attributed to the volume holding it (longest mount point wins)
+    /// and scaled to its step's estimate, which a dry run may have measured.
     pub fn drives_list(&self) -> Result<Vec<Drive>> {
         let vols = self.platform().volumes()?;
         let plan = lock(&self.plan).plan.clone();
@@ -80,22 +81,17 @@ impl Engine {
         let skip = crate::results::skip_badges(&lock(&self.settings));
         {
             let results = self.results.read().unwrap_or_else(|e| e.into_inner());
-            for step in &plan.steps {
-                let Some(rec) = results.get(&step.opportunity) else { continue };
-                let rows: Vec<(&std::path::Path, u64)> = rec
-                    .candidates
-                    .iter()
-                    .filter(|c| crate::results::is_selected(rec, c, skip))
-                    .map(|c| (c.path.as_path(), c.saving()))
-                    .collect();
-                let sum: u64 = rows.iter().map(|r| r.1).sum();
+            let tallies = crate::plan::step_tallies(&results, &plan.steps, skip);
+            for (step, t) in plan.steps.iter().zip(&tallies) {
+                let (Some(rec), Some(t)) = (results.get(&step.opportunity), t) else { continue };
+                let sum = t.saving();
                 let target = step.estimate.saving();
-                for (path, s) in rows {
-                    let share = if sum == 0 { 0 } else { (s as u128 * target as u128 / sum as u128) as u64 };
+                for (c, (_, s)) in rec.candidates.iter().zip(&t.rows).filter(|(_, r)| r.1 > 0) {
+                    let share = (*s as u128 * target as u128 / sum as u128) as u64;
                     if let Some((i, _)) = vols
                         .iter()
                         .enumerate()
-                        .filter(|(_, v)| mj_core::pathutil::is_within(&v.mount, path))
+                        .filter(|(_, v)| mj_core::pathutil::is_within(&v.mount, &c.path))
                         .max_by_key(|(_, v)| v.mount.components().count())
                     {
                         saving[i] += share;

@@ -329,8 +329,12 @@ mod tests {
         assert_eq!(t.parent(pos("/r/a-b")), Some(pos("/r")));
         assert_eq!(t.parent(pos("/r")), None);
         assert_eq!(t.tops(), vec![pos("/r")]);
-        // Agrees with the index's own (slower) totals.
-        assert_eq!(ix.totals(pos("/r/a")).bytes, 110 + 5000);
+        // Agrees with the index's own (slower) totals, which the disk view uses (SCAN-7):
+        // online-only bytes are not on this disk.
+        let slow = ix.totals(pos("/r/a"));
+        assert_eq!((slow.files, slow.bytes, slow.online_only_bytes), (a.files, a.bytes, 5000));
+        let slow = ix.totals(pos("/r"));
+        assert_eq!((slow.files, slow.bytes, slow.online_only_bytes), (root.files, root.bytes, root.online_only_bytes));
         let kids: Vec<_> = t.children_by_size(pos("/r")).into_iter().map(|i| ix.entry(i).name()).collect();
         assert_eq!(kids, vec!["a", "a-b", "README", "link"]);
         assert_eq!(t.children(pos("/r/a")).count(), 3);

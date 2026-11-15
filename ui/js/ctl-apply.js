@@ -68,8 +68,13 @@ export function applyActions(c) {
     pauseJob: guard(async (id) => { await api.jobPause({ job_id: id }); }),
     resumeJob: guard(async (id) => { await api.jobResume({ job_id: id }); }),
     cancelJob: guard(async (id) => { await api.jobCancel({ job_id: id }); }),
-    /** "Undo last action" (strip and completed summary). */
+    /** "Undo last action" (the strip button). */
     undoLast: guard(async () => { set({ completed: null }); await api.undoLast(); set({ jobs: await api.jobsList() }); }),
+    /**
+     * "Undo" on a finished run (completed banner and queue summary): that run, never the
+     * newest undoable one, which may be an older unrelated run (UI-2). @param {number} runId
+     */
+    undoRun: guard(async (runId) => { set({ completed: null }); await api.undoRun({ run_id: runId }); set({ jobs: await api.jobsList() }); }),
     dismissCompleted: () => set({ completed: null }),
     /** Move a queued job up (-1) or down (+1) among the queued ones. @param {number} id @param {number} delta */
     moveJob: guard(async (id, delta) => {

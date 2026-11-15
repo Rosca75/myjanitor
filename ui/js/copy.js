@@ -32,15 +32,13 @@ export const copy = {
     safe: 'Nothing is changed during a scan.',
   },
 
-  browser: {
-    title: 'Choose a folder',
-    places: 'Places',
-    up: 'Up one level',
-    choose: 'Choose this folder',
-    cancel: 'Cancel',
-    empty: 'No sub-folders here',
-    loading: 'Loading',
-    current: 'Current folder',
+  /** Titles and file-type labels of the operating system's file dialogs. */
+  dialogs: {
+    addLocation: 'Add a location to scan',
+    destination: { move: 'Choose the folder to move the files to', copy: 'Choose the folder to copy the files to' },
+    keepFolder: 'Choose the folder whose copies are kept',
+    saveExport: { report: 'Save the report', audit: 'Save the audit log', results: 'Save the results' },
+    fileTypes: { csv: 'CSV file', html: 'HTML page', pdf: 'PDF document' },
   },
 
   scanning: {
@@ -60,6 +58,9 @@ export const copy = {
   hero: {
     freeUp: 'You can free up',
     across: (n) => `across ${n} ${plural(n, 'opportunity', 'opportunities')}`,
+    meaning: 'What applying the cards below frees with their current selection, each file counted once.',
+    toReview: (size, n) => `Plus ${size} to review in ${n} ${plural(n, 'card', 'cards')}, not counted.`,
+    overlap: (size) => `${size} listed by more than one card is counted once.`,
     reversible: 'Reversible',
     optIn: 'Lossy, opt-in',
     reviewOnly: 'Review only',
@@ -88,7 +89,13 @@ export const copy = {
     disabled: 'Not available',
     showSmaller: (n, size) => `Show ${n} smaller ${plural(n, 'opportunity', 'opportunities')}  ·  ${size}`,
     hideSmaller: 'Hide smaller opportunities',
-    saves: (size) => `Saves about ${size}`,
+    saves: (size) => `Frees about ${size} with the current selection, counted once in the total above`,
+    from: (size) => `from ${size} of files`,
+    freesNothing: 'keeps the originals: frees no space',
+    overlap: (size) => `${size} more is counted in another card`,
+    alsoToReview: (size) => `+ ${size} to review`,
+    toReview: 'to review',
+    reviewTitle: 'Listed for you to review: not counted in the total above',
     addLabel: (t) => `Add ${t} to your plan`,
     reviewLabel: (t) => `Review ${t}`,
     none: 'No opportunities in this tab.',
@@ -154,6 +161,8 @@ export const copy = {
     reorderHint: 'Use the arrow buttons, or Alt with the up and down arrow keys, to reorder steps.',
     exact: 'exact',
     estimatedTag: 'estimated',
+    dryRunCancelled: 'Dry run cancelled; the estimates of unmeasured steps are still the scan\'s guesses',
+    dryRunFailed: (why) => `Dry run stopped: ${why}`,
     dryRunDone: (n, size) => `Dry run finished: ${n} ${plural(n, 'file')}, ${size} saved`,
     scheduleSaved: 'Weekly schedule saved',
     stepsLabel: 'Plan steps',
@@ -191,6 +200,7 @@ export const copy = {
     summary: (saved, files) => `${saved} reclaimed from ${files} ${plural(files, 'file')}.`,
     errors: (n) => `${n} ${plural(n, 'item')} could not be changed. The report lists them.`,
     undo: 'Undo',
+    undoNone: 'Nothing in this run can be undone',
     report: 'View report',
     dismiss: 'Dismiss',
     undoHint: 'Everything is logged. You can restore it from History.',
@@ -275,7 +285,6 @@ export const copy = {
     keepHelp: 'In each group of identical files, the others are checked.',
     advanced: 'Advanced',
     reset: 'Reset selection',
-    moveSoon: 'Choosing a destination folder comes with the folder browser in a later build.',
   },
 
   confirm: {
@@ -417,8 +426,6 @@ export const copy = {
     title: 'Report',
     none: 'There is no report yet',
     saved: (rows, path) => `Saved ${rows} ${plural(rows, 'row')} to ${path}`,
-    badName: 'Enter a file name without folders',
-    badNameHint: 'Use a name such as report.csv.',
     files: 'Files',
     done: 'Done',
     skipped: 'Skipped',
@@ -660,14 +667,20 @@ export const copy = {
     blocked: (why) => `Cannot be selected: ${why}`,
   },
 
-  ask: { cancel: 'Cancel' },
-
-  browser2: {
-    save: 'Save here',
-    fileName: 'File name',
-    saveTo: 'Save to this folder',
-    chooseKeep: 'Keep the copy in this folder',
+  groups: {
+    keepTogether: 'Keep groups together',
+    keepTogetherHelp: 'Sorting orders whole groups (by size: their largest file) and filters keep or drop whole groups.',
+    minSize: 'At least',
+    minSizeAny: 'Any size',
+    stats: (files, size, reclaim, same) => `  ·  ${files} files  ·  ${same ? `${size} each` : `up to ${size}`}  ·  ${reclaim} reclaimable`,
+    colThumb: 'Preview',
   },
+
+  thumbs: {
+    typeIcon: (kind) => ({ image: 'Image file', video: 'Video file', audio: 'Audio file', doc: 'Document', archive: 'Archive', folder: 'Folder' })[kind] ?? 'File',
+  },
+
+  ask: { cancel: 'Cancel' },
 
   toast2: { retry: 'Try again' },
 

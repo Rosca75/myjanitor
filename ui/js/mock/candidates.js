@@ -148,11 +148,13 @@ function nameFor(id, n, i) {
 }
 
 /**
- * Scale the selected rows so they add up to `target` bytes.
+ * Scale the rows so the selected ones (or all of them, when none is) add up to `target` bytes.
  * @param {any[]} rows @param {number} target
  */
 function scaleSelected(rows, target) {
-  const sel = rows.filter((r) => r.default_selected);
+  // A card that pre-selects nothing (review only) is scaled on every row.
+  const ticked = rows.filter((r) => r.default_selected);
+  const sel = ticked.length ? ticked : rows;
   const sum = sel.reduce((a, r) => a + r.size, 0) || 1;
   const k = target / sum;
   for (const r of rows) {

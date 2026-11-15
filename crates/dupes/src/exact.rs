@@ -58,7 +58,7 @@ impl Detector for ExactDuplicates {
         for (n, g) in groups.iter().enumerate() {
             let members: Vec<&FileEntry> = g.members.iter().map(|&i| files[i]).collect();
             let pixels = pixels_of(ctx, &members);
-            let keeper = keep::pick(&rule, &members, &pixels);
+            let keeper = keep::pick_same_content(&rule, &members, &pixels);
             emit_exact(
                 GroupId(n as u64 + 1),
                 DetectorId::ExactDuplicates,

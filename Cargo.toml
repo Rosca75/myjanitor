@@ -31,6 +31,7 @@ miniz_oxide = "=0.8.9"
 regex = "=1.13.1"
 tauri = { version = "=2.12.3", features = [] }
 tauri-build = { version = "=2.7.2", features = [] }
+rfd = { version = "=0.17.2", default-features = false, features = ["gtk3"] }
 
 # Internal crates.
 mj-core = { path = "crates/core" }

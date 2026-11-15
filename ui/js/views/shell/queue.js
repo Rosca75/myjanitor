@@ -6,6 +6,7 @@ import { formatBytes, formatCount, middleEllipsis, displayPath } from '../../for
 import { button, iconButton } from '../../components/controls.js';
 import { progressBar, setProgress } from '../../components/bars.js';
 import { badge } from '../../components/badge.js';
+import { completedUndoable } from '../../state.js';
 
 const LIVE = ['queued', 'running', 'paused', 'cancelling'];
 const TONE = { queued: 'neutral', running: 'select', paused: 'warning', cancelling: 'warning', cancelled: 'neutral', completed: 'success', completed_with_errors: 'warning', failed: 'danger' };
@@ -48,7 +49,7 @@ function summary(s, actions) {
   return h('div', { class: ['qsummary', c.failed ? 'qsummary--warn' : 'qsummary--ok'], role: 'status', 'data-role': 'queue-summary' },
     h('strong', {}, copy.jobs.summaryTitle), ' ', h('span', {}, copy.jobs.summary(formatBytes(c.saved), formatCount(c.files), c.failed)),
     h('span', { class: 'qsummary__actions' },
-      button({ label: copy.jobs.undo, size: 'sm', variant: 'secondary', fk: 'queue-undo', onClick: () => actions.undoLast() }),
+      button({ label: copy.jobs.undo, size: 'sm', variant: 'secondary', fk: 'queue-undo', disabled: !completedUndoable(s), title: completedUndoable(s) ? undefined : copy.done.undoNone, onClick: () => actions.undoRun(c.run_id) }),
       button({ label: copy.jobs.report, size: 'sm', variant: 'link', fk: 'queue-report', onClick: () => actions.viewReport(c.run_id) }),
       button({ label: copy.jobs.dismiss, size: 'sm', variant: 'quiet', fk: 'queue-dismiss', onClick: () => actions.dismissCompleted() })));
 }
