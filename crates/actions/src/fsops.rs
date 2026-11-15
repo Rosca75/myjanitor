@@ -249,6 +249,25 @@ fn owner_writable(p: &fs::Permissions) -> fs::Permissions {
     w
 }
 
+/// Rename one of MyJanitor's own new files over `dst`, replacing it (the caller has verified
+/// that replacing is intended). Windows refuses to replace a file that carries the read-only
+/// attribute, so there the attribute is cleared on `dst` for the retry and put back if the
+/// retry fails too. Unix replaces a read-only file by rename as usual.
+pub fn rename_replacing(temp: &Path, dst: &Path) -> std::io::Result<()> {
+    let err = match fs::rename(temp, dst) {
+        Ok(()) => return Ok(()),
+        Err(e) if cfg!(windows) && e.kind() == std::io::ErrorKind::PermissionDenied => e,
+        Err(e) => return Err(e),
+    };
+    let Ok(perms) = fs::symlink_metadata(dst).map(|m| m.permissions()) else { return Err(err) };
+    if !perms.readonly() || fs::set_permissions(dst, owner_writable(&perms)).is_err() {
+        return Err(err);
+    }
+    fs::rename(temp, dst).inspect_err(|_| {
+        let _ = fs::set_permissions(dst, perms);
+    })
+}
+
 /// A free sibling name: `name.ext`, `name (1).ext`, ... (lstat existence; Windows reserved
 /// stems get a trailing `_`, on every platform).
 pub fn unique_path(path: &Path) -> PathBuf {

@@ -818,7 +818,7 @@ fn link_replace(
                     return Err(changed());
                 }
             }
-            std::fs::rename(&temp, &item.path).map_err(|er| Error::io(&item.path, er))
+            fsops::rename_replacing(&temp, &item.path).map_err(|er| Error::io(&item.path, er))
         })();
         if let Err(err) = result {
             let _ = std::fs::remove_file(&temp);
@@ -1054,7 +1054,7 @@ fn optimise(
                 // (conversion) takes its new name and then the original is deleted.
                 match &converted_path {
                     None => {
-                        if let Err(er) = std::fs::rename(&temp, &item.path) {
+                        if let Err(er) = fsops::rename_replacing(&temp, &item.path) {
                             cleanup();
                             return Err(Error::io(&item.path, er));
                         }

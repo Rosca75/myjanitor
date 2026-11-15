@@ -388,7 +388,7 @@ fn unlink_replacement(ctx: &ExecContext<'_>, e: &JournalEntry) -> Result<()> {
         return Err(err);
     }
     // Replacing the link itself (verified to hold the journalled content) is intended here.
-    if let Err(er) = std::fs::rename(&temp, orig) {
+    if let Err(er) = fsops::rename_replacing(&temp, orig) {
         let _ = std::fs::remove_file(&temp);
         return Err(Error::io(orig, er));
     }
