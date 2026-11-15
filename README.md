@@ -7,7 +7,7 @@ It runs fully offline, sends no telemetry, and never downloads anything.
 ## Safety model
 
 - **Estimate first.** Every card and plan step shows an estimated saving. "Estimate exactly (dry run)" runs the real checks, and the real optimiser into a scratch folder, without touching your files.
-- **Reversible by default.** Removals go to the system Trash (Linux) or to MyJanitor's own quarantine (Windows, see the limitations), and every change is written to a crash-safe journal before it happens. Undo and per-file restore live in History.
+- **Reversible by default.** Removals go to the system Trash (Linux) or to MyJanitor's own quarantine (Windows by default; the real Recycle Bin is an opt-in setting, see the limitations), and every change is written to a crash-safe journal before it happens. Undo and per-file restore live in History.
 - **Lossy and permanent only on opt-in.** Re-encoding, deleting content inside a file and permanent delete need an explicit confirmation, and the action engine itself refuses them without one.
 - **Originals stay yours.** An optimised file is written beside the original (a `_light` copy) or replaces it with the original kept aside, as you choose. An output that is not smaller is thrown away.
 - **Guarded paths.** Protected system folders, MyJanitor's own folders, symlinks and mount points are never acted on. Signed, encrypted and sensitivity-labelled files are skipped and reported.
@@ -28,22 +28,22 @@ These were rendered with the built-in mock backend and sample data (the `C:\User
 
 ## What it does
 
-The full list is in [`docs/FEATURE-STATUS.md`](docs/FEATURE-STATUS.md): 163 catalogued features, of which **92 are done, 45 partial, 17 shown disabled with a reason, and 9 not built**. Read it before relying on anything below, because each row says what works and what does not.
+The full list is in [`docs/FEATURE-STATUS.md`](docs/FEATURE-STATUS.md): 163 catalogued features, of which **98 are done, 38 partial, 18 shown disabled with a reason, and 9 not built**. Read it before relying on anything below, because each row says what works and what does not.
 
 - **Scan.** Several folders or drives, include and exclude patterns, a parallel walk with a persistent cache (a second scan of 200,000 files takes under a second), pause and stop, allocated versus logical size, a folder tree and a treemap.
 - **Find.** Filters on name, path, size, dates, attributes, owner, depth and path length; true file type versus extension; a quick-query syntax such as `ext:mp4 size:>1GB modified:<2024`; an AND/OR rule builder; saved presets; global exclusions.
 - **Detectors.** Exact duplicates (size, partial hash, full hash and SHA-256), similar images (perceptual hash on JPEG and PNG), version chains, derived files, empty files and folders, zeroed and broken files, temporary files, app caches, developer artefacts, old installers, orphan sidecars, language packs, stale files, inactive project folders, duplicate fonts.
-- **Actions.** Trash, quarantine with restore, move and copy, permanent delete (confirmed), hard-link and reflink replacement of duplicates, undo of every operation, run reports and an audit CSV.
-- **Optimise.** Lossless PNG and JPEG rewrites; PowerPoint, Excel and Word package optimisation (unused layouts, duplicate media, custom XML, notes, hidden slides, used ranges and more, most of it opt-in); lossless PDF structural optimisation; ZIP repack for EPUB, CBZ, JAR and ODF; ZIP archiving of cold folders with a mandatory integrity test and a searchable index; file-system compression (NTFS WOF and Btrfs zstd); video, screen-recording and audio optimisation through ffmpeg.
-- **Automate.** The CLI, scheduled profiles (reversible steps only), file-manager context-menu entries, portable mode, thread count setting.
+- **Actions.** Trash, quarantine with restore and automatic purge once the retention time has passed, move and copy (with or without the folder structure), permanent delete (confirmed), hard-link and reflink replacement of duplicates (the GUI duplicates step and the CLI), undo of every operation, run reports and results exported as CSV, HTML or PDF, and an audit CSV.
+- **Optimise.** Lossless PNG and JPEG rewrites; PowerPoint, Excel and Word package optimisation (duplicate media and thumbnails by default; unused layouts and masters, custom XML, notes, hidden slides, used ranges and more are opt-in); lossless PDF structural optimisation; ZIP repack for EPUB, CBZ, JAR and ODF; ZIP archiving of cold folders with a mandatory integrity test and a searchable index; file-system compression (NTFS WOF and Btrfs zstd); video, screen-recording and audio optimisation through ffmpeg.
+- **Automate.** The CLI, scheduled profiles (reversible steps only), file-manager context-menu entries, portable mode, and the thread count and temporary folder settings.
 
-Several optimisations are shown disabled because they need an image codec, a font subsetter or an external program that is not bundled. See "Known limitations".
+Content search reads plain text, and best effort PDF, Word, Excel and PowerPoint text. Several optimisations are shown disabled because they need an image codec, a font subsetter or an external program that is not bundled. See "Known limitations".
 
 ## Requirements
 
 | | |
 |---|---|
-| Rust | The workspace declares `rust-version = "1.88"`. The GUI (Tauri 2.12.3) needs 1.90 or newer according to the CI notes, and CI builds with 1.92.0, which is what is tested. |
+| Rust | The workspace declares `rust-version = "1.88"`. The GUI (Tauri 2.12.3) needs 1.90 or newer, and CI pins 1.97.0, the toolchain every gate is run with (lints differ between Rust releases, D-011). |
 | Node.js 22 | Only for the UI tests (`node --test ui/`) and the optional browser preview. The app needs no Node at run time and the UI has no build step. |
 | Linux packages | For the GUI, as CI installs them (Ubuntu 22.04): `libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev build-essential pkg-config libssl-dev file patchelf xdg-utils`. The CLI and the library crates need only a Rust toolchain. |
 | Windows | The Microsoft WebView2 runtime (part of Windows 11, installable on Windows 10) and the MSVC build tools ("Desktop development with C++"). |
@@ -71,19 +71,30 @@ The GUI accepts `--data-dir <dir>` (keep every MyJanitor folder under one root, 
 
 ## Test
 
-The five gates, run after every merge:
+The gates, run after every merge:
 
 ```
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 node --test ui/
-cargo check --workspace --target x86_64-pc-windows-msvc    # Windows cross-check, needs: rustup target add x86_64-pc-windows-msvc
+cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings    # extra local gate, needs: rustup target add x86_64-pc-windows-msvc
 ```
 
-At the documented commit: 749 Rust tests and 211 UI tests pass, 2 Rust tests are ignored (below), `cargo fmt --check` is clean and the Windows cross-check finishes without errors. The Windows check compiles the whole workspace including Tauri but links and runs nothing. Tests build their own trees in temporary folders and never touch real data.
+At the documented commit, run on Linux with Rust 1.97.0 and Node 22: **825 Rust tests and 214 UI tests pass, 2 Rust tests are ignored** (below), `cargo fmt --check` is clean, and clippy with `-D warnings` is clean for the Linux target and for `x86_64-pc-windows-msvc`. The last gate type-checks and lints the Windows code, Tauri included, from Linux; it links and runs nothing. The real Windows run is the CI job below. Tests build their own trees in temporary folders and never touch real data.
 
-Some media tests run against the real `ffmpeg` and skip themselves, with a message, when it is not on `PATH`.
+Some media tests run against the real `ffmpeg`, and the 7-Zip tests against a real `7z`; they skip themselves, with a message, when the tool is not on `PATH`.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main` and `claude/**`, on pull requests and on demand, with no secrets and no publishing. Rust is pinned to 1.97.0 and the matrix is `ubuntu-22.04` and `windows-latest`, each leg independent.
+
+| Job | What it does |
+|---|---|
+| `test` | `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --no-fail-fast`, `node --test ui/` |
+| `bundle` (after `test`) | Linux: `cargo tauri build --bundles deb,appimage`. Windows: `cargo tauri build --bundles nsis`. Both: `cargo build --release -p mj-cli` |
+
+The last CI run recorded in `docs/STATUS.md` (run 43656957884, the state merged as PR 1) was green on all four jobs. What came after it (the review-2 fixes and the gap closure) was gated locally on Linux and with the Windows-target clippy, and had not had a CI run when this was written; its Windows tests are therefore not yet confirmed. The bundle job uploads, for download only: `myjanitor-linux-x64-bundles` (deb and AppImage), `myjanitor-windows-x64-installer` (NSIS), `myjanitor-windows-x64-portable` (`myjanitor.exe`), `myjanitor-cli-linux-x64` and `myjanitor-cli-windows-x64`. Nothing is signed. The Windows test run found five real Windows bugs, all fixed (`docs/decisions/W4-WIN.md`). The local Windows clippy gate above is run in addition because CI lints each platform only for its own target.
 
 **Ignored performance tests** (large synthetic trees, run on demand):
 
@@ -99,7 +110,7 @@ CARGO_INCREMENTAL=0 MJ_TEST_WAIT_SECS=900 cargo test --profile ci -p mj-engine -
 
 ## CLI quick start
 
-State lives in the data folder. `--data-dir DIR` on every command keeps all of it (settings, journal, cache, quarantine) under `DIR`, which is a good way to try things out. Replace the placeholder paths with your own.
+State lives in the data folder. `--data-dir DIR` on every command keeps all of it (settings, journal, cache, quarantine) under `DIR`, which is a good way to try things out. Replace the placeholder paths with your own. This exact sequence was re-run for this README on a throw-away tree with a separate `--data-dir`.
 
 ```
 myjanitor-cli scan /path/to/Downloads            # read-only; remembers the folder
@@ -113,12 +124,16 @@ myjanitor-cli history                            # past runs and how long each c
 myjanitor-cli undo --last                        # put everything from the last run back
 ```
 
+Commands: `scan`, `list`, `show`, `search`, `plan` (`add`, `remove`, `show`, `clear`), `dry-run`, `apply`, `clean`, `history`, `undo`, `report`, `run-profile`, `schedule` (`list`, `from-plan`, `install`, `uninstall`, `delete`), `context-menu` (`status`, `install`, `uninstall`), `tools`, `settings` (`get`, `set`), `quarantine` (`list`, `purge`), `cache` (`info`, `clear`), `info` and `commands`. `myjanitor-cli <COMMAND> --help` lists the options. Add `--json` for the engine's JSON. Exit codes: 0 ok, 1 error, 2 usage, 3 finished with some failed items.
+
 Things to know:
 
 - `scan` refuses the root of a file system or drive, your home folder, and any folder that contains MyJanitor's own data or cache folder. Choose a folder inside them.
 - Each command re-reads the last scope (the cache makes that quick) and replays the stored plan; `clean <folders> --detectors a,b [--dry-run|--apply]` does it all in one process.
-- `apply --yes` skips the typed confirmation, but lossy steps still need `--confirm-lossy` and permanent ones `--confirm-permanent`. `--originals trash|quarantine` chooses what happens to originals.
-- Other commands: `search "<query>" <folders>`, `report [--format text|csv|html] [-o FILE]`, `schedule`, `run-profile`, `context-menu`, `tools`, `settings get|set`, `cache info|clear`, `info`. Add `--json` for the engine's JSON. Exit codes: 0 ok, 1 error, 2 usage, 3 finished with some failed items.
+- `plan add <id> --action trash|quarantine|hardlink|reflink|move|copy`; `move` and `copy` need `--to DIR` and keep the folder structure unless you add `--flat`. Destinations that are relative, protected or inside a scanned folder are refused.
+- `apply --yes` skips the typed confirmation, but lossy steps (and hard links) still need `--confirm-lossy` and permanent ones `--confirm-permanent`. `--originals trash|quarantine` chooses what happens to originals.
+- `quarantine list` shows what is held and when each item expires; `quarantine purge` removes the expired ones, or with `--older-than DAYS` everything older (0 means everything). Acting commands (`apply`, `clean --apply`, `undo`, `run-profile`, `quarantine purge`) also purge expired items first; read-only commands never delete anything.
+- `report [--format text|csv|html|pdf] [-o FILE]` and `show <id> --format csv|html|pdf --out FILE` write the export to a file; `show --out` never overwrites an existing file and picks a free name instead.
 
 ## Optional external tools
 
@@ -133,7 +148,7 @@ MyJanitor works without any of these. It looks for them on `PATH`, never downloa
 | `zstd` | `tar.zst` archives |
 | `gifsicle` | Detected only; there is no GIF optimiser yet |
 
-Only ffmpeg was run for real during development. The others are checked by argument tests, so treat them as untested.
+Only ffmpeg (in the build session) and 7z (in CI, both platforms) were run for real. The others are checked by argument tests, so treat them as untested.
 
 ## Data locations and portable mode
 
@@ -169,11 +184,15 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/IPC.md`](docs/IPC.md)
 
 ## Known limitations
 
-**Windows has never been run.** The whole workspace, Tauri included, is compile-checked for `x86_64-pc-windows-msvc` from Linux, and Windows-specific parsers are unit-tested on hand-built data, but no feature was exercised on a Windows machine. This covers the NTFS fast index, cloud placeholder handling, the Recycle Bin route, WOF compression, OneDrive "free up space", `.lnk` shortcuts, `schtasks` and registry integration. The CI workflow builds and tests on Windows, but its first run is unproven.
+**What has been run on Windows.** GitHub Actions builds, lints, tests and bundles the whole workspace on `windows-latest`: an NSIS installer, a portable `myjanitor.exe` and the CLI. The test suite that runs there covers the scan walk, the path guard including junctions, quarantine and undo, hard links, the instance lock and 7-Zip handling, and it found five real Windows bugs that were fixed (`docs/decisions/W4-WIN.md`). Nobody has clicked through the GUI on Windows or on Linux: the only GUI run is an xvfb smoke test that the window starts and stays up for 20 seconds. The built installer and portable exe were not run by anyone.
 
-**On Windows, "Recycle Bin" means the MyJanitor quarantine.** The Windows API returns no handle to a recycled item, so an exact restore is not possible. The default reversible route is therefore a quarantine folder inside the data folder, restorable from History. The real Recycle Bin route exists in code, with a best-effort restore, but no setting exposes it. The GUI wording still says "Recycle Bin" on that route. On Linux the real freedesktop Trash is used with exact restore.
+Not exercised against the real Windows feature, only compiled, linted and unit-tested on hand-built data: WOF compression, OneDrive placeholder handling and "free up space", the real Recycle Bin, `.lnk` shortcuts, the NTFS fast index on a large volume, and `schtasks` and registry integration. The Windows owner (SID) is not collected at all. `docs/FEATURE-STATUS.md` marks each of these.
 
-**Quarantine is not emptied automatically.** Items stay until you press "Purge old items" in History. The retention days only decide which items that button removes, and the CLI has no purge command. Space is not freed while items sit in the quarantine or the Trash.
+**Recycle Bin on Windows.** The Windows API returns no handle to a recycled item, so an exact restore from it is not possible. The default reversible route on Windows is therefore MyJanitor's quarantine, restored exactly from History. Turn on "Use the Windows Recycle Bin for removals" in Settings (off by default) to use the real Recycle Bin instead; History restore is then best effort. The step wording follows the route actually in use ("MyJanitor quarantine" or "Recycle Bin"). On Linux the real freedesktop Trash is used with exact restore.
+
+**Quarantine is purged automatically, the Trash is not.** Each quarantined item carries its own retention days (the Settings default is 30), and expired items are deleted at GUI start-up, at the start of acting CLI commands and after each applied step. "Purge old items" in History and `quarantine purge` do it on demand. Space is not freed while items sit in the quarantine, the Linux Trash or the Windows Recycle Bin.
+
+**Settings.** `threads` (scan and detector workers) and `temp_dir` (scratch folder of every apply and dry run) take effect. Low-memory mode, parallel jobs and CPU priority are shown off and disabled with a reason, and `lossless_only` and `preserve_ads` are stored but have no control and no effect. Jobs that change files run one at a time, on purpose.
 
 **Disabled until a tool, codec or Windows is available:**
 
@@ -188,10 +207,11 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/IPC.md`](docs/IPC.md)
 
 **Smaller gaps:**
 
-- Content search reads plain text only; PDF, Word and Excel text is not searched (such files are reported as unavailable, not as "no match"). Media-metadata conditions have no query key or UI field.
-- Owner is `uid:N` on Linux and not collected on Windows.
-- Hard-link and reflink replacement and keep-folder-structure are available through the CLI or engine only; the GUI offers Trash, quarantine, move and permanent delete.
-- The settings for low-memory mode, the temporary folder (in the GUI), CPU priority and parallel jobs are stored and validated but do not change behaviour yet. Jobs that change files run one at a time.
+- Content search reads plain text, and text from PDF, DOCX/XLSX/PPTX files on a best-effort basis (8 MiB cap). A PDF whose fonts are CID or Identity-H gives no text and so reports no match; legacy `.doc`, `.xls`, `.ppt` and OpenDocument files are reported as unavailable. Media-metadata conditions have no query key or UI field.
+- Owner filters match `uid:N` or the user name on Linux; results still show `uid:N`. Nothing matches on Windows.
+- Reflinks need a copy-on-write volume (Btrfs, XFS) and were tested with a simulated clone only; ReFS cloning is not implemented. Hard links need a confirmation and cannot be scheduled.
+- A cross-volume move on Windows does not carry alternate data streams or ACLs (D-012).
+- Archiving a folder that holds links, or, for 7z, empty folders, is skipped when the originals would be removed.
 - OS scheduler registration is done from the CLI, and was tested with a fake runner only. Schedule times ignore daylight saving.
 - Similar-image detection does not decode HEIC, RAW or WebP.
 - Plan steps are reordered with arrow buttons, not by dragging.
@@ -202,7 +222,12 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/IPC.md`](docs/IPC.md)
 
 ## Security review status
 
-An adversarial review of every destructive code path is in [`docs/review/adversarial-review-1.md`](docs/review/adversarial-review-1.md): 20 findings (1 critical, 3 high, 7 medium, 9 low). The most important ones: protected paths are checked on the item but not below it, so a folder action can remove protected files inside a folder; "Select all" on a duplicate group can check the keeper too; a folder that changed after the scan is removed with its new content. Fixes were being applied in a separate pass when this README was written. Their status, and any finding accepted instead of fixed, is tracked in `docs/review/` and `docs/DECISIONS.md`. Until that pass is merged, keep the default reversible routes, and keep your own backups of anything that matters.
+Two adversarial reviews of the destructive code paths were run, and all their findings are fixed except one accepted.
+
+- **Review 1** ([`adversarial-review-1.md`](docs/review/adversarial-review-1.md)): 20 findings (1 critical, 3 high, 7 medium, 9 low). 19 are fixed with regression tests ([`adversarial-review-1-fixes.md`](docs/review/adversarial-review-1-fixes.md)). F-12 (Low) is accepted: the check before an action is by path, so a parent folder swapped by another process in the few system calls between the last check and the act is not caught ([D-012](docs/DECISIONS.md#d-012-adversarial-review-1-f-12-accepted)).
+- **Review 2** ([`adversarial-review-2.md`](docs/review/adversarial-review-2.md)) re-checked the review-1 fixes (14 closed, 5 only partly closed, F-12 accepted) and found 14 new findings (2 high, 3 medium, 9 low). All 14 new findings and all 5 partly closed items are now fixed, each with a regression test ([`adversarial-review-2-fixes.md`](docs/review/adversarial-review-2-fixes.md)).
+
+No third review was run on the review-2 fixes. They were verified by their regression tests and the gates above, not by another adversarial pass, so new defects in them are possible. Keep the default reversible routes, and keep your own backups of anything that matters.
 
 ## Licence
 

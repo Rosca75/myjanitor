@@ -96,12 +96,12 @@ Written instead of crates. Line counts are rough and include the tests.
 
 MyJanitor finds these on `PATH` (or at a path set with `settings set tool_paths.<id> <ABSOLUTE-PATH>`) and shows the matching cards disabled, with the reason, when they are missing. On Windows only `.exe` and `.com` files count. Versions are probed with a 3 second timeout.
 
-| Tool | Features it enables | Verified in the build session |
+| Tool | Features it enables | Verified |
 |---|---|---|
 | `ffmpeg` and `ffprobe` | Video re-encode, screen recordings, meeting and audio recordings, waveform preview | Yes, against ffmpeg 6.1 |
 | `cwebp`, `avifenc`, `cjxl` | Photos (lossy): WebP, AVIF and JPEG XL conversion | No, argument vectors only |
 | `oxipng`, `jpegtran` | Optional extra engines for lossless PNG and JPEG (the in-house passes work without them) | No, argument vectors only |
-| `7z` | 7z archives, archive listing and test | No, argument vectors only |
+| `7z` | 7z archives, archive listing and test | Argument vectors in the build session; run for real in CI on Linux and Windows later, which found two listing bugs, both fixed (`docs/decisions/W4-WIN.md` D-W4, D-W7) |
 | `zstd` | `tar.zst` archives | No, argument vectors only |
 | `gifsicle` | Detected and listed; there is no GIF optimiser yet | No |
 
