@@ -1,10 +1,11 @@
 //! Smart auto-select for groups (CLN-ACT-01): apply a `KeepRule` to every group
 //! of a step and return the resulting selection. Owner: W2-E.
 
-use mj_core::{Candidate, CandidateGroup, CandidateId, GroupId, KeepInfo, KeepRule};
+use mj_core::{Badges, Candidate, CandidateGroup, CandidateId, GroupId, GroupKind, KeepInfo, KeepRule};
 
 /// For every candidate in a group: `(id, selected)` where the keeper is unselected and the
-/// rest are selected. Candidates outside groups are not returned.
+/// rest are selected, except a hard-linked member (removing it frees nothing), which is
+/// never selected and, in a group of identical files, kept in preference. Candidates outside groups are not returned.
 pub fn apply_keep_rule(
     groups: &[CandidateGroup],
     candidates: &[Candidate],
@@ -25,9 +26,13 @@ pub fn apply_keep_rule(
             .iter()
             .map(|c| KeepInfo { path: &c.path, modified: c.modified, size: c.size, pixels: c.pixels() })
             .collect();
-        if let Some(k) = rule.pick(&infos) {
+        // DUP-4: a hard-linked name frees nothing when removed (its size is 0).
+        let linked: Vec<bool> = members.iter().map(|c| c.badges.contains(Badges::HARDLINKED)).collect();
+        let same_content = matches!(g.kind, GroupKind::Exact | GroupKind::Font);
+        let k = if same_content { rule.pick_same_content(&infos, &linked) } else { rule.pick(&infos) };
+        if let Some(k) = k {
             for (i, c) in members.iter().enumerate() {
-                out.push((c.id, i != k));
+                out.push((c.id, i != k && !linked[i]));
             }
         }
     }
@@ -37,7 +42,7 @@ pub fn apply_keep_rule(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mj_core::{Badges, Confidence, DetectorId, FileStamp, GroupKind, Source, TargetKind, Timestamp};
+    use mj_core::{Confidence, DetectorId, FileStamp, Source, TargetKind, Timestamp};
     use std::path::PathBuf;
 
     fn cand(id: u64, group: u64, path: &str, modified: i64) -> Candidate {
@@ -84,6 +89,24 @@ mod tests {
         let out = apply_keep_rule(&groups, &cands, &KeepRule::Newest);
         let ids: Vec<(u64, bool)> = out.iter().map(|(c, s)| (c.0, *s)).collect();
         assert_eq!(ids, [(2, false), (4, true), (1, true), (3, false)]);
+    }
+
+    /// DUP-4: a hard-linked member frees nothing when removed: in a group of identical
+    /// files it is kept in preference, and it is never selected as a copy to remove.
+    #[test]
+    fn hard_linked_members_are_kept_and_never_selected() {
+        let mut linked = cand(1, 1, "/a/x.bin", 1);
+        linked.badges |= Badges::HARDLINKED;
+        linked.size = 0;
+        let cands = vec![linked.clone(), cand(2, 1, "/a/x-copy.bin", 9)];
+        let out = apply_keep_rule(&[group(1)], &cands, &KeepRule::Newest);
+        assert_eq!(out, [(CandidateId(1), false), (CandidateId(2), true)]);
+        // Similar images are different files: the rule decides, the linked one stays unselected.
+        let mut g = group(1);
+        g.kind = GroupKind::Similar;
+        let cands = vec![linked.clone(), cand(2, 1, "/a/y.jpg", 9), cand(3, 1, "/a/z.jpg", 5)];
+        let out = apply_keep_rule(&[g], &cands, &KeepRule::Newest);
+        assert_eq!(out, [(CandidateId(1), false), (CandidateId(2), false), (CandidateId(3), true)]);
     }
 
     /// ACT-7: one pass over the candidates, not one per group (50 000 groups of 3 took

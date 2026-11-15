@@ -97,6 +97,51 @@ fn hardlinks_are_one_file_not_duplicates() {
     assert_eq!(out.groups[0].members.len(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_copy_is_kept_since_removing_it_frees_nothing() {
+    // DUP-4: x.bin has a second name outside the scan, so trashing x.bin frees
+    // nothing; the real copy is the one whose removal frees space.
+    let t = TempDir::new("hardlinkkeep").unwrap();
+    let outside = TempDir::new("hardlinkkeep-out").unwrap();
+    let data = noise(4, 5000);
+    let x = t.write("x.bin", &data).unwrap();
+    std::fs::hard_link(&x, outside.join("x-link.bin")).unwrap();
+    let copy = t.write("x-copy.bin", &data).unwrap();
+    age(&x, 30);
+    age(&copy, 1);
+    for rule in ["newest", "oldest", "shortest_path"] {
+        let out = Harness::new(index_of(t.path())).text("keep_rule", rule).run(&ExactDuplicates).unwrap();
+        assert_one_keeper_per_group(&out);
+        assert_eq!(out.groups[0].keeper.as_ref(), Some(&x), "{rule}");
+        let selected: Vec<_> = out.candidates.iter().filter(|c| c.default_selected).collect();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].path, copy);
+        let x_row = out.candidates.iter().find(|c| c.path == x).unwrap();
+        assert_eq!(x_row.saving(), 0, "a hard-linked name frees nothing");
+        let total: u64 = out.candidates.iter().filter(|c| c.default_selected).map(|c| c.saving()).sum();
+        assert_eq!(total, selected[0].size);
+    }
+    // An explicit preferred folder still wins; the hard-linked name it leaves
+    // behind is listed, not pre-selected, and promises nothing.
+    let out = Harness::new(index_of(t.path()))
+        .text("keep_rule", "preferred_folder")
+        .text("preferred_folder", &t.path().to_string_lossy())
+        .run(&ExactDuplicates)
+        .unwrap();
+    assert_eq!(out.candidates.iter().filter(|c| c.default_selected).count(), 1);
+    // Both lie in the preferred folder: the hard-linked one is kept.
+    assert_eq!(out.groups[0].keeper.as_ref(), Some(&x));
+
+    // Two hard-linked members: whichever is not kept is listed for review only.
+    let y = t.write("y.bin", &data).unwrap();
+    std::fs::hard_link(&y, outside.join("y-link.bin")).unwrap();
+    let out = Harness::new(index_of(t.path())).text("keep_rule", "newest").run(&ExactDuplicates).unwrap();
+    let linked: Vec<_> = out.candidates.iter().filter(|c| c.path == x || c.path == y).collect();
+    assert!(linked.iter().all(|c| !c.default_selected && c.saving() == 0));
+    assert!(out.candidates.iter().any(|c| c.path == copy && c.default_selected));
+}
+
 fn index_with(t: &TempDir, extra: Vec<FileEntry>) -> FileIndex {
     let base = index_of(t.path());
     // Extra entries first: `FileIndex::new` keeps the first of two equal paths.
