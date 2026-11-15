@@ -87,7 +87,7 @@ fn view_query(
 ) -> Query {
     Query {
         sub_group: sub_group.clone(),
-        filter: filter.as_ref().map(|f| f.to_lowercase()).filter(|f| !f.is_empty()),
+        filter: filter.as_ref().map(|f| crate::review_order::filter_text(f)).filter(|f| !f.is_empty()),
         min_size: min_size.filter(|&m| m > 0),
         sort: crate::api::CandidateSortKey::Path,
         descending: false,

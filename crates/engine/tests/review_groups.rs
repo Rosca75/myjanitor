@@ -110,7 +110,7 @@ fn filters_keep_or_drop_whole_groups() {
     r.filter = Some("/b/f3".into());
     let p = e.candidates_page(r.clone()).unwrap();
     assert_eq!(p.total, 3, "one member matches: its group shows whole");
-    assert!(p.rows.iter().any(|x| x.candidate.path.to_string_lossy().contains("/a/")));
+    assert!(p.rows.iter().any(|x| x.candidate.path.parent().is_some_and(|d| d.ends_with("a"))));
     r.keep_groups = false;
     assert_eq!(e.candidates_page(r).unwrap().total, 1, "flat: only the matching row");
 }

@@ -145,10 +145,22 @@ struct Block {
     matched: bool,
 }
 
+/// The text a path filter is compared in: lower case, and on Windows with `/` read as a
+/// backslash, so `downloads/photos` finds the `Downloads\Photos` folder. Applied to the
+/// filter and to every path, so both sides always agree.
+pub(crate) fn filter_text(s: &str) -> String {
+    let t = s.to_lowercase();
+    if cfg!(windows) {
+        t.replace('/', "\\")
+    } else {
+        t
+    }
+}
+
 /// Compute the order of `cands` for `q`.
 pub(crate) fn order(cands: &[Candidate], q: &Query) -> Order {
     let in_tab = |c: &Candidate| q.sub_group.is_none() || c.sub_group == q.sub_group;
-    let matches = |c: &Candidate| q.filter.as_ref().is_none_or(|f| c.path.to_string_lossy().to_lowercase().contains(f));
+    let matches = |c: &Candidate| q.filter.as_ref().is_none_or(|f| filter_text(&c.path.to_string_lossy()).contains(f));
     if !q.keep_groups {
         let mut rows: Vec<u32> = (0..cands.len() as u32)
             .filter(|&i| {
@@ -391,7 +403,7 @@ mod tests {
         qq.keep_groups = false;
         assert_eq!(ids(&c, &order(&c, &qq)), vec![3]);
         let mut qq = q(CandidateSortKey::Size, false, true);
-        qq.filter = Some("/a/".into());
+        qq.filter = Some(filter_text("/a/"));
         assert_eq!(ids(&c, &order(&c, &qq)), vec![2, 1], "one member matches: the group shows whole");
     }
 
