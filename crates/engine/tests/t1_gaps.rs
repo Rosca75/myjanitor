@@ -146,3 +146,44 @@ fn cln_act_11_results_and_reports_export_as_pdf() {
     assert!(mj_formats::pdf::document::Document::load(&bytes).is_ok());
     assert!(mj_formats::pdf::document::contains(&bytes, b"MyJanitor report"));
 }
+
+fn ooxml(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut w = mj_formats::zip::ZipWriter::new(Vec::new());
+    let ct = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>"#;
+    w.add("[Content_Types].xml", ct.as_bytes(), 6, 0x6000, 0x5821).unwrap();
+    for (n, d) in parts {
+        w.add(n, d.as_bytes(), 6, 0x6000, 0x5821).unwrap();
+    }
+    w.finish().unwrap()
+}
+
+/// CLN-CNT-01: content search reads PDF, Word, Excel and PowerPoint text.
+#[test]
+fn cln_cnt_01_content_search_reads_documents() {
+    let t = TempDir::new("t1-content").unwrap();
+    t.write(
+        "a.docx",
+        &ooxml(&[(
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>the zebra contract</w:t></w:r></w:p></w:body></w:document>",
+        )]),
+    )
+    .unwrap();
+    t.write("b.xlsx", &ooxml(&[("xl/sharedStrings.xml", "<sst><si><t>zebra budget</t></si></sst>")])).unwrap();
+    t.write(
+        "c.pptx",
+        &ooxml(&[("ppt/slides/slide1.xml", "<p:sld><a:p><a:r><a:t>zebra slide</a:t></a:r></a:p></p:sld>")]),
+    )
+    .unwrap();
+    let pdf = mj_formats::pdf::table::table_pdf("zebra report", "", &["x"], &[1.0], &[]);
+    t.write("d.pdf", &pdf.bytes).unwrap();
+    t.write("e.docx", &ooxml(&[("word/document.xml", "<w:document><w:t>nothing here</w:t></w:document>")])).unwrap();
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let parsed = e.search_parse(SearchParseRequest { query: "content:zebra".into() }).unwrap();
+    let opp = e
+        .search_run(SearchRunRequest { rule: parsed.rule.unwrap(), title: None, topmost_only: false, action: None })
+        .unwrap();
+    assert_eq!(opp.count, 4, "{opp:?}");
+}

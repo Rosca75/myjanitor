@@ -74,6 +74,8 @@ impl Engine {
         let exclusions = mj_filters::Exclusions::from_entries(&settings.safety.exclusions);
         let content = ContentConfig {
             media: Some(MediaSource(Arc::new(CacheMedia { engine: Arc::clone(self) }))),
+            // CLN-CNT-01: PDF, Word, Excel and PowerPoint text.
+            extractors: crate::extract::builtin(),
             ..ContentConfig::default()
         };
         let cancel = mj_core::CancelToken::new();
