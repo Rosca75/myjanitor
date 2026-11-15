@@ -414,3 +414,130 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
 - **Rejected:** letting the engine read `purge_after_days: 0` as "use the setting" (a
   special value in a frozen action type, and a stored plan would change meaning when the
   setting changes).
+
+# W6-A (fourth task): front-end review findings
+
+Review findings UI-1 to UI-11 and DUP-2. UI-1 ("select all" under a filter selects hidden
+rows) was already fixed on this lane as ENG-3 (D-6A19): `selection_set` takes the table's
+`filter`, `min_size` and `keep_groups`, the UI sends them and the mock honours them; the
+UI tests in `w6a-fixes.test.js` cover the UI-1 scenario (filter, then the header box), so
+nothing changed for it. Every other finding was reproduced by a failing test first
+(`ui/js/w6a-review.test.js`, `crates/engine/tests/w6a_fixes.rs`, `settings.test.js`,
+`format.test.js`, `fakedom.test.js`).
+
+## D-6A24 "Undo" on a finished run undoes that run (UI-2)
+
+- **Context:** the completed banner and the queue summary called `undo_last`, which
+  undoes the newest run that *has* undoable entries: when the run that just finished had
+  none (all skipped, permanent delete, lossy), Undo restored an older unrelated run.
+- **Choice:** both buttons send `undo_run` with the finished run's id. They are disabled,
+  with the title "Nothing in this run can be undone", when History says the run is not
+  undoable; before History has refreshed, a run that changed no file counts as not
+  undoable (`completedUndoable`). The engine refuses an empty undo anyway, so the worst
+  case of a stale list is an error toast, never another run. `undo_last` stays for the
+  strip's "Undo last action", whose label says what it does. Two existing UI tests that
+  asserted `undo_last` for these buttons now assert `undo_run` with the run id.
+- **Rejected:** asking for confirmation as History does: the banner's Undo is the quick
+  path the summary promises, and it now acts on exactly the run it sits under.
+
+## D-6A25 The fake DOM's `querySelectorAll` is a NodeList (UI-3)
+
+- **Context:** `focusables()` (modal Tab trap) and the table's arrow-key handler called
+  `filter` / `indexOf` on `querySelectorAll` results; a real NodeList has neither, so in
+  the WebView Tab escaped every dialog and the arrow keys threw. The fake DOM returned an
+  Array, which hid it.
+- **Choice:** `FakeNodeList` (frozen; `length`, indices, `item`, `forEach`, `entries`,
+  `keys`, `values`, iteration; no Array methods), and both production sites use
+  `Array.from`. A grep of `ui/js` for array methods on `querySelectorAll` results found no
+  other production use (`queue.js` and `thumbs.js` only iterate with `for…of`). Tests
+  that called Array methods on the result now use `Array.from`; `env.$$` returns an Array
+  (it is a test helper, documented as such).
+
+## D-6A26 The keep rule is a recorded parameter (DUP-2)
+
+- **Context:** `selection_apply_keep_rule` changed the selection and the kept badges but
+  not the opportunity's parameters: the dropdown showed the detector default, and a rescan
+  (which runs the detector with `params_for`) silently went back to it. Only the mock
+  recorded the rule. The dropdown also fell back to a fixed "newest" while the exact
+  duplicates default is "oldest".
+- **Choice:**
+  - When the analysis has a `keep_rule` setting, the engine records `keep_rule` (and
+    `preferred_folder` for that rule) in the opportunity's params and the plan step's
+    params. A preferred folder that is not valid Unicode is not recorded (parameters are
+    text; a mangled folder would make a rescan keep another copy): the selection still
+    follows the rule, the recorded rule stays the previous one.
+  - `PlanState::chosen` keeps, for the session, the parameters the user chose for an
+    opportunity in the review (`step_params_set` and the keep rule), in the plan or not;
+    `params_for` applies them between the detector defaults and the plan step's params.
+    Before, any parameter set on an opportunity that was not in the plan was lost on the
+    next scan; it is the same defect as DUP-2 and is fixed by the same map. They are not
+    persisted across restarts (the plan is the persisted form, as before).
+  - UI: the dropdown shows the recorded rule, else the default of the card's keep-rule
+    setting; "Preferred folder…" opens the dialog at the recorded folder. The mock records
+    `preferred_folder` like the engine.
+- This also closes the note at the end of D-6A22 (the label lagging behind the rule).
+
+## D-6A27 Scan command answers never overwrite a newer scan://done (UI-4)
+
+- **Context:** events and command answers arrive on separate channels. A `scan_stop`
+  answer (`stopping`) arriving after `scan://done` left the overview "Stopping…" with both
+  buttons disabled; a `scan_start` answer after its own done left it "scanning".
+- **Choice:** the store keeps `scanDoneGen`, the newest generation whose `scan://done`
+  arrived. A pause/resume/stop answer in an active state for that generation or an older
+  one is dropped; a start answer for a generation already done changes nothing but
+  clearing the completed banner.
+- **Rejected:** re-reading `scan_status` after each command: one more round trip that can
+  race the same way.
+
+## D-6A28 Open views follow rescans, applies and plan changes (UI-5, UI-6, UI-10)
+
+- **Choice:**
+  - The `refreshOpps` action (used by `scan://done`, `opportunities://changed`, "+ Add"
+    and remove) also re-reads the Clean / Optimise / Archive list when one is shown, so a
+    card becomes "In plan" at once and sizes follow a scan (UI-5).
+  - `scan://done` and `history://changed` (sent when an apply or undo run ends) re-read the
+    open step review and the Custom-search results, coalesced into one refresh per burst of
+    events. Paging, sort and filters stay; a page that no longer exists falls back to the
+    first (UI-6). `opportunities://changed` alone does not refresh the review: it also
+    follows every tick, and the review already reloads after its own changes.
+  - A failed `step_detail` replaces the review with an error block and Retry (the stale
+    table is dropped: a step a rescan removed must not offer its old rows); a failed
+    `candidates_page` shows the error with Retry in the table (UI-10). Background refreshes
+    show failures in the view, not as toasts.
+
+## D-6A29 Settings changes run in order (UI-7)
+
+- `settings_set` replaces the whole object, so two overlapping commits built from the
+  same snapshot undid each other (a number committed on blur, then a switch). Commits now
+  run one at a time and each `mutate` applies to the settings the previous one saved.
+- **Rejected:** a partial-patch command: a new IPC surface for a problem the UI can solve
+  by ordering its own writes.
+
+## D-6A30 Local time for every date (UI-8)
+
+- `formatDate` and `formatDateTime` use the local time zone: the engine computes
+  schedules in local time, and History, "undo until" and "next run" must agree with the
+  user's clock. The format tests pin `TZ` (UTC for the existing expectations, Sydney and
+  Los Angeles for the new one).
+
+## D-6A31 The text box being typed in survives a re-render (UI-9, UI-11)
+
+- **Context:** every store change rebuilds the main view and `replaceKeepingFocus`
+  re-focused a *new* input: an IME composition is cancelled when its element leaves the
+  document, and screen readers announce the field again on every key.
+- **Choice:** when the focused element is a text box whose `data-fk` exists in the new
+  tree with the same path shape, the box itself is never detached: each ancestor on its
+  path adopts its counterpart's attributes and handlers and takes its other children; the
+  box adopts the new attributes and handlers and the store's value (unless an IME is
+  composing). Handlers made by `h` go through one dispatcher per event type, so a kept
+  element runs the new closures. Anything else falls back to the previous behaviour
+  (replace, then focus the new element). Text boxes that send while typing (the step
+  filter, the Custom-search box) skip `input` events of a running composition and send on
+  `compositionend`; the query box leaves Enter, Tab and the arrows to the IME meanwhile.
+- **UI-11:** the focused element is found by comparing `data-fk` values, never through a
+  selector built from them (keys may hold Windows paths with backslashes or quotes). The
+  keys themselves stay raw paths: passing them through `fk()` would make `C:\a` and `C:/a`
+  the same key. The store runs every subscriber even when one throws, then rethrows the
+  first error, so one failing region cannot leave the others stale.
+- **Not done:** debouncing the filter. With the element kept, a keystroke costs one view
+  rebuild per answer, and the generation counters already drop stale answers.

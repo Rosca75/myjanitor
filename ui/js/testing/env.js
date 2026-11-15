@@ -45,6 +45,7 @@ export async function makeEnv(opts = {}) {
       }
     },
     $: (sel, from = root) => from.querySelector(sel),
+    /** Test helper: the matches as an Array (the DOM gives a NodeList, see FakeNodeList). */
     $$: (sel, from = root) => Array.from(from.querySelectorAll(sel)),
     /** First element whose own tag matches and whose text includes `text`. */
     byText(tag, text, from = root) {
