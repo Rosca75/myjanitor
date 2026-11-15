@@ -93,7 +93,11 @@ pub fn admit(ctx: &WalkCtx<'_>, out: &mut Collected, mut e: FileEntry, depth: u3
         if id.volume != dev && e.kind != EntryKind::Link {
             // Another filesystem mounted below the root: not entered, not indexed
             // (an empty-looking mount point must never become a removal candidate).
+            // SCAN-8: what is below it was not looked at, so the cache keeps its records.
             out.stats.excluded += 1;
+            if e.kind == EntryKind::Dir {
+                out.holes.push(e.path);
+            }
             return Admitted::Dropped;
         }
     }

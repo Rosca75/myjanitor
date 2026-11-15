@@ -82,8 +82,9 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 ```
 
 1. **Scope** (`ScanScope`): roots, include/exclude globs, options. Roots are
-   normalised; nested roots collapse into their parent. Global exclusions from
-   `Settings::safety::exclusions` are added at scan time.
+   normalised; nested roots collapse into their parent (unless one sits on another
+   drive and `one_file_system` is on: then it is walked as its own root). Global
+   exclusions from `Settings::safety::exclusions` are added at scan time.
 2. **Scan** (`mj_scan::scan`): produces a `FileIndex` whose entries are sorted
    by `path_key`, so every subtree is a contiguous range (folder totals,
    children, topmost match are binary searches). Links/junctions are recorded

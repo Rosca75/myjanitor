@@ -106,7 +106,9 @@ With `use_cache` off, detectors neither reuse nor store fingerprints either.
 
 ### `scope_set`
 `ScopeSetRequest` → `ScanScope`. Roots must be absolute; nested roots collapse
-into their parent (`/a` and `/a/b` → `/a`).
+into their parent (`/a` and `/a/b` → `/a`), except, with `one_file_system` on, a
+nested root on another drive than its parent (a disk mounted at `/a/b`), which
+the parent's walk would not enter: it stays a root of its own.
 
 ```json ScopeSetRequest
 {"scope":{"roots":["/home/me/Downloads","/home/me/Projects"],"include":[],"exclude":["**/.cache/thumbnails"],"options":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false}}}

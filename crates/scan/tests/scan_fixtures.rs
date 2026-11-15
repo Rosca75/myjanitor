@@ -407,3 +407,37 @@ fn a_volume_that_vanishes_mid_scan_is_not_a_complete_scan() {
     }
     assert_eq!(cache.len(), before);
 }
+
+/// SCAN-8: a location on another filesystem added inside an existing location is scanned
+/// as its own root (it used to collapse into the outer one, which then skipped it), and a
+/// scan of the outer location alone keeps the cache records below the skipped mount.
+#[test]
+fn a_nested_root_on_another_filesystem_is_scanned() {
+    let t = TempDir::new("it-nested-fs").unwrap();
+    let data = TempDir::new("it-nested-fs-cache").unwrap();
+    small_tree(&t);
+    let p = TestPlatform { other_volume: vec![t.join("photos")], ..Default::default() };
+    let both = scope(&[t.path(), &t.join("photos")]);
+    assert_eq!(mj_scan::effective_roots_on(&both, &p).len(), 2);
+    let ix = run(&both, &p).unwrap();
+    assert!(ix.get(&t.join("photos/p1.jpg")).is_some());
+    let all = paths(&ix, t.path());
+    let mut dedup = all.clone();
+    dedup.dedup();
+    assert_eq!(all, dedup, "nothing is indexed twice");
+    assert_eq!(ix.stats.files, 6);
+    // Same volume: still collapsed.
+    let same = TestPlatform::default();
+    assert_eq!(mj_scan::effective_roots_on(&both, &same), vec![t.path().to_path_buf()]);
+    // The outer root alone skips the mount and keeps its cache records.
+    let cache = ScanCache::open(&data.join("scan-cache.bin"));
+    let cancel = CancelToken::new();
+    let req = ScanRequest { scope: &both, exclusions: &[], platform: &p, cancel: &cancel, progress: &NullProgress };
+    let first = scan_with_cache(&req, &cache).unwrap();
+    assert_eq!(cache.prune(&first), 0);
+    let outer = scope(&[t.path()]);
+    let req = ScanRequest { scope: &outer, exclusions: &[], platform: &p, cancel: &cancel, progress: &NullProgress };
+    let second = scan_with_cache(&req, &cache).unwrap();
+    assert!(second.get(&t.join("photos/p1.jpg")).is_none());
+    assert_eq!(cache.prune(&second), 0, "records below a skipped mount point are kept");
+}

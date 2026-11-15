@@ -341,3 +341,17 @@ scope) and again whenever `settings_set` changes that section. An explicit `scop
 change of the setting. With the cache off, detectors get no fingerprint store either, so
 "off" means hashes are neither reused nor stored. The `threads` fallback in `run_scan` is
 unchanged.
+
+## D-B25 A nested location on another drive is a location (SCAN-8)
+
+`effective_roots` dropped any root lexically inside another, and the outer walk then
+stopped at the other drive's mount point (`one_file_system`, default on): a second disk
+mounted at `/home/me/Data` and added explicitly was never scanned. `mj_scan::effective_roots_on`
+keeps such a root when `one_file_system` is on and its volume differs from its nearest
+containing root's; the engine's scope normalisation and `walker::run` use it. The outer
+walk still drops the mount point, so nothing is indexed twice; with `one_file_system` off
+the root collapses as before and the outer walk enters it. A root whose volume cannot be
+read collapses (the old behaviour). Also: a directory skipped as another filesystem is now
+a hole for the cache, so scanning only the outer location no longer prunes the
+fingerprints that a scan of the mount recorded. On Windows a folder-mounted volume is a
+reparse point that `scope_add_root` refuses, so this is a Linux/macOS case.

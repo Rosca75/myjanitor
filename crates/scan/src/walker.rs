@@ -20,7 +20,7 @@ use std::time::Instant;
 
 use mj_core::{EntryKind, Error, FileIndex, Result, Timestamp};
 
-use crate::{effective_roots, ScanRequest};
+use crate::{effective_roots_on, ScanRequest};
 use filter::ScopeFilter;
 use parallel::{Collected, DirJob, WalkCtx};
 use progress::Reporter;
@@ -53,7 +53,7 @@ pub struct WalkOutcome {
 /// Run the walk.
 pub fn run(req: &ScanRequest<'_>) -> Result<WalkOutcome> {
     let started = Instant::now();
-    let roots = effective_roots(req.scope);
+    let roots = effective_roots_on(req.scope, req.platform);
     if roots.is_empty() {
         return Err(Error::InvalidInput("the scan scope has no location".into()));
     }
