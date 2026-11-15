@@ -436,7 +436,12 @@ the acknowledgement text and the acting-button label. The UI renders the
 acting button in the warning colour (`permanent: false`) or the danger colour
 (`permanent: true`), disabled until the checkbox is ticked. `selection_digest`
 identifies exactly what the dialog describes (the step's action and its items
-with their scan stamps); the UI sends it back in `StepConfirmation`.
+with their scan stamps); the UI sends it back in `StepConfirmation`. `files` is
+the number of those items; the byte tiles are the step's share of the plan's
+one account of savings, as on the plan card (a file two steps list counts in
+one dialog only): the last dry run's measurement while it still stands for
+these items and this overlap, else the live figure. A step that changes while
+the dialog is prepared fails with `conflict`.
 
 ### `plan_apply`
 `PlanApplyRequest` → `ApplyStarted`. *Spawns.* Needs one `StepConfirmation`

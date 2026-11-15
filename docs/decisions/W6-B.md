@@ -239,6 +239,10 @@ file). A removed duplicate is read once instead of three times on the quarantine
 is still read once per member of its group; caching its verified hash across a batch would
 need an identity check of its own and was left out of a safety-critical path.
 
+*Merge note:* the duplicate is now read once more right before it is moved (W6-A
+[D-6A42](W6-A.md#d-6a42-a-verified-duplicate-is-read-again-after-the-last-re-stat-review-suggestion)),
+so it is read twice, not once.
+
 ## D-B18 File conditions never select a folder (RF-1)
 
 Extension, type group, size, zero-byte, the three dates, header mismatch, content and media

@@ -693,3 +693,92 @@ nothing changed for it. Every other finding was reproduced by a failing test fir
   `app_info` and an "Open log folder" action (an IPC contract change), a log line for cache
   resets and journal replay, and the payload text at the `parallel_map` and thread pool sites
   (the hook already records every panic there).
+
+## D-6A39 Merging lane-b: textual conflicts resolved by keeping both behaviours
+
+The two lanes of this wave (W6-A here, W6-B in `W6-B.md`) were merged on `lane-a` with one
+merge commit; every conflict was resolved by keeping both lanes' behaviour and tests, never
+one side wholesale.
+
+- **PNG decoder (`crates/dupes/src/decode/png.rs`).** W6-A had split it into a shared
+  `Prepared` (fingerprint and review thumbnail) that inflated the whole image; W6-B made the
+  fingerprint inflate one scanline at a time (DUP-5). `Prepared<'a>` now borrows the IDAT
+  chunks and `for_each_row` streams them, so both the fingerprint and the thumbnail keep
+  O(width) memory. Test: `crates/dupes/tests/thumb_memory.rs` (same counting allocator as
+  W6-B's `png_memory.rs`, its own binary so the count sees one test).
+- **Dry-run measurements (`plan.rs`, `apply.rs`).** W6-A (ENG-4) keyed a measurement by the
+  identity of the items it measured (`measure_key`); W6-B stored it with the selection and
+  the step's overlap with the other steps (`Measured::shared`). `Measured` now holds the
+  action, `key`, `shared` and the estimate, and stands only while all three still match.
+  The selection is part of `key`, so the separate selection field was dropped.
+- **Confirmation figures (`plan_confirmation_info`).** W6-A computed the fallback with
+  `plan::step_estimate`, which W6-B removed in favour of `savings::tally`. The dialog now
+  shows the step's share of the plan's one account (`plan::step_tallies`), the same figure
+  as the plan card: a file two steps list counts in one dialog only. `files` stays the
+  number of items the digest binds (W6-A). Test:
+  `savings_invariant::the_confirmation_shows_the_steps_share_of_the_plan_account`.
+- **After an applied step (`after_apply_step`).** W6-B's `DoneSet` (O(depth) per row) drops
+  the gone rows; W6-A's ENG-11 bookkeeping (`Results::removed`, groups left too small) is
+  kept; the function returns a set (W6-B) so the reclaimed-bytes sum is not quadratic.
+- **Settings.** `settings_set` applies Settings > Scanning to the scope (W6-B SCAN-5) and
+  then refreshes the plan (W6-A ENG-9).
+- **Struct literals.** W6-B's new tests build `CandidatesPageRequest` and
+  `SelectionSetRequest`, which W6-A extended (`min_size`, `keep_groups`, `filter`); they
+  now pass the neutral values (no filter, flat table), which is what W6-B's tests meant.
+
+## D-6A40 Semantic conflicts checked after the merge
+
+- **Filtered select-all, grouped table and recorded keep rule against the one account.**
+  The engine paths compose (both change the selection, then `recompute` runs the tally);
+  the mock does the same. Test: `ui/js/merge.test.js` (select all on a filtered grouped
+  table, then the keep rule: the card is what the selection frees, the hero the sum of the
+  cards, the rule recorded).
+- **String entry ids against W6-B's journal changes.** W6-B changed how records are
+  written (ACT-12) and queried (XC-4), not the id type; `EntryId`'s string codec applies to
+  every new caller. Nothing to change.
+- **`purge_with` (W6-A) against W6-B's quarantine changes.** `purge_with` goes through
+  `purge_by`, which now reads `held` through W6-B's `entries_where`; the cancel token and
+  the per-item retention are unchanged, and the ACT-9 one-day minimum applies to what is
+  quarantined, not to an explicit purge. Both lanes' purge tests pass.
+- **Overview cards.** W6-B changed what a card shows (what it frees) and added `to_review`;
+  W6-A's overview changes (undo of the finished run, the native folder dialog) touch other
+  elements. Both sets of UI tests pass against fixtures regenerated on the merged tree.
+- **Real-response fixtures.** Regenerated once (`MJ_WRITE_UI_FIXTURES=1`). They had been
+  stale since before the wave: the two archive cards were still "not implemented"; they are
+  real analyses now and, empty in the fixture tree, are not listed.
+
+## D-6A41 A PNG's image stream must end exactly after its last row (review suggestion)
+
+- **Finding (reviewer, verified):** the streaming decoder stopped as soon as the last
+  scanline was produced. A zlib stream cut short (checksum missing), holding more rows than
+  the header or followed by more data was fingerprinted, so a malformed file could join a
+  similar-image group and be pre-selected.
+- **Choice:** after the last row the decoder drives the stream to its end through a one-byte
+  probe: any further output, a missing end or data after the end is `Corrupt`. The thumbnail
+  shares the check. Strict on purpose: a file refused here only loses similar-image matching
+  (it is still exact-matched); a wrong fingerprint could pre-select a file for removal.
+- **Test:** `decode::png::tests::image_data_must_end_exactly_with_the_last_row` (failed
+  before the fix on the over-long and the truncated stream).
+
+## D-6A42 A verified duplicate is read again after the last re-stat (review suggestion)
+
+- **Finding (reviewer, verified):** the hash a removed exact duplicate is journalled with
+  came from its byte comparison with the kept copy, before the intent. Rewritten in place
+  since then (same size, same mtime, same file id), the file passed every re-stat, was
+  removed although it no longer matched the kept copy, and undo later refused it ("its
+  content differs"). The same window existed at the baseline (the audit hash was also taken
+  before the re-stat); ACT-8 did not open it.
+- **Choice:** in `act_retain`, after the kept copy's re-stat, a duplicate whose hash came
+  from the comparison is hashed again; a different hash skips it as changed (nothing
+  removed). The `changed` time (ctime) would avoid the read on Unix, but the Windows
+  metadata path does not fill it, and Windows comes first.
+- **Cost:** a removed duplicate is read twice (comparison and this check) instead of once;
+  the baseline read it three times. The ACT-8 read-count test now expects three reads in
+  total (both files for the comparison, the duplicate once more) and says so.
+- **Not done:** files that are not duplicates keep their audit hash from before the
+  re-stat (baseline behaviour): a same-size, same-mtime rewrite in that window still
+  journals a stale hash. Closing it means hashing after the move, which changes the intent
+  record recovery reads; left as an open item.
+- **Test:** `review3_fixes::a_duplicate_rewritten_after_the_comparison_is_not_removed` (the
+  test platform's new `on_metadata` hook rewrites the file at the kept copy's act-time
+  re-stat; it failed before the fix).
