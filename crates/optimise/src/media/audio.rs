@@ -21,7 +21,9 @@ use mj_core::{
 };
 
 use super::estimate::{audio_after, info_of, AudioPlan};
-use super::ffmpeg::{base_args, clock, input_args, parse_silences, run_analysis, run_encode};
+use super::ffmpeg::{
+    base_args, check_length, clock, input_args, parse_silences, probe_input, run_analysis, run_encode,
+};
 use crate::external::{args, path_arg, run, RunOptions};
 use crate::images::common::{self, spec};
 
@@ -346,21 +348,32 @@ impl Optimiser for Audio {
         // F-03: a folder of this job's own, never a fixed name in the shared temp dir.
         let scratch = mj_core::scratch::ScratchDir::new(job.temp_dir, "audio")?;
         let out = scratch.join(format!("out.{}", s.codec.extension()));
-        let dur = info.as_ref().and_then(|i| i.duration_ms);
+        // OPT-4: ffmpeg reports the length of what the in-house prober cannot read (WMA, Matroska audio).
+        let dur = match info.as_ref().and_then(|i| i.duration_ms) {
+            Some(d) => Some(d),
+            None => probe_input(exe, job.src, job.cancel)?.duration_ms,
+        };
+        if !s.remove_silences && dur.is_none() {
+            return Ok(common::skipped(
+                before,
+                "The length of the recording could not be read, so the result could not be checked",
+            ));
+        }
         run_encode(job, exe, &build_args(&s, job.src, &out), dur)?;
         let after = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
         if after == 0 {
             return Err(super::ffmpeg::empty_output("ffmpeg"));
         }
-        // A run that cuts nothing must keep the length (within a second or 2 %).
-        if let (false, Some(d_in), Some(d_out)) = (s.remove_silences, dur, info_of(&out).and_then(|i| i.duration_ms)) {
-            if d_in.abs_diff(d_out) > (d_in / 50).max(1000) {
+        // A run that cuts nothing must keep the length (within a second or 2 %); an unknown length
+        // fails the check.
+        if !s.remove_silences {
+            let d_out = match info_of(&out).and_then(|i| i.duration_ms) {
+                Some(d) => Some(d),
+                None => probe_input(exe, &out, job.cancel).ok().and_then(|r| r.duration_ms),
+            };
+            if let Err(e) = check_length(dur, d_out, dur.map_or(0, |d| (d / 50).max(1000)), "recording") {
                 let _ = std::fs::remove_file(&out);
-                return Err(Error::Internal(format!(
-                    "the converted file is {} long but the original is {}; nothing was changed",
-                    clock(d_out as f64 / 1000.0),
-                    clock(d_in as f64 / 1000.0)
-                )));
+                return Err(e);
             }
         }
         if after >= before {
