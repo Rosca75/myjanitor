@@ -404,3 +404,35 @@ fn a_file_two_steps_list_is_counted_and_removed_once() {
     }
     assert!(!exists(&tmp));
 }
+
+/// Merge of W6-A (ENG-4: the confirmation's figures describe the items its digest binds)
+/// and W6-B (one account): the dialog's bytes are the step's share of the plan's account,
+/// as on the plan card, before and after a dry run; a file two steps list is not counted
+/// in both dialogs.
+#[test]
+fn the_confirmation_shows_the_steps_share_of_the_plan_account() {
+    let t = standard_tree();
+    old(&t, "u/AppData/Local/Temp/setup.tmp", &bytes(30, 70_000), 5);
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let l = list(e);
+    let tmp = f.tree.join("u/AppData/Local/Temp/setup.tmp");
+    let listed: Vec<String> = selected_by_path(e, &l)[&tmp].iter().map(|(id, _)| id.clone()).collect();
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    for id in &listed {
+        add(e, id, None);
+    }
+    let check = |plan: &mj_core::Plan| {
+        let mut sum = 0;
+        for s in &plan.steps {
+            let c = e.plan_confirmation_info(StepRequest { step_id: s.id }).unwrap();
+            assert_eq!(c.saving, s.estimate.saving(), "{}: dialog vs plan step", s.title);
+            sum += c.saving;
+        }
+        assert_eq!(sum, plan.estimate.saving(), "the dialogs add up to the plan total");
+    };
+    check(&e.plan_get().unwrap());
+    dry_run(&f);
+    check(&e.plan_get().unwrap());
+}
