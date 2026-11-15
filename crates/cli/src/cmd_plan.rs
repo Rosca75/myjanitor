@@ -302,18 +302,6 @@ fn skipped_note(skipped: u64, failed: u64) -> Option<String> {
         .then(|| format!("{skipped} item(s) were skipped and left as they were; see `myjanitor-cli report --last`."))
 }
 
-#[cfg(test)]
-mod finish_tests {
-    use super::*;
-
-    #[test]
-    fn skipped_only_runs_are_a_note_not_a_failure() {
-        assert!(skipped_note(2, 0).unwrap().contains("2 item(s) were skipped"));
-        assert_eq!(skipped_note(0, 0), None);
-        assert_eq!(skipped_note(2, 1), None);
-    }
-}
-
 /// `apply`.
 pub fn apply(a: &Parsed) -> Res {
     let policy = originals(a)?;
@@ -364,5 +352,17 @@ pub fn clean(a: &Parsed) -> Res {
         let r = dry_run_report(&ctx)?;
         print_dry_run(&ctx, &r);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod finish_tests {
+    use super::*;
+
+    #[test]
+    fn skipped_only_runs_are_a_note_not_a_failure() {
+        assert!(skipped_note(2, 0).unwrap().contains("2 item(s) were skipped"));
+        assert_eq!(skipped_note(0, 0), None);
+        assert_eq!(skipped_note(2, 1), None);
     }
 }
