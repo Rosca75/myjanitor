@@ -110,6 +110,19 @@ test('results: the hero is what the cards show, added up (W6-B)', async () => {
   assert.equal(office.querySelector('.card__note').textContent, 'keeps the originals: frees no space');
 });
 
+test('results: a file another card counts is named on the card and in the hero (W6-B)', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  const opps = structuredClone(env.state().opps);
+  const fsc = opps.items.find((o) => o.id === 'opt:fs_compress');
+  fsc.overlap = 1024 ** 3;
+  fsc.to_review = 512 * 1024 ** 2;
+  opps.summary.overlap = 1024 ** 3;
+  env.store.set({ opps });
+  await env.settle();
+  assert.equal(env.$('[data-opp="opt:fs_compress"] .card__note').textContent, 'from 14.0 GB of files · 1.0 GB more is counted in another card · + 512 MB to review');
+  assert.match(env.$('[data-role="hero-meaning"]').textContent, /each file counted once\. 1\.0 GB listed by more than one card is counted once\. Plus/);
+});
+
 test('results: review only tab shows the three review cards without an Add button', async () => {
   const env = await makeEnv({ scenario: 'results' });
   await env.actions.setTab('review_only');

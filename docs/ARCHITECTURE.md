@@ -102,12 +102,22 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
    encrypted attribute) from `mj_actions::SafetyInspector`, applies the
    auto-uncheck rule (`Badges::AUTO_UNCHECK`), and computes the card numbers
    (`opportunities::recompute`). Default sort: biggest saving first.
+   Every byte figure (hero total and buckets, card `saving`, plan step and plan
+   estimates, per-drive "after plan", dry-run measurement) is a sum over one
+   per-row decision, `savings::tally`: what the row's action frees (a removal the
+   whole row, an optimisation its estimate, review only / copy / light copy
+   nothing), each file counted once across the cards (or plan steps) that list
+   it. The hero total is therefore the sum of the numbers the cards show; rows
+   only listed for review are reported beside it (`to_review`), never in it
+   (docs/IPC.md, "The savings invariant"; decisions in docs/decisions/W6-B.md).
 5. **Plan**: steps reference opportunities; a step carries the action, the
    parameters, an estimate and its `SafetyClass`. The checklist is computed on
    every change.
 6. **Apply**: `plan_apply` checks confirmations, expands each step into
    `ActionItem`s (selected, non-blocked candidates with their scan stamp and
-   root), allocates a `RunId`, writes a `RunRecord`, and queues one job per
+   root), keeps the copy any step keeps (G-03), drops an item another step
+   removes (the same path or a folder holding it: a file is acted on once per
+   run, RF-8), allocates a `RunId`, writes a `RunRecord`, and queues one job per
    step. Jobs run `mj_actions::execute` with a `Guard` whose allowed roots are
    the scope roots.
 7. **Journal / undo**: every item is journaled before and after acting;
