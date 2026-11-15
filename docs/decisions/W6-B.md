@@ -282,3 +282,18 @@ a pattern not anchored at a root (`/`, `**`, `X:`) gets a leading `**/`. So
 anchored. Patterns written in the rule builder (`Condition::Path` directly) are taken
 literally; they were never documented as relative. The two parser tests that pinned the old
 shape now pin the new one.
+
+## D-B21 Broken files: a suspicion is checked before it is reported (RF-4)
+
+JPEG: a missing `FF D9` in the last 4 KiB no longer means "cut short" by itself. A motion
+photo (`PXL_…MP.jpg`, Samsung) is a complete JPEG followed by a video, so the check then
+walks the marker segments from SOI by their lengths (an EXIF thumbnail's own EOI is
+skipped) and streams the entropy-coded data in 64 KiB chunks until it meets `FF D9`; the
+file is broken only when it ends first, inside a segment or inside the image data. Only
+suspicious files pay for the read, and it stops at the image's end. The cheap tail check
+still accepts a file whose last 4 KiB holds `FF D9` (a JPEG cut inside its thumbnail can
+pass, as before: missing a damaged file is the safe direction for a review-only card).
+Audio now matches the in-house prober: MP3 no longer needs a frame sync at the exact byte
+after the ID3 tag (the prober searches for the first frame, as players do; "ends inside
+its ID3 tag" stays), FLAC accepts an ID3 tag in front of `fLaC`, and WAV accepts `RF64`
+without judging its 32-bit size field.

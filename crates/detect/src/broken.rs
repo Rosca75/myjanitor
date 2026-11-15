@@ -177,7 +177,9 @@ fn check_io(path: &Path, size: u64, kind: Kind, max_gz: u64) -> std::io::Result<
                 return broken("Not a valid JPEG: it does not start with the SOI marker");
             }
             let (tail, _) = fsio::read_tail(path, 4096)?;
-            if !contains(&tail, &[0xff, 0xd9]) {
+            // RF-4: no EOI in the tail is only a suspicion (a motion photo carries a video
+            // after its JPEG); the marker walk reads on until it finds the image's own end.
+            if !contains(&tail, &[0xff, 0xd9]) && !jpeg_has_eoi(path)? {
                 return broken("JPEG has no end-of-image marker; the file is cut short");
             }
         }
@@ -232,46 +234,117 @@ fn check_io(path: &Path, size: u64, kind: Kind, max_gz: u64) -> std::io::Result<
     Ok(Check::Healthy)
 }
 
+/// RF-4: walk a JPEG's marker segments from SOI (skipping each by its length, so an EXIF
+/// thumbnail's own EOI does not count), then stream the entropy-coded data in 64 KiB
+/// chunks for `FF D9`. True when the image's end-of-image marker is present; false when
+/// the file ends first (inside a segment or inside the image data).
+fn jpeg_has_eoi(path: &Path) -> std::io::Result<bool> {
+    use std::io::{BufReader, Read};
+    let f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    let mut r = BufReader::with_capacity(64 << 10, f);
+    let byte = |r: &mut BufReader<std::fs::File>| -> std::io::Result<Option<u8>> {
+        let mut b = [0u8; 1];
+        Ok(if r.read(&mut b)? == 1 { Some(b[0]) } else { None })
+    };
+    let mut pos: u64 = 2;
+    r.seek_relative(2)?;
+    // Segments up to the first SOS. A byte out of place means the structure is not what
+    // the walk expects: fall through to the plain search from there.
+    loop {
+        let Some(b) = byte(&mut r)? else { return Ok(false) };
+        pos += 1;
+        if b != 0xff {
+            break;
+        }
+        let mut m = 0xff;
+        while m == 0xff {
+            let Some(x) = byte(&mut r)? else { return Ok(false) };
+            pos += 1;
+            m = x;
+        }
+        match m {
+            0xd9 => return Ok(true),
+            0x01 | 0xd0..=0xd8 => continue,
+            _ => {}
+        }
+        let (Some(hi), Some(lo)) = (byte(&mut r)?, byte(&mut r)?) else { return Ok(false) };
+        let seg = u64::from(u16::from_be_bytes([hi, lo]));
+        if seg < 2 || pos + seg > len {
+            return Ok(false);
+        }
+        r.seek_relative((seg - 2) as i64)?;
+        pos += seg;
+        if m == 0xda {
+            break;
+        }
+    }
+    // Entropy-coded data: a 0xFF there is always stuffed (FF 00) or a marker, so the
+    // first FF D9 is the end of the image.
+    let mut buf = vec![0u8; 64 << 10];
+    let mut prev_ff = false;
+    loop {
+        let n = r.read(&mut buf)?;
+        if n == 0 {
+            return Ok(false);
+        }
+        for &b in &buf[..n] {
+            if prev_ff && b == 0xd9 {
+                return Ok(true);
+            }
+            prev_ff = b == 0xff;
+        }
+    }
+}
+
+/// Size of a leading ID3v2 tag (header, body and footer), when the head starts with one.
+fn id3_len(head: &[u8]) -> Option<u64> {
+    if head.len() < 10 || &head[..3] != b"ID3" {
+        return None;
+    }
+    let syncsafe = |b: &[u8]| b.iter().fold(0u64, |a, &x| (a << 7) | u64::from(x & 0x7f));
+    Some(10 + syncsafe(&head[6..10]) + if head[5] & 0x10 != 0 { 10 } else { 0 })
+}
+
 /// CLN-DET-08 audio: obvious truncation or a wrong signature, from at most a few KiB.
 fn check_audio(path: &Path, size: u64, kind: Kind) -> std::io::Result<Check> {
     let broken = |s: &str| Ok(Check::Broken(s.to_string()));
     let head = fsio::read_head(path, 64)?;
     match kind {
         Kind::Wav => {
-            if head.len() < 12 || &head[..4] != b"RIFF" || &head[8..12] != b"WAVE" {
+            let riff = head.len() >= 12 && &head[..4] == b"RIFF";
+            let rf64 = head.len() >= 12 && &head[..4] == b"RF64";
+            if !(riff || rf64) || &head[8..12] != b"WAVE" {
                 return broken("Not a valid WAV file: the RIFF/WAVE header is missing");
             }
-            let riff = u64::from(u32::from_le_bytes([head[4], head[5], head[6], head[7]]));
+            // RF64 (recordings over 4 GB) keeps its sizes in the ds64 chunk: not judged here.
+            let declared = u64::from(u32::from_le_bytes([head[4], head[5], head[6], head[7]]));
             // 0 and 0xFFFFFFFF are used by streaming writers (size unknown): not judged.
-            if riff != 0 && riff != 0xFFFF_FFFF && riff + 8 > size {
+            if riff && declared != 0 && declared != 0xFFFF_FFFF && declared + 8 > size {
                 return broken("WAV file is shorter than its header says; the recording is cut short");
             }
         }
         Kind::Flac => {
-            if head.len() < 8 || &head[..4] != b"fLaC" {
+            // An ID3 tag in front of the stream is common and read fine by players.
+            let at = id3_len(&head).unwrap_or(0);
+            let mut f = std::fs::File::open(path)?;
+            let h = if at == 0 { head.clone() } else { fsio::read_at(&mut f, at, 8)? };
+            if h.len() < 8 || &h[..4] != b"fLaC" {
                 return broken("Not a valid FLAC file: the fLaC signature is missing");
             }
-            let len = u32::from_be_bytes([0, head[5], head[6], head[7]]);
-            if head[4] & 0x7f != 0 || len != 34 {
+            let len = u32::from_be_bytes([0, h[5], h[6], h[7]]);
+            if h[4] & 0x7f != 0 || len != 34 {
                 return broken("FLAC file has no STREAMINFO block; it is damaged");
             }
-            if size < 8 + 34 {
+            if size < at + 8 + 34 {
                 return broken("FLAC file is cut short inside its STREAMINFO block");
             }
         }
         Kind::Mp3 => {
-            let mut at = 0u64;
-            if head.len() >= 10 && &head[..3] == b"ID3" {
-                let syncsafe = |b: &[u8]| b.iter().fold(0u64, |a, &x| (a << 7) | u64::from(x & 0x7f));
-                at = 10 + syncsafe(&head[6..10]) + if head[5] & 0x10 != 0 { 10 } else { 0 };
-                if at >= size {
-                    return broken("MP3 file ends inside its ID3 tag; there is no audio");
-                }
-            }
-            let mut f = std::fs::File::open(path)?;
-            let b = fsio::read_at(&mut f, at, 4)?;
-            if b.len() < 4 || b[0] != 0xff || b[1] & 0xe0 != 0xe0 {
-                return broken("MP3 file has no audio frame where it should start; it is damaged");
+            // The first frame may follow the tag after padding or junk; the prober below
+            // searches for it as players do (RF-4), so only "nothing after the tag" is judged here.
+            if id3_len(&head).is_some_and(|at| at >= size) {
+                return broken("MP3 file ends inside its ID3 tag; there is no audio");
             }
         }
         Kind::Ogg if head.len() < 27 || &head[..4] != b"OggS" => {
@@ -379,6 +452,42 @@ mod tests {
         let out = run(&BrokenFiles, &index_of(t.path()), &Default::default());
         assert_eq!(rel(&out, t.path()), vec!["cut.wav", "junk.ogg", "nostream.flac", "tagonly.mp3"]);
         assert!(out.candidates.iter().all(|c| !c.default_selected));
+    }
+
+    /// RF-4: healthy files that the quick tail and offset checks used to call damaged.
+    #[test]
+    fn rf4_motion_photos_padded_mp3_tagged_flac_and_rf64_are_healthy() {
+        use mj_formats::media::build;
+        let t = TempDir::new("broken-rf4").unwrap();
+        // A motion photo: a complete JPEG followed by a video, no FF D9 in the last 4 KiB.
+        t.write("PXL_motion.MP.jpg", &[jpeg_ok(), vec![0x11; 100 << 10]].concat()).unwrap();
+        // A JPEG whose EXIF thumbnail ends with FF D9, cut inside the main image data.
+        let mut thumb = vec![0xff, 0xd8, 0xff, 0xe1, 0, 12, b'E', b'x', b'i', b'f', 0, 0, 0xff, 0xd8, 0xff, 0xd9];
+        thumb.extend_from_slice(&[0xff, 0xda, 0, 4, 0, 0]);
+        thumb.extend(std::iter::repeat_n(0x22, 5000));
+        t.write("cut_with_thumb.jpg", &thumb).unwrap();
+        // The thumbnail segment itself runs past the end of the file.
+        t.write("cut_in_app1.jpg", &[0xff, 0xd8, 0xff, 0xe1, 0x40, 0, b'E', b'x', b'i', b'f', 0xff, 0xd9]).unwrap();
+        // Padding between the ID3 tag and the first MP3 frame.
+        let mp3 = build::build_mp3(Some("t"), 100, 4, 9);
+        let id3_len = 10 + mp3[6..10].iter().fold(0usize, |a, &x| (a << 7) | usize::from(x & 0x7f));
+        t.write("padded.mp3", &[&mp3[..id3_len], &[0u8; 512][..], &mp3[id3_len..]].concat()).unwrap();
+        // An ID3 tag in front of a FLAC stream.
+        let flac = build::build_flac(44100, 2, 16, 1000, Some("t"), 0);
+        t.write("tagged.flac", &[&mp3[..id3_len], &flac[..]].concat()).unwrap();
+        // An RF64 recording (size fields in the ds64 chunk, RIFF size 0xFFFFFFFF).
+        let mut rf64 = build::wav(8000, 1, 1, None);
+        rf64[..4].copy_from_slice(b"RF64");
+        rf64[4..8].copy_from_slice(&[0xff; 4]);
+        t.write("long.wav", &rf64).unwrap();
+        let out = run(&BrokenFiles, &index_of(t.path()), &Default::default());
+        // `cut_in_app1.jpg` has FF D9 in its last 4 KiB, which the cheap tail check accepts;
+        // the marker walk itself does see that the segment runs past the end.
+        assert_eq!(rel(&out, t.path()), vec!["cut_with_thumb.jpg"], "{:#?}", out.candidates);
+        assert!(!jpeg_has_eoi(&t.join("cut_in_app1.jpg")).unwrap());
+        assert!(!jpeg_has_eoi(&t.join("cut_with_thumb.jpg")).unwrap());
+        assert!(jpeg_has_eoi(&t.join("PXL_motion.MP.jpg")).unwrap());
+        assert_eq!(check(&t.join("long.wav"), rf64.len() as u64, Kind::Wav, 0), Check::Healthy);
     }
 
     #[test]
