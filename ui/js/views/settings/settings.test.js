@@ -15,18 +15,27 @@ const SCHEDULE = { id: 'sched_1', name: 'Weekly Downloads', enabled: true, caden
 /**
  * `dialog` is what the native folder dialog answers: a path, `null` (cancelled) or an
  * ErrorInfo to reject with; change it later through the returned `dialog.answer`.
- * @param {{ portable?: boolean, settingsError?: any, scheduleError?: any, schedules?: any[], dialog?: any }} [o]
+ * `hold`: settings_set answers only when the test calls the functions in `held`.
+ * @param {{ hold?: boolean, portable?: boolean, settingsError?: any, scheduleError?: any, schedules?: any[], dialog?: any }} [o]
  */
 async function setup(o = {}) {
   const doc = installFakeDom();
   const calls = [];
   const rec = (cmd, req) => calls.push({ cmd, req });
   const dialog = { answer: 'dialog' in o ? o.dialog : '/home/m/Clients' };
+  /** @type {Array<() => void>} */
+  const held = [];
   let settings = structuredClone(SETTINGS);
   let schedules = o.schedules ?? [];
   let prot = { builtin: ['C:\\Windows', 'C:\\Program Files'], builtin_patterns: ['**/.git'], user: [] };
   const api = {
-    settingsSet: async (req) => { rec('settings_set', req); if (o.settingsError) throw o.settingsError; settings = structuredClone(req.settings); return settings; },
+    settingsSet: async (req) => {
+      rec('settings_set', req);
+      if (o.hold) await new Promise((r) => held.push(r)); // answered when the test says so
+      if (o.settingsError) throw o.settingsError;
+      settings = structuredClone(req.settings);
+      return settings;
+    },
     protectedPathsGet: async () => prot,
     protectedPathsSet: async (req) => { rec('protected_paths_set', req); prot = { ...prot, user: req.user }; return prot; },
     schedulesList: async () => schedules,
@@ -41,7 +50,7 @@ async function setup(o = {}) {
     },
   };
   const actions = { loadSettings: async () => { rec('load_settings'); }, clearCache: async () => rec('cache_clear') };
-  attachSettingsApi(actions, api);
+  const ctl = attachSettingsApi(actions, api);
   const state = { settings, cache: { entries: 12, bytes: 2048 }, tools: TOOLS, info: { version: '0.1.0', platform: 'linux', portable: !!o.portable, data_dir: '/home/m/.local/share/myjanitor', journal_persistent: true } };
   const root = doc.createElement('div');
   doc.body.append(root);
@@ -49,7 +58,7 @@ async function setup(o = {}) {
   await tick();
   const $ = (sel) => root.querySelector(sel);
   const sent = (cmd) => calls.filter((c) => c.cmd === cmd);
-  return { root, $, calls, sent, dialog, settings: () => settings };
+  return { root, $, calls, sent, dialog, ctl, held, settings: () => settings };
 }
 
 test('renders every section, the offline line, the portable indicator and locked built-ins', async () => {
@@ -280,4 +289,22 @@ test('clear cache goes through the shell action', async () => {
 test('absolute path check', () => {
   for (const p of ['/usr/bin/x', 'C:\\Tools\\x.exe', 'C:/x', '\\\\srv\\share']) assert.ok(isAbsolutePath(p), p);
   for (const p of ['x', 'rel/x', '', 'C:x']) assert.ok(!isAbsolutePath(p), p);
+});
+
+test('two overlapping settings changes both survive: each applies to the last saved settings (UI-7)', async () => {
+  const t = await setup({ hold: true });
+  const a = t.ctl.commitNumber('undo_days', '60', 1, 365, (s, n) => { s.general.undo_days = n; });
+  const b = t.ctl.commit('skip_signed', (s) => { s.safety.skip_signed = false; });
+  const c = t.ctl.addExclusion('**/node_modules');
+  for (let i = 0; i < 3; i++) {
+    await tick();
+    t.held.shift()?.();
+  }
+  await Promise.all([a, b, c]);
+  const last = t.sent('settings_set').at(-1).req.settings;
+  assert.equal(t.sent('settings_set').length, 3);
+  assert.equal(last.general.undo_days, 60);
+  assert.equal(last.safety.skip_signed, false);
+  assert.deepEqual(last.safety.exclusions, ['**/node_modules']);
+  assert.deepEqual(t.settings(), last);
 });

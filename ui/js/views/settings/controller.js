@@ -48,6 +48,8 @@ function createController(actions, api) {
   };
   /** @type {{ host: any, s: any, build: ((s: any) => any) | null }} */
   const view = { host: null, s: null, build: null };
+  /** The settings changes in flight, in order (UI-7). @type {Promise<void>} */
+  let commits = Promise.resolve();
 
   const rerender = () => { if (view.host && view.build && view.s) replaceKeepingFocus(view.host, view.build(view.s)); };
   const fail = (field, e) => { st.errors[field] = e?.message ?? String(e); rerender(); };
@@ -68,17 +70,27 @@ function createController(actions, api) {
     },
     toggleOpen(key) { st.open[key] = !st.open[key]; rerender(); },
 
-    /** Change settings with `mutate(copy)`; the engine validates and the error shows under `field`. */
-    async commit(field, mutate) {
-      const next = structuredClone(view.s.settings);
-      mutate(next);
-      try {
-        const saved = await api.settingsSet({ settings: next });
-        ok(field);
-        view.s = { ...view.s, settings: saved };
-        await actions.loadSettings();
-        rerender();
-      } catch (e) { fail(field, e); }
+    /**
+     * Change settings with `mutate(copy)`; the engine validates and the error shows under
+     * `field`. UI-7: `settings_set` replaces the whole object, so changes run one at a time
+     * and each `mutate` applies to the settings the previous one saved; two quick changes
+     * (a number committed on blur, then a switch) never undo each other.
+     */
+    commit(field, mutate) {
+      const run = async () => {
+        const next = structuredClone(view.s.settings);
+        mutate(next);
+        try {
+          const saved = await api.settingsSet({ settings: next });
+          ok(field);
+          view.s = { ...view.s, settings: saved };
+          await actions.loadSettings();
+          rerender();
+        } catch (e) { fail(field, e); }
+      };
+      const done = commits.then(run);
+      commits = done;
+      return done;
     },
     /** A whole number within bounds, checked here first so typing errors never hit the engine. */
     async commitNumber(field, raw, min, max, apply) {
