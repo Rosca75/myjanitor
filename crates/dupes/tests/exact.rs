@@ -243,3 +243,69 @@ fn serial_worker_count_gives_the_same_groups() {
     let h = Harness::new(index_of(t.path()));
     assert_eq!(serial, group_names(&h.run(&ExactDuplicates).unwrap()));
 }
+
+/// Counts the hashes stored per stage; each `put` is slow, so that two detectors
+/// started together both find the cache empty at the start of a stage.
+#[derive(Default)]
+struct CountingStore {
+    inner: mj_core::MemoryFingerprintStore,
+    partial: std::sync::atomic::AtomicUsize,
+    full: std::sync::atomic::AtomicUsize,
+}
+
+impl FingerprintStore for CountingStore {
+    fn get(&self, p: &std::path::Path, s: mj_core::FileStamp) -> Option<mj_core::Fingerprints> {
+        self.inner.get(p, s)
+    }
+    fn put(&self, p: &std::path::Path, s: mj_core::FileStamp, fp: mj_core::Fingerprints) {
+        use std::sync::atomic::Ordering::SeqCst;
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        if fp.partial.is_some() {
+            self.partial.fetch_add(1, SeqCst);
+        }
+        if fp.full.is_some() && fp.partial.is_none() {
+            self.full.fetch_add(1, SeqCst);
+        }
+        self.inner.put(p, s, fp)
+    }
+}
+
+#[test]
+fn concurrent_detectors_hash_each_file_once() {
+    // DUP-7: the engine runs Exact, Similar, Attachments and Fonts at the same time and
+    // each runs the exact lane over its files: a file two of them need is read once.
+    use std::sync::atomic::Ordering::SeqCst;
+    let t = TempDir::new("singleflight").unwrap();
+    let a = noise(21, BIG);
+    t.write("one/a.bin", &a).unwrap();
+    t.write("two/a.bin", &a).unwrap();
+    let index = index_of(t.path());
+    let store = CountingStore::default();
+    let params = mj_core::ParamValues::new();
+    let cancel = mj_core::CancelToken::new();
+    let progress = Counter::default();
+    let barrier = std::sync::Barrier::new(3);
+    let groups: Vec<usize> = std::thread::scope(|s| {
+        let runs: Vec<_> = (0..3)
+            .map(|_| {
+                s.spawn(|| {
+                    let ctx = mj_core::DetectContext {
+                        index: &index,
+                        params: &params,
+                        now: Timestamp::now(),
+                        fingerprints: &store,
+                        cancel: &cancel,
+                        progress: &progress,
+                        threads: 2,
+                    };
+                    barrier.wait();
+                    mj_core::Detector::run(&ExactDuplicates, &ctx).unwrap().groups.len()
+                })
+            })
+            .collect();
+        runs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(groups, [1, 1, 1]);
+    assert_eq!(store.partial.load(SeqCst), 2, "one partial hash per file");
+    assert_eq!(store.full.load(SeqCst), 2, "one full hash per file");
+}
