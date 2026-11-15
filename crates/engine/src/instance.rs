@@ -24,8 +24,9 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Locks this process holds, by data folder key; the count of engines sharing each.
-static HELD: Mutex<Option<HashMap<String, (Arc<File>, usize)>>> = Mutex::new(None);
+/// Locks this process holds, by data folder key, with the count of engines sharing each.
+type Held = HashMap<String, (Arc<File>, usize)>;
+static HELD: Mutex<Option<Held>> = Mutex::new(None);
 
 /// Held for the life of the engine.
 #[derive(Debug)]
