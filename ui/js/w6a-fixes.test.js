@@ -93,3 +93,27 @@ test('select all with groups kept together selects the shown groups minus their 
     assert.equal(r.selected, groups.has(r.group) && !r.badges.includes('keeper'), r.path);
   }
 });
+
+// ---------------------------------------------------------------- ENG-7 kept badge after a reset
+
+test('after a keep rule and Reset selection the kept badge sits on the copy that stays', async () => {
+  const env = await makeEnv();
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  for (const rule of ['newest', 'oldest']) {
+    await env.actions.applyKeepRule(rule);
+    await env.settle();
+    await env.actions.resetSelection();
+    await env.settle();
+    const rows = await allRows(env, 'det:exact_duplicates');
+    const groups = new Map();
+    for (const r of rows) if (r.group) groups.set(r.group, [...(groups.get(r.group) ?? []), r]);
+    for (const [g, members] of groups) {
+      const left = members.filter((r) => !r.selected);
+      const kept = members.filter((r) => r.badges.includes('keeper'));
+      if (left.length === 0) continue;
+      assert.equal(kept.length, 1, `group ${g}`);
+      assert.ok(!kept[0].selected, `group ${g}: the kept copy is not selected`);
+    }
+  }
+});

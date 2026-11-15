@@ -64,6 +64,26 @@ function keeperOf(members, rule) {
 }
 
 /** Deterministic waveform for the preview. @param {any} row */
+/**
+ * ENG-7: the kept badge follows the selection, as in the engine: in every group the member
+ * that survives the removal of the selected rows carries it (unchanged when all are selected).
+ * @param {any} m @param {string} oppId
+ */
+function syncKeepers(m, oppId) {
+  const sel = m.selection.get(oppId) ?? new Set();
+  for (const g of m.groups.get(oppId) ?? []) {
+    const members = (m.rows.get(oppId) ?? []).filter((r) => r.group === g.id);
+    const left = (r) => !sel.has(r.id);
+    const survivor = members.find((r) => r.path === g.keeper && left(r)) ?? members.find(left);
+    if (!survivor) continue;
+    g.keeper = survivor.path;
+    for (const r of members) {
+      const others = (r.badges ?? []).filter((b) => b !== 'keeper');
+      r.badges = r === survivor ? [...others, 'keeper'] : others;
+    }
+  }
+}
+
 function waveform(row) {
   const peaks = [];
   let x = row.id * 9301 + 49297;
@@ -192,6 +212,7 @@ export function createHandlers(m, sim, emit) {
         if (req.selected) sel.add(r.id); else sel.delete(r.id);
       }
       m.selection.set(o.id, sel);
+      syncKeepers(m, o.id);
       touched(o.id);
       return m.summary(o.id);
     },
@@ -219,6 +240,7 @@ export function createHandlers(m, sim, emit) {
     selection_reset: (req) => {
       const o = needOpp(req.opportunity_id);
       m.selection.set(o.id, new Set((m.rows.get(o.id) ?? []).filter((r) => r.default_selected).map((r) => r.id)));
+      syncKeepers(m, o.id);
       touched(o.id);
       return m.summary(o.id);
     },
