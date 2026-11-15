@@ -23,7 +23,9 @@ export async function bridgeEvents({ api, store, actions }) {
     'scan://detector': (p) => { if (current(p.generation)) set({ detectors: { ...get().detectors, [p.opportunity_id]: p } }); },
     'scan://done': (p) => { if (current(p.generation)) { set({ scan: withoutProgress(p), scanDoneGen: Math.max(get().scanDoneGen ?? 0, p.generation), scanProgress: p.progress ?? get().scanProgress, detectors: {} }); actions.refreshOpps(); actions.refreshOpenStep?.(); actions.refreshScope?.(); } },
     'opportunities://changed': () => { actions.refreshOpps(); },
-    'plan://changed': (plan) => set({ plan }),
+    // A card in the plan is counted with its step's action, and the drive bars show the plan:
+    // both come back with the list.
+    'plan://changed': (plan) => { set({ plan }); actions.refreshOpps(); },
     'plan://dry_run': (r) => {
       set({ dryRunning: false });
       if (r.error) { // failed or cancelled: the totals cover only the steps measured so far (IPC-10)

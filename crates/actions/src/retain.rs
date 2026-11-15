@@ -104,7 +104,8 @@ pub fn note_plan(entry: &mut JournalEntry, plan: &RetainPlan) {
 }
 
 /// Carry out a retention plan: move `path` away (it no longer exists at its place on
-/// success). Updates `entry` (`trash`, `retained_at`, `reversible`).
+/// success). Updates `entry` (`trash`, `retained_at`, `reversible`). `known`: the item's
+/// content hash when the caller already read it (used for the quarantine manifest).
 pub fn retain(
     platform: &dyn Platform,
     quarantine_dir: &Path,
@@ -112,6 +113,7 @@ pub fn retain(
     path: &Path,
     plan: &RetainPlan,
     now: Timestamp,
+    known: Option<&fsops::ContentHash>,
 ) -> Result<()> {
     match plan {
         RetainPlan::Trash => {
@@ -122,7 +124,17 @@ pub fn retain(
             let parent = slot.parent().ok_or_else(|| Error::Internal("quarantine slot without parent".into()))?;
             fsops::create_dirs(parent)?;
             let md = std::fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
-            let hash = if md.is_file() { fsops::hash_file(path).ok() } else { None };
+            // ACT-8: the content hash the engine computed for this item moments ago (its
+            // byte comparison with the kept copy, or its audit hash) is reused while the
+            // size still agrees; the act-time re-stat has just confirmed the file.
+            let hash = if !md.is_file() {
+                None
+            } else {
+                match known.filter(|h| h.size == md.len()) {
+                    Some(h) => Some(h.clone()),
+                    None => fsops::hash_file(path).ok(),
+                }
+            };
             let m = Manifest {
                 entry_id: entry.id,
                 run_id: entry.run_id,

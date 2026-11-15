@@ -91,6 +91,20 @@ fn same_pixels(a: &[u8], b: &[u8]) -> bool {
     matches!((png::decode_rgba16(a), png::decode_rgba16(b)), (Ok(x), Ok(y)) if x == y)
 }
 
+/// Accept oxipng's output `cand` for the in-house result `best` (which applied the metadata policy
+/// exactly) only when it is smaller, shows the same pixels as `src` and holds every chunk and every
+/// byte after `IEND` that `best` holds (OPT-1). oxipng does not copy data after `IEND`, so that
+/// trailer is re-appended byte for byte before the comparison. `None`: the tool's output is ignored.
+fn accept_oxipng(best: &[u8], cand: &[u8], src: &[u8]) -> Option<Vec<u8>> {
+    let want = png::parse(best).ok()?;
+    let mut got = png::parse(cand).ok()?;
+    if got.trailing.is_empty() {
+        got.trailing.clone_from(&want.trailing);
+    }
+    let out = png::write(&got.chunks, &got.trailing);
+    (out.len() < best.len() && png::same_metadata(&want, &got) && same_pixels(src, &out)).then_some(out)
+}
+
 impl Optimiser for PngLossless {
     fn info(&self) -> OptimiserInfo {
         OptimiserInfo {
@@ -163,7 +177,7 @@ impl Optimiser for PngLossless {
             // oxipng writes nothing when it cannot improve the file: that is not a failure.
             if o.success() && out.is_file() {
                 let cand = std::fs::read(&out).map_err(|e| Error::io(&out, e))?;
-                if cand.len() < best.bytes.len() && same_pixels(&src, &cand) {
+                if let Some(cand) = accept_oxipng(&best.bytes, &cand, &src) {
                     best.bytes = cand;
                     notes.push("oxipng produced the smaller file (pixels verified)".into());
                 }
@@ -299,5 +313,50 @@ mod tests {
         let r2 = PngLossless.optimise(&job(&src, &dst2, d.path(), &ParamValues::new(), &tools, &c)).unwrap();
         let out2 = std::fs::read(&dst2).unwrap();
         assert!(same_pixels(&std::fs::read(&src).unwrap(), &out2) && r2.notes.iter().all(|n| !n.contains("oxipng")));
+    }
+
+    #[cfg(unix)]
+    fn fake_oxipng(d: &TempDir, output: &[u8]) -> Vec<ExternalTool> {
+        use std::os::unix::fs::PermissionsExt;
+        let made = d.write("made.png", output).unwrap();
+        let script = format!("#!/bin/sh\nwhile [ $# -gt 0 ]; do if [ \"$1\" = \"--out\" ]; then out=\"$2\"; fi; shift; done\ncp '{}' \"$out\"\n", made.display());
+        let exe = d.write("oxipng", script.as_bytes()).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        vec![crate::tools::tool_at("oxipng", &exe)]
+    }
+
+    /// OPT-1: oxipng does not copy data after IEND; under "Keep everything" the trailer must survive.
+    #[cfg(unix)]
+    #[test]
+    fn oxipng_output_never_drops_data_after_iend() {
+        let d = TempDir::new("png-oxi-trailer").unwrap();
+        let image = rgb_png(64, 64, &[], 1);
+        let trailer: Vec<u8> = b"APPENDED-VIDEO".iter().copied().cycle().take(64 * 1024).collect();
+        let src = d.write("a.png", &[image.clone(), trailer.clone()].concat()).unwrap();
+        // The tool's output: the same picture, smaller than the in-house result, without the trailer.
+        let tools = fake_oxipng(&d, &png::recompress(&image, MetadataPolicy::KeepAll, 10, true).unwrap().bytes);
+        let dst = d.join("o.png");
+        let r = PngLossless.optimise(&job(&src, &dst, d.path(), &ParamValues::new(), &tools, &CancelToken::new()));
+        let out = std::fs::read(&dst).unwrap();
+        assert!(r.unwrap().skipped.is_none());
+        assert_eq!(png::parse(&out).unwrap().trailing, trailer, "the data after IEND was dropped");
+    }
+
+    /// OPT-1: oxipng's output must also hold every chunk the policy keeps (here a text note under
+    /// "Keep everything"); the pixel comparison alone cannot see a dropped chunk.
+    #[cfg(unix)]
+    #[test]
+    fn oxipng_output_that_drops_a_kept_chunk_is_ignored() {
+        let d = TempDir::new("png-oxi-chunk").unwrap();
+        let image = rgb_png(64, 64, &[chunk(b"tEXt", b"Author\0Me")], 1);
+        let src = d.write("a.png", &image).unwrap();
+        let tools = fake_oxipng(&d, &png::recompress(&image, MetadataPolicy::StripText, 10, true).unwrap().bytes);
+        let dst = d.join("o.png");
+        let r = PngLossless.optimise(&job(&src, &dst, d.path(), &ParamValues::new(), &tools, &CancelToken::new()));
+        let r = r.unwrap();
+        assert!(r.notes.iter().all(|n| !n.contains("oxipng")), "{r:?}");
+        if r.skipped.is_none() {
+            assert!(png::parse(&std::fs::read(&dst).unwrap()).unwrap().chunks.iter().any(|c| &c.kind == b"tEXt"));
+        }
     }
 }

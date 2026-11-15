@@ -167,7 +167,12 @@ pub fn run(
     if insp.labelled {
         rep.notes.push("sensitivity label and custom properties preserved".into());
     }
-    let plan = RepackPlan { replace: pkg.replaced().clone(), remove: pkg.removed().clone(), stored: BTreeSet::new() };
+    let plan = RepackPlan {
+        replace: pkg.replaced().clone(),
+        remove: pkg.removed().clone(),
+        stored: BTreeSet::new(),
+        keep_stored: false,
+    };
     let unchanged: BTreeSet<String> = pkg
         .entries()
         .iter()

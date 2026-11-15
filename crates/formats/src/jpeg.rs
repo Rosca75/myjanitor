@@ -143,6 +143,58 @@ pub fn exif_tiff(buf: &[u8]) -> Option<&[u8]> {
     buf.get(h.exif?)
 }
 
+/// Offset just past the EOI marker that ends the first image in `buf` (scans, the tables between
+/// progressive scans and restart markers included), so `buf[image_end(buf)?..]` is whatever was
+/// appended after the picture: a motion photo's video, a vendor trailer, padding. `None` when
+/// `buf` is not a JPEG or ends before that EOI. Entropy-coded data cannot hold an `FF D9` (every
+/// `FF` in it is stuffed with `00` or starts a restart marker), so the first marker EOI after a
+/// scan is the end of the image.
+pub fn image_end(buf: &[u8]) -> Option<usize> {
+    if !is_jpeg(buf) {
+        return None;
+    }
+    let mut pos = 2usize;
+    loop {
+        // Marker segments (fill bytes allowed before each marker).
+        if *buf.get(pos)? != 0xFF {
+            return None;
+        }
+        while buf.get(pos) == Some(&0xFF) {
+            pos += 1;
+        }
+        let marker = *buf.get(pos)?;
+        pos += 1;
+        match marker {
+            0xD9 => return Some(pos),
+            0x01 | 0xD0..=0xD7 => continue,
+            0x00 | 0xD8 => return None,
+            _ => {}
+        }
+        let len = be16(buf, pos)? as usize;
+        if len < 2 {
+            return None;
+        }
+        pos = pos.checked_add(len)?;
+        if pos > buf.len() {
+            return None;
+        }
+        if marker == 0xDA {
+            // Entropy-coded data: runs until an `FF` that is not stuffing, a restart marker or fill.
+            loop {
+                let i = pos + buf.get(pos..)?.iter().position(|&b| b == 0xFF)?;
+                match *buf.get(i + 1)? {
+                    0x00 | 0xD0..=0xD7 => pos = i + 2,
+                    0xFF => pos = i + 1,
+                    _ => {
+                        pos = i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn be16(buf: &[u8], pos: usize) -> Option<u16> {
     let b = buf.get(pos..pos.checked_add(2)?)?;
     Some(u16::from_be_bytes([b[0], b[1]]))
@@ -171,6 +223,29 @@ mod tests {
         f.extend(seg(0xDA, &[1, 1, 0, 0, 63, 0]));
         f.extend([0x12, 0x34, 0xFF, 0xD9]);
         f
+    }
+
+    #[test]
+    fn image_end_finds_the_eoi_of_the_first_image() {
+        let f = sample();
+        assert_eq!(image_end(&f), Some(f.len()));
+        // A trailer (a motion photo's video holding its own FF D9) starts where the image ends.
+        let mut m = f.clone();
+        m.extend_from_slice(b"ftypmp42\xFF\xD9 video \xFF\xD8\xFF\xD9");
+        assert_eq!(image_end(&m), Some(f.len()));
+        // Stuffed bytes, restart markers, fill and a second scan (progressive) are inside the image.
+        let mut p = f[..f.len() - 2].to_vec();
+        p.extend([0xFF, 0x00, 0xFF, 0xD3, 0x77, 0xFF, 0xFF, 0xD4, 0x01]);
+        p.extend(seg(0xC4, &[0; 17]));
+        p.extend(seg(0xDA, &[1, 1, 0, 0, 63, 0]));
+        p.extend([0x42, 0xFF, 0xD9, 0xAB, 0xCD]);
+        assert_eq!(image_end(&p), Some(p.len() - 2));
+        // Truncated anywhere before the EOI, or not a JPEG: no end.
+        for cut in 0..f.len() {
+            assert_eq!(image_end(&f[..cut]), None, "cut {cut}");
+        }
+        assert_eq!(image_end(b"not a jpeg"), None);
+        assert_eq!(image_end(&[0xFF, 0xD8, 0xFF, 0xD9]), Some(4));
     }
 
     #[test]

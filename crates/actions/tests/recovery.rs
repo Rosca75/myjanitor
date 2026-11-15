@@ -119,7 +119,8 @@ fn dangling_intents_are_settled_by_inspection() {
     assert!(st(&e1).reversible);
     assert_eq!(st(&e2).state, JournalState::Failed);
     assert!(c.exists() && slot(2, "c.txt").exists(), "recovery never deletes user data");
-    assert!(st(&e2).error.unwrap().message.contains("incomplete copy"));
+    // ACT-5: the copy is whole (same content), so it is called complete, not incomplete.
+    assert!(st(&e2).error.unwrap().message.contains("a complete copy remains"));
     assert_eq!(st(&e3).state, JournalState::Failed);
     assert!(!temp3.exists(), "our own temporary link name is removed");
     assert_eq!(std::fs::read(&dup).unwrap(), b"same content");
@@ -261,4 +262,57 @@ fn a_cancelled_purge_stops_between_items_and_keeps_the_rest() {
     // Nothing expired: an explicit age that no item reaches deletes nothing and is not a stop.
     let o = mj_actions::quarantine::purge_with(&f.journal, &f.qdir, later, Some(400), 30, &cancel).unwrap();
     assert_eq!(o, mj_actions::quarantine::PurgeOutcome::default());
+}
+
+/// ACT-5: a cross-volume folder move interrupted while its source was being deleted leaves
+/// the only complete copy in the slot: recovery settles it as done (held, restorable) and
+/// says what is left at the source. A copy that is only part of the folder stays "failed".
+#[test]
+fn interrupted_folder_move_with_a_complete_copy_is_kept_and_held() {
+    let f = Fixture::new("recover-act5");
+    let run = f.new_run(RunKind::Apply);
+    let mut entries = Vec::new();
+    for (i, partial_copy) in [(0u64, false), (1, true)] {
+        let name = format!("proj{i}");
+        f.write(&format!("{name}/a.txt"), b"a");
+        f.write(&format!("{name}/b.txt"), b"bb");
+        f.write(&format!("{name}/sub/c.txt"), b"ccc");
+        let src = f.root().join(&name);
+        let stamp = stamp(&src);
+        let mut e = intent(run, i, ActionKind::Quarantine, &src, stamp);
+        e.target = TargetKind::Folder;
+        let slot = mj_actions::quarantine::slot(&f.qdir, run, e.id, name.as_ref());
+        e.retained_at = Some(slot.clone());
+        std::fs::create_dir_all(slot.join("sub")).unwrap();
+        for rel in ["a.txt", "b.txt", "sub/c.txt"] {
+            std::fs::copy(src.join(rel), slot.join(rel)).unwrap();
+        }
+        if partial_copy {
+            // Crash during the copy: the source is whole, the slot holds part of it.
+            std::fs::remove_file(slot.join("b.txt")).unwrap();
+        } else {
+            // Crash during the deletion of the source, after the copy verified.
+            std::fs::remove_file(src.join("a.txt")).unwrap();
+        }
+        f.journal.append(&e).unwrap();
+        entries.push((e, src, slot));
+    }
+    mj_actions::undo::recover(&f.ctx(run, no_services())).unwrap();
+
+    let (e0, src0, slot0) = &entries[0];
+    let r0 = f.journal.entry(e0.id).unwrap();
+    assert_eq!(r0.state, JournalState::Done, "{r0:?}");
+    assert!(r0.reversible);
+    let note = r0.error.as_ref().unwrap().message.clone();
+    assert!(note.contains(&slot0.display().to_string()) && note.contains(&src0.display().to_string()), "{note}");
+    assert!(!note.contains("incomplete"), "{note}");
+    assert!(slot0.join("a.txt").exists() && src0.join("b.txt").exists(), "recovery deletes nothing");
+    let held = mj_actions::quarantine::held_entries(&f.journal, &f.qdir);
+    assert!(held.iter().any(|h| h.id == e0.id), "the complete copy is held, listed and restorable");
+
+    let (e1, src1, slot1) = &entries[1];
+    let r1 = f.journal.entry(e1.id).unwrap();
+    assert_eq!(r1.state, JournalState::Failed);
+    assert!(r1.error.as_ref().unwrap().message.contains("incomplete copy"));
+    assert!(src1.join("b.txt").exists() && slot1.join("a.txt").exists());
 }

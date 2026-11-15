@@ -1,11 +1,17 @@
 [
   {
     "builtin": true,
-    "description": "Anything in a Downloads folder not modified for 90 days",
+    "description": "Files in a Downloads folder not modified for 90 days",
     "id": "downloads_older_90d",
     "name": "Downloads older than 90 days",
     "rule": {
       "all": [
+        {
+          "cond": {
+            "field": "kind",
+            "kind": "file"
+          }
+        },
         {
           "cond": {
             "case_sensitive": false,
@@ -474,6 +480,12 @@
     "name": "Hidden system files",
     "rule": {
       "all": [
+        {
+          "cond": {
+            "field": "kind",
+            "kind": "file"
+          }
+        },
         {
           "cond": {
             "attr": [

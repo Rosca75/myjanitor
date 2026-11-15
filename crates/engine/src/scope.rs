@@ -5,13 +5,14 @@ use mj_core::{lock, Error, Result, ScanScope};
 use crate::api::{ScopePathRequest, ScopeSetRequest};
 use crate::Engine;
 
-fn normalised(mut scope: ScanScope) -> Result<ScanScope> {
+fn normalised(mut scope: ScanScope, platform: &dyn mj_platform::ScanPlatform) -> Result<ScanScope> {
     for r in &scope.roots {
         if !r.is_absolute() {
             return Err(Error::InvalidInput(format!("scan locations must be absolute paths: {}", r.display())));
         }
     }
-    scope.roots = mj_scan::effective_roots(&scope);
+    // SCAN-8: a nested location on another drive stays a location of its own.
+    scope.roots = mj_scan::effective_roots_on(&scope, platform);
     Ok(scope)
 }
 
@@ -23,7 +24,7 @@ impl Engine {
 
     /// Replace the scope.
     pub fn scope_set(&self, req: ScopeSetRequest) -> Result<ScanScope> {
-        let scope = normalised(req.scope)?;
+        let scope = normalised(req.scope, self.platform())?;
         *lock(&self.scope) = scope.clone();
         Ok(scope)
     }
@@ -36,7 +37,7 @@ impl Engine {
         }
         let mut scope = lock(&self.scope).clone();
         scope.roots.push(req.path);
-        let scope = normalised(scope)?;
+        let scope = normalised(scope, self.platform())?;
         *lock(&self.scope) = scope.clone();
         Ok(scope)
     }

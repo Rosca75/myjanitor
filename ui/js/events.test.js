@@ -25,15 +25,19 @@ test('scan events of an older generation are ignored', async () => {
   assert.deepEqual(Object.keys(env.state().detectors), ['y']);
 });
 
-test('plan://changed replaces the plan; opportunities://changed refetches the list', async () => {
+test('plan://changed replaces the plan and refetches the list; opportunities://changed refetches the list', async () => {
   const env = await makeEnv();
   env.clearCalls();
   env.backend.emit('plan://changed', { id: 9, name: 'Your plan', steps: [], estimate: { files: 0, bytes_before: 0, bytes_after: 0, confidence: 'exact', skipped: 0 }, checklist: [] });
   assert.equal(env.state().plan.id, 9);
-  env.backend.emit('opportunities://changed', { generation: 3 });
   await env.settle();
+  // A card in the plan counts with its step's action and the drive bars show the plan (W6-B).
   assert.equal(env.sent('opportunities_list').length, 1);
   assert.equal(env.sent('drives_list').length, 1);
+  env.backend.emit('opportunities://changed', { generation: 3 });
+  await env.settle();
+  assert.equal(env.sent('opportunities_list').length, 2);
+  assert.equal(env.sent('drives_list').length, 2);
 });
 
 test('job events update the queue and finishing every job of a run completes it', async () => {

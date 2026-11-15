@@ -3,7 +3,7 @@
 //! Recognised layouts: `<code>.lproj` folders, `locale/<code>` and `locales/<code>` folders, and
 //! `<code>.pak` files inside a `locales` folder or named `lang-<code>.pak`. Everything whose
 //! language is not in the kept list is listed; the kept list defaults to the system language
-//! (from `LC_ALL`/`LC_MESSAGES`/`LANG`) plus English and can be set with `kept_languages`.
+//! (supplied by the engine from the OS, else `LC_ALL`/`LC_MESSAGES`/`LANG`) plus English and can be set with `kept_languages`.
 //! A folder name only counts when it parses as a real ISO 639-1 language code, so `locale/data`
 //! or `locales/backup` are never mistaken for a localisation.
 //! Owner: W2-D.
@@ -88,18 +88,28 @@ pub fn language_code(raw: &str) -> Option<String> {
     ok.then_some(lang)
 }
 
-/// Codes to keep: the `kept_languages` setting, else the system language; English is always kept.
+/// Codes to keep: the `kept_languages` setting, else the system language from the
+/// environment (`LC_ALL`, `LC_MESSAGES`, `LANG`); English is always kept.
 pub fn kept_languages(setting: &str) -> Vec<String> {
+    let sys = ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    kept_languages_with(setting, sys.as_deref()).0
+}
+
+/// Codes to keep given the system language (RF-9: the engine supplies it, on Windows from
+/// the user's locale). The flag is false when the setting is empty and the system language
+/// is unknown, so only English is kept and the card says so.
+pub fn kept_languages_with(setting: &str, system: Option<&str>) -> (Vec<String>, bool) {
     let mut kept: Vec<String> = common::split_list(setting).iter().filter_map(|s| language_code(s)).collect();
+    let mut known = true;
     if kept.is_empty() {
-        let sys =
-            ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
-        kept.extend(sys.as_deref().and_then(language_code));
+        let sys = system.and_then(language_code);
+        known = sys.is_some();
+        kept.extend(sys);
     }
     kept.push("en".into());
     kept.sort();
     kept.dedup();
-    kept
+    (kept, known)
 }
 
 fn language_name(code: &str) -> String {
@@ -158,9 +168,18 @@ impl Detector for LanguagePacks {
     }
 
     fn run(&self, ctx: &DetectContext<'_>) -> Result<DetectorOutput> {
-        let kept = kept_languages(ctx.params.text("kept_languages", ""));
+        let supplied = ctx.params.text(mj_core::detector::env::SYSTEM_LANGUAGE, "");
+        let from_env =
+            ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+        let system = if supplied.is_empty() { from_env.as_deref() } else { Some(supplied) };
+        let (kept, known) = kept_languages_with(ctx.params.text("kept_languages", ""), system);
         let ix = ctx.index;
         let mut out = DetectorOutput::default();
+        if !known {
+            out.diagnostics
+                .notes
+                .push("System language unknown: only English is kept; set 'Languages to keep' in Settings".into());
+        }
         let mut tick = Ticker::new(ctx, ix.len() as u64);
         let mut hits: Vec<(usize, String)> = Vec::new();
         for (pos, e) in ix.entries().iter().enumerate() {
@@ -224,6 +243,23 @@ mod tests {
     fn kept_list_always_contains_english() {
         assert_eq!(kept_languages("fr, de-AT"), vec!["de", "en", "fr"]);
         assert!(kept_languages("").contains(&"en".to_string()));
+    }
+
+    /// RF-9: on Windows nothing sets LANG; the engine supplies the system language.
+    #[test]
+    fn rf9_the_supplied_system_language_is_kept() {
+        assert_eq!(kept_languages_with("", Some("fr-FR")), (vec!["en".to_string(), "fr".to_string()], true));
+        assert_eq!(kept_languages_with("de", Some("fr-FR")), (vec!["de".to_string(), "en".to_string()], true));
+        assert_eq!(kept_languages_with("", None), (vec!["en".to_string()], false));
+        let t = fixture();
+        let mut params = mj_core::ParamValues::new();
+        params.set("kept_languages", mj_core::ParamValue::Text(String::new()));
+        params.set(mj_core::detector::env::SYSTEM_LANGUAGE, mj_core::ParamValue::Text("fr-FR".into()));
+        let out = run(&LanguagePacks, &index_of(t.path()), &params);
+        let r = rel(&out, t.path());
+        assert!(!r.iter().any(|p| p.contains("fr")), "{r:?}");
+        assert!(r.contains(&"app/locale/ja".to_string()));
+        assert!(out.diagnostics.notes.is_empty());
     }
 
     fn fixture() -> TempDir {

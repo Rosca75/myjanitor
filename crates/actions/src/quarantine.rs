@@ -116,11 +116,14 @@ pub struct QuarantineSummary {
 /// Items currently held (entries `done` or `undo_failed` whose `retained_at` is in the quarantine).
 pub fn summary(journal: &Journal, quarantine_dir: &Path) -> QuarantineSummary {
     let mut s = QuarantineSummary::default();
-    for e in held(journal, quarantine_dir) {
-        s.items += 1;
-        s.bytes = s.bytes.saturating_add(e.bytes_before);
-        s.oldest = Some(s.oldest.map_or(e.at, |o| o.min(e.at)));
-    }
+    // XC-4: counted in place under the journal lock; nothing is cloned.
+    journal.for_each_entry(|e| {
+        if is_held(quarantine_dir, e) {
+            s.items += 1;
+            s.bytes = s.bytes.saturating_add(e.bytes_before);
+            s.oldest = Some(s.oldest.map_or(e.at, |o| o.min(e.at)));
+        }
+    });
     s
 }
 
@@ -130,19 +133,20 @@ pub fn held_entries(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntr
 }
 
 fn held(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
-    journal
-        .all_entries()
-        .into_iter()
-        // G-13: an item whose undo was refused (`undo_failed`, retryable) is still in its
-        // slot: it is counted and purged like any other held item.
-        .filter(|e| matches!(e.state, JournalState::Done | JournalState::UndoFailed))
+    // XC-4: only held entries are cloned, not the whole history.
+    journal.entries_where(|e| is_held(quarantine_dir, e))
+}
+
+fn is_held(quarantine_dir: &Path, e: &JournalEntry) -> bool {
+    // G-13: an item whose undo was refused (`undo_failed`, retryable) is still in its
+    // slot: it is counted and purged like any other held item.
+    matches!(e.state, JournalState::Done | JournalState::UndoFailed)
         // Undo records copy their source's `retained_at`; they hold nothing.
-        .filter(|e| e.undo_of.is_none())
+        && e.undo_of.is_none()
         // F-05: only the slot the quarantine itself assigned to this entry is held (and
         // purged); anything else that happens to lie below the folder (a backup folder
         // pointed there by mistake) is the user's and never purged.
-        .filter(|e| e.retained_at.as_deref().is_some_and(|r| is_own_slot(quarantine_dir, e, r)))
-        .collect()
+        && e.retained_at.as_deref().is_some_and(|r| is_own_slot(quarantine_dir, e, r))
 }
 
 fn is_own_slot(quarantine_dir: &Path, e: &JournalEntry, retained: &Path) -> bool {

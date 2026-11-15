@@ -277,6 +277,10 @@ impl Engine {
         self.apply_side_effects(&old, &s)?;
         self.save_settings(&s)?;
         *lock(&self.settings) = s.clone();
+        if old.scan != s.scan {
+            // SCAN-5: the next scan from the app follows Settings > Scanning.
+            lock(&self.scope).options = s.scan.clone();
+        }
         // The plan's checklist and estimates read settings (undo window, quarantine days,
         // skipped badges): bring them up to date (ENG-9).
         if !lock(&self.plan).plan.steps.is_empty() {

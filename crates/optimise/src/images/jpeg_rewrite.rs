@@ -82,7 +82,8 @@ fn decide(marker: u8, body: &[u8], policy: JpegMetadata, xmp_dropped: &mut bool)
     use JpegMetadata::*;
     let all = matches!(policy, StripAll { .. });
     Ok(match marker {
-        0xFE if policy != KeepAll => Act::Drop("comments"),
+        // OPT-7: comments (captions, scanning notes) go only with "Remove all metadata".
+        0xFE if all => Act::Drop("comments"),
         0xE0 if body.starts_with(b"JFXX\0") && matches!(policy, StripThumbnail | StripAll { .. }) => {
             Act::Drop("JFXX thumbnail")
         }
@@ -344,7 +345,7 @@ mod tests {
         assert!(!e.has_gps && e.orientation == Some(6) && e.make.as_deref() == Some("ACME") && e.thumbnail.is_some());
         let m = markers(&r.bytes);
         assert!(!contains(&r.bytes, b"GPSLatitude"), "XMP with GPS must go");
-        assert!(m.contains(&0xE2) && m.contains(&0xED) && !m.contains(&0xFE), "{m:x?}");
+        assert!(m.contains(&0xE2) && m.contains(&0xED) && m.contains(&0xFE), "{m:x?}"); // OPT-7: comments stay
         assert!(r.notes.iter().any(|n| n.contains("GPS position")));
     }
 
@@ -354,7 +355,19 @@ mod tests {
         let e = mj_formats::exif::parse(jpeg::exif_tiff(&r.bytes).unwrap()).unwrap();
         assert!(e.thumbnail.is_none() && e.has_gps);
         assert!(r.bytes.len() < sample(1, 0).len() - 400);
-        assert!(!markers(&r.bytes).contains(&0xFE), "comments are dropped by every policy but keep_all");
+        // OPT-7: comments (captions, scanning notes) are metadata the user only removes with
+        // "Remove all metadata"; the thumbnail and GPS policies keep them.
+        assert!(markers(&r.bytes).contains(&0xFE), "the thumbnail policy removed a comment");
+    }
+
+    #[test]
+    fn gps_and_thumbnail_policies_keep_comments() {
+        for policy in [JpegMetadata::StripGps, JpegMetadata::StripThumbnail, JpegMetadata::KeepAll] {
+            let r = rewrite(&sample(1, 0), policy).unwrap();
+            assert!(markers(&r.bytes).contains(&0xFE) && r.notes.iter().all(|n| !n.contains("comments")), "{policy:?}");
+        }
+        let r = rewrite(&sample(1, 0), JpegMetadata::StripAll { icc: false }).unwrap();
+        assert!(!markers(&r.bytes).contains(&0xFE) && r.notes.iter().any(|n| n.contains("comments")));
     }
 
     #[test]

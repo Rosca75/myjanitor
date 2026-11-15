@@ -95,26 +95,83 @@ fn threshold_zero_and_cap() {
     assert!(group_names(&out).iter().all(|g| g.iter().all(|n| n.starts_with("scene_a"))), "{:?}", group_names(&out));
 }
 
-#[test]
-fn embedded_thumbnail_is_used_before_a_full_decode() {
-    let t = TempDir::new("thumb").unwrap();
-    t.write("a.jpg", fixture("scene_a_q92.jpg")).unwrap();
-    // Main image is scene B, embedded thumbnail is scene A: the fingerprint must come
-    // from the thumbnail (so it matches scene A) while the dimensions stay B's.
+/// Scene B (320x240) carrying scene A's 160x120 thumbnail: what an editor that
+/// copies EXIF verbatim leaves behind after a retouch.
+fn b_with_thumb_of_a() -> Vec<u8> {
     let exif = tiff(
         &[(0x010F, Value::Ascii("TestCam".into())), (0x0112, Value::Short(1))],
         Some(&[(0, Value::Thumbnail(THUMB_A.to_vec()))]),
     );
-    let with_thumb = insert_app1(SCENE_B, &app1(&exif));
-    t.write("b_with_thumb_of_a.jpg", &with_thumb).unwrap();
+    insert_app1(SCENE_B, &app1(&exif))
+}
+
+#[test]
+fn embedded_thumbnail_is_used_before_a_full_decode() {
+    let t = TempDir::new("thumb").unwrap();
+    // Alone, the file is fingerprinted from its thumbnail (no full decode), while
+    // the dimensions stay the main frame's.
+    t.write("b_with_thumb_of_a.jpg", &b_with_thumb_of_a()).unwrap();
     let h = Harness::new(index_of(t.path()));
     let out = h.run(&SimilarImages).unwrap();
-    assert_eq!(group_names(&out), vec![vec!["a.jpg", "b_with_thumb_of_a.jpg"]]);
+    assert!(out.groups.is_empty());
     let e = h.index.get(&t.join("b_with_thumb_of_a.jpg")).unwrap();
     let fp = h.store.get(&e.path, e.stamp()).unwrap();
     assert!(fp.flags.contains(FingerprintFlags::FROM_THUMBNAIL));
     assert_eq!((fp.width, fp.height), (Some(320), Some(240)));
     assert_eq!(fp.exif.as_ref().and_then(|x| x.camera.clone()).as_deref(), Some("TestCam"));
+}
+
+#[test]
+fn a_stale_thumbnail_never_makes_a_different_picture_a_match() {
+    // DUP-1: the thumbnail says scene A, the picture is scene B. A thumbnail match
+    // is only a hint: the main image is decoded before anything is grouped.
+    let t = TempDir::new("stalethumb").unwrap();
+    // a.jpg carries its own (correct) thumbnail, so that both files have a
+    // thumbnail fingerprint even when full decodes are off: the check of a
+    // proposed match decodes the main pictures whatever that setting says.
+    let exif = tiff(&[(0x0112, Value::Short(1))], Some(&[(0, Value::Thumbnail(THUMB_A.to_vec()))]));
+    t.write("a.jpg", &insert_app1(fixture("scene_a_q92.jpg"), &app1(&exif))).unwrap();
+    t.write("b_with_thumb_of_a.jpg", &b_with_thumb_of_a()).unwrap();
+    for decode_full in [true, false] {
+        let h = Harness::new(index_of(t.path())).flag("decode_full", decode_full);
+        let out = h.run(&SimilarImages).unwrap();
+        assert!(out.groups.is_empty(), "decode_full={decode_full}: {:?}", group_names(&out));
+        assert!(out.candidates.iter().all(|c| !c.default_selected));
+        // The checked fingerprint replaces the thumbnail's in the cache.
+        let e = h.index.get(&t.join("b_with_thumb_of_a.jpg")).unwrap();
+        let fp = h.store.get(&e.path, e.stamp()).unwrap();
+        assert!(fp.flags.contains(FingerprintFlags::MAIN_DECODED), "{:?}", fp.flags);
+        assert_eq!(fp.dhash, Some(decode::jpeg(SCENE_B).unwrap().dhash));
+        // A second scan from the cache gives the same answer without a decode.
+        assert!(h.run(&SimilarImages).unwrap().groups.is_empty());
+    }
+}
+
+#[test]
+fn a_matching_thumbnail_still_groups_after_the_check() {
+    let t = TempDir::new("goodthumb").unwrap();
+    let exif = tiff(&[(0x0112, Value::Short(1))], Some(&[(0, Value::Thumbnail(THUMB_A.to_vec()))]));
+    t.write("a_with_thumb.jpg", &insert_app1(fixture("scene_a_q92.jpg"), &app1(&exif))).unwrap();
+    t.write("a_q60.jpg", fixture("scene_a_q60.jpg")).unwrap();
+    let out = Harness::new(index_of(t.path())).run(&SimilarImages).unwrap();
+    assert_eq!(group_names(&out), vec![vec!["a_q60.jpg", "a_with_thumb.jpg"]]);
+    assert_eq!(out.candidates.iter().filter(|c| c.default_selected).count(), 1);
+}
+
+#[test]
+fn a_thumbnail_of_another_shape_is_not_trusted() {
+    // The main frame claims 320x320 while the thumbnail is 4:3 (a crop that kept
+    // the old EXIF): the thumbnail is not used as the image's fingerprint.
+    let t = TempDir::new("cropthumb").unwrap();
+    let mut b = b_with_thumb_of_a();
+    let sof = (2..b.len() - 9).rev().find(|&i| b[i] == 0xFF && b[i + 1] == 0xC0).unwrap();
+    b[sof + 5..sof + 7].copy_from_slice(&320u16.to_be_bytes());
+    t.write("cropped.jpg", &b).unwrap();
+    let h = Harness::new(index_of(t.path()));
+    h.run(&SimilarImages).unwrap();
+    let e = h.index.get(&t.join("cropped.jpg")).unwrap();
+    let fp = h.store.get(&e.path, e.stamp()).unwrap();
+    assert!(!fp.flags.contains(FingerprintFlags::FROM_THUMBNAIL), "{:?}", fp.flags);
 }
 
 #[test]
@@ -221,4 +278,30 @@ fn png_variants_group_and_unrelated_do_not() {
     let out = Harness::new(index_of(t.path())).run(&SimilarImages).unwrap();
     assert_eq!(group_names(&out), vec![vec!["base.png", "half.png", "noisy.png", "rgb.png"]]);
     assert_ne!(keeper_of(&out, "half.png"), "half.png", "the full-size image is kept");
+}
+
+#[test]
+fn flat_images_of_different_colours_never_match_in_any_mode() {
+    // DUP-3: black, dark grey and mid grey are different pictures.
+    let (w, h) = (64u32, 48u32);
+    let t = TempDir::new("flat").unwrap();
+    for (n, v) in [("black.png", 0u8), ("dark.png", 64), ("grey.png", 128)] {
+        t.write(n, &png::encode(w, h, 1, &vec![v; (w * h) as usize], false)).unwrap();
+    }
+    for mode in ["dhash", "phash", "both"] {
+        let out = Harness::new(index_of(t.path())).text("match_mode", mode).run(&SimilarImages).unwrap();
+        assert!(out.groups.is_empty(), "mode {mode}: {:?}", group_names(&out));
+        assert_eq!(out.diagnostics.skipped.get("flat_image"), Some(&3), "mode {mode}");
+    }
+}
+
+#[test]
+fn a_thumbnail_decode_is_bounded_before_any_pixel() {
+    // DUP-5: an EXIF "thumbnail" declaring a huge frame is refused from its header
+    // (EXIF thumbnails are 160x120), the main picture is decoded instead.
+    let a = fixture("scene_a_q92.jpg");
+    assert_eq!(decode::jpeg_limited(a, 320 * 240 - 1), Err(decode::DecodeError::TooLarge));
+    assert!(decode::jpeg_limited(a, 320 * 240).is_ok());
+    const { assert!(320 * 240 <= mj_dupes::similar_images::MAX_THUMBNAIL_PIXELS) };
+    const { assert!(8000 * 8000 > mj_dupes::similar_images::MAX_THUMBNAIL_PIXELS) };
 }

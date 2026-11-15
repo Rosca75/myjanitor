@@ -35,6 +35,10 @@ flag_set! {
         FROM_THUMBNAIL = 1 << 2 => "from_thumbnail",
         /// Image could not be decoded.
         DECODE_FAILED = 1 << 3 => "decode_failed",
+        /// The perceptual hashes were recomputed from the decoded main picture
+        /// after a thumbnail match (overrides `FROM_THUMBNAIL`, which the cache
+        /// merge keeps).
+        MAIN_DECODED = 1 << 4 => "main_decoded",
     }
 }
 

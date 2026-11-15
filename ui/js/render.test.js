@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { formatBytes } from './format.js';
 import { makeEnv } from './testing/env.js';
 
 const texts = (els) => Array.from(els, (e) => e.textContent);
@@ -29,9 +30,10 @@ test('results: nine cards, hero numbers, tabs with counts, plan panel', async ()
   const env = await makeEnv({ scenario: 'results' });
   const cards = env.$$('.card', env.$('.app__main'));
   assert.equal(cards.length, 9);
-  assert.equal(env.$('[data-role="hero-total"]').textContent, '48.6 GB');
-  assert.match(env.$('.hero__across').textContent, /across 18 opportunities/);
-  assert.deepEqual(texts(env.$$('.legend__item', env.$('.hero__left'))), ['Reversible 41.2 GB', 'Lossy, opt-in 5.1 GB', 'Review only 2.3 GB']);
+  assert.equal(env.$('[data-role="hero-total"]').textContent, '52.5 GB');
+  assert.match(env.$('.hero__across').textContent, /across 15 opportunities/);
+  assert.equal(env.$('[data-role="hero-meaning"]').textContent, 'What applying the cards below frees with their current selection, each file counted once. Plus 712 MB to review in 4 cards, not counted.');
+  assert.deepEqual(texts(env.$$('.legend__item', env.$('.hero__left'))), ['Reversible 43.5 GB', 'Lossy, opt-in 9.0 GB', 'Review only 0 B']);
   assert.deepEqual(texts(env.$$('.tab')), ['All 18', 'Clean 8', 'Optimise 6', 'Review only 3']);
   assert.equal(env.$('.tab--active').textContent, 'All 18');
   assert.equal(env.$('.header__scanned').textContent, 'Scanned 2 min ago  ·  cached');
@@ -48,13 +50,18 @@ test('results: card content, safety badges and the in-plan state', async () => {
   assert.equal(dup.querySelector('.card__title').textContent, 'Exact duplicates');
   assert.equal(dup.querySelector('.card__desc').textContent, '214 files in 61 groups · keeps newest');
   assert.equal(dup.querySelector('.card__size').textContent, '12.4 GB');
-  assert.equal(dup.querySelector('.card__count').textContent, '214 files');
+  assert.equal(dup.querySelector('.card__count').textContent, '153 files');
+  assert.equal(dup.querySelector('.card__note'), null, 'a removal frees the size of its files: nothing to explain');
   assert.equal(dup.querySelector('.badge--select').textContent, 'In plan');
   assert.equal(dup.querySelector('.badge--safety').textContent, 'Reversible');
   assert.equal(texts(dup.querySelectorAll('.btn')).join('|'), 'Review', 'in-plan card has only Review');
   const compress = card('opt:fs_compress');
   assert.equal(compress.classList.contains('card--in-plan'), false);
   assert.equal(texts(compress.querySelectorAll('.btn')).join('|'), 'Review|+ Add');
+  // An optimisation shows what it frees, and the size of the files it rewrites in words.
+  assert.equal(compress.querySelector('.card__size').textContent, '6.3 GB');
+  assert.equal(compress.querySelector('.card__note').textContent, 'from 14.0 GB of files');
+  await env.click(env.$('[data-fk="show-small"]')); // the light-copy card frees nothing: it is among the smaller ones
   const tones = Object.fromEntries(['det:dev_artefacts', 'opt:video', 'opt:office', 'det:exact_duplicates'].map((id) => [id, [card(id).querySelector('.badge--safety').className, card(id).querySelector('.badge--safety').textContent]]));
   assert.match(tones['det:dev_artefacts'][0], /badge--success/);
   assert.equal(tones['det:dev_artefacts'][1], 'Rebuildable');
@@ -67,10 +74,51 @@ test('results: card content, safety badges and the in-plan state', async () => {
 test('results: the smaller opportunities expander', async () => {
   const env = await makeEnv({ scenario: 'results' });
   const more = env.$('[data-fk="show-small"]');
-  assert.equal(more.textContent, 'Show 9 smaller opportunities  ·  1.9 GB');
+  assert.equal(more.textContent, 'Show 9 smaller opportunities  ·  666 MB');
   await env.click(more);
   assert.equal(env.$$('.card', env.$('.app__main')).length, 18);
   assert.equal(env.$('[data-fk="show-small"]').textContent, 'Hide smaller opportunities');
+});
+
+test('results: the hero is what the cards show, added up (W6-B)', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  await env.click(env.$('[data-fk="show-small"]'));
+  const items = env.state().opps.items;
+  const shown = env.$$('.card', env.$('.app__main'));
+  assert.equal(shown.length, items.length);
+  let sum = 0;
+  for (const o of items) {
+    const el = env.$(`[data-opp="${o.id}"]`);
+    const saving = el.querySelector('[data-role="card-saving"]');
+    if (saving) {
+      // Each card shows its saving, the number it adds to the hero.
+      assert.equal(saving.textContent, formatBytes(o.saving), o.id);
+      sum += o.saving;
+    } else {
+      // A card that counts nothing shows what it lists for review, said in words.
+      assert.equal(o.saving, 0, o.id);
+      assert.equal(el.querySelector('[data-role="card-review"]').textContent, `${formatBytes(o.to_review)} to review`, o.id);
+    }
+  }
+  assert.equal(sum, env.state().opps.summary.total);
+  assert.equal(env.$('[data-role="hero-total"]').textContent, formatBytes(sum));
+  // A light copy frees nothing, and the card says why.
+  const office = env.$('[data-opp="opt:office"]');
+  assert.equal(office.querySelector('.card__size').textContent, '0 B');
+  assert.equal(office.querySelector('.card__note').textContent, 'keeps the originals: frees no space');
+});
+
+test('results: a file another card counts is named on the card and in the hero (W6-B)', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  const opps = structuredClone(env.state().opps);
+  const fsc = opps.items.find((o) => o.id === 'opt:fs_compress');
+  fsc.overlap = 1024 ** 3;
+  fsc.to_review = 512 * 1024 ** 2;
+  opps.summary.overlap = 1024 ** 3;
+  env.store.set({ opps });
+  await env.settle();
+  assert.equal(env.$('[data-opp="opt:fs_compress"] .card__note').textContent, 'from 14.0 GB of files · 1.0 GB more is counted in another card · + 512 MB to review');
+  assert.match(env.$('[data-role="hero-meaning"]').textContent, /each file counted once\. 1\.0 GB listed by more than one card is counted once\. Plus/);
 });
 
 test('results: review only tab shows the three review cards without an Add button', async () => {
@@ -89,16 +137,16 @@ test('plan panel: four steps with sizes, total, checklist and actions', async ()
   const env = await makeEnv({ scenario: 'results' });
   const steps = env.$$('.step');
   assert.deepEqual(steps.map((s) => s.querySelector('.step__title').textContent), ['Exact duplicates', 'Developer artefacts', 'App caches & junk', 'Meeting recordings']);
-  assert.deepEqual(steps.map((s) => s.querySelector('.step__size').textContent), ['8.6 GB', '9.6 GB', '6.9 GB', '4.2 GB']);
+  assert.deepEqual(steps.map((s) => s.querySelector('.step__size').textContent), ['12.4 GB', '9.6 GB', '6.9 GB', '4.2 GB']);
   assert.equal(steps[0].querySelector('.step__sub').textContent, 'Keep newest · others to Recycle Bin');
   assert.equal(steps[3].querySelector('.badge--warning').textContent, 'Lossy');
   assert.equal(env.$('.plan__count').textContent, '4 steps');
-  assert.equal(env.$('[data-role="plan-total"]').textContent, '29.3 GB');
+  assert.equal(env.$('[data-role="plan-total"]').textContent, '33.1 GB');
   const items = env.$$('.check__item');
   assert.deepEqual(items.map((i) => i.className.split(' ').pop()), ['check__item--ok', 'check__item--warning', 'check__item--ok', 'check__item--info']);
   assert.equal(items[1].textContent, '1 lossy step will ask for confirmation');
   assert.equal(env.byText('button', 'Estimate exactly (dry run)').disabled, false);
-  assert.equal(env.byText('button', 'Apply plan  ·  29.3 GB').classList.contains('btn--primary'), true);
+  assert.equal(env.byText('button', 'Apply plan  ·  33.1 GB').classList.contains('btn--primary'), true);
   assert.ok(env.byText('button', 'Save as weekly schedule').disabled, 'a plan with a lossy step cannot be scheduled');
 });
 
@@ -112,9 +160,9 @@ test('plan panel: reorder buttons are disabled at the ends and have names', asyn
 
 test('status strip: reclaimable, reclaimed, plan summary, idle state', async () => {
   const env = await makeEnv({ scenario: 'results' });
-  assert.equal(env.$('[data-role="reclaimable"]').textContent, '48.6 GB');
+  assert.equal(env.$('[data-role="reclaimable"]').textContent, '52.5 GB');
   assert.equal(env.$('[data-role="reclaimed"]').textContent, '0 B');
-  assert.equal(env.$('[data-role="plan-summary"]').textContent, 'Plan: 4 steps  ·  29.3 GB');
+  assert.equal(env.$('[data-role="plan-summary"]').textContent, 'Plan: 4 steps  ·  33.1 GB');
   assert.equal(env.$('[data-role="status"]').textContent, 'Nothing running');
   assert.ok(env.$('[data-fk="undo-last"]').disabled);
   assert.equal(env.$('[data-fk="last-report"]').disabled, false);
@@ -126,8 +174,8 @@ test('drive bars show free space before and after the plan', async () => {
   const rows = env.$$('.drive-row');
   assert.equal(rows.length, 2);
   assert.equal(rows[0].querySelector('.drive-row__name').textContent, 'C:  System');
-  assert.match(rows[0].querySelector('.drive-row__free').textContent, /45\.0 GB free.*86\.0 GB after plan/);
-  assert.match(rows[1].querySelector('.drive-row__free').textContent, /354 GB free.*362 GB after plan/);
+  assert.match(rows[0].querySelector('.drive-row__free').textContent, /45\.0 GB free.*72\.7 GB after plan/);
+  assert.match(rows[1].querySelector('.drive-row__free').textContent, /354 GB free.*359 GB after plan/);
   assert.ok(rows[0].querySelector('[data-seg="freed"]'));
 });
 
@@ -156,7 +204,7 @@ test('scanning ends in results with live cards replaced by the real grid', async
   await env.settle();
   assert.ok(env.$('.hero'));
   assert.equal(env.$$('.card', env.$('.app__main')).length, 9);
-  assert.equal(env.$('[data-role="hero-total"]').textContent, '48.6 GB');
+  assert.equal(env.$('[data-role="hero-total"]').textContent, '52.5 GB');
 });
 
 test('action completed: summary banner with Undo and View report', async () => {

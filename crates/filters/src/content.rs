@@ -134,14 +134,32 @@ pub fn search_file(path: &Path, ext: &str, needle: &Needle, cfg: &ContentConfig)
     if DOCUMENT_EXTENSIONS.contains(&ext) {
         return ContentOutcome::Unavailable;
     }
+    match File::open(path) {
+        Ok(f) => search_reader(f, needle, cfg.max_bytes),
+        Err(_) => ContentOutcome::Unreadable,
+    }
+}
+
+/// Bytes [`decode_text`] looks at to tell text from binary.
+const SAMPLE: u64 = 8192;
+
+/// RF-10: read the sample first and stop there when it is binary, so a video or an
+/// archive costs 8 KiB instead of `max_bytes` (8 MiB by default) to be rejected.
+fn search_reader(mut r: impl Read, needle: &Needle, max_bytes: u64) -> ContentOutcome {
     let mut buf = Vec::new();
-    let read = File::open(path).and_then(|f| f.take(cfg.max_bytes.saturating_add(1)).read_to_end(&mut buf));
-    if read.is_err() {
+    if (&mut r).take(SAMPLE.min(max_bytes)).read_to_end(&mut buf).is_err() {
         return ContentOutcome::Unreadable;
     }
-    let truncated = buf.len() as u64 > cfg.max_bytes;
+    if decode_text(&buf).is_none() {
+        return ContentOutcome::Binary;
+    }
+    let rest = max_bytes.saturating_add(1).saturating_sub(buf.len() as u64);
+    if (&mut r).take(rest).read_to_end(&mut buf).is_err() {
+        return ContentOutcome::Unreadable;
+    }
+    let truncated = buf.len() as u64 > max_bytes;
     if truncated {
-        buf.truncate(cfg.max_bytes as usize);
+        buf.truncate(max_bytes as usize);
     }
     match decode_text(&buf) {
         None => ContentOutcome::Binary,
@@ -219,6 +237,37 @@ pub fn extension_mismatch(path: &Path, ext: &str) -> MismatchOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RF-10: a binary file is rejected after its 8 KiB sample, not after `max_bytes`.
+    #[test]
+    fn binary_files_are_rejected_from_their_sample() {
+        struct Counting<'a> {
+            data: std::io::Cursor<Vec<u8>>,
+            read: &'a std::cell::Cell<u64>,
+        }
+        impl Read for Counting<'_> {
+            fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
+                let n = self.data.read(b)?;
+                self.read.set(self.read.get() + n as u64);
+                Ok(n)
+            }
+        }
+        let needle = Needle::new("invoice", false);
+        let read = std::cell::Cell::new(0);
+        let mut data = vec![0u8; 8192];
+        data.extend(std::iter::repeat_n(b'x', 16 << 20));
+        let r = Counting { data: std::io::Cursor::new(data), read: &read };
+        assert_eq!(search_reader(r, &needle, 8 << 20), ContentOutcome::Binary);
+        assert!(read.get() <= 8192, "{}", read.get());
+        // Text is still read on, up to the limit.
+        let mut text = vec![b'a'; 20_000];
+        text.extend_from_slice(b" Invoice ");
+        let read = std::cell::Cell::new(0);
+        let r = Counting { data: std::io::Cursor::new(text), read: &read };
+        assert_eq!(search_reader(r, &needle, 8 << 20), ContentOutcome::Found);
+        let r = Counting { data: std::io::Cursor::new(vec![b'a'; 100]), read: &read };
+        assert_eq!(search_reader(r, &needle, 10), ContentOutcome::NotFound { truncated: true });
+    }
     use mj_core::testutil::TempDir;
 
     fn utf16le(s: &str, bom: bool) -> Vec<u8> {

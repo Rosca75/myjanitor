@@ -41,6 +41,9 @@ pub struct TestPlatform {
     pub fast: Fast,
     /// Paths `read_dir` was called on.
     pub listed: Mutex<Vec<PathBuf>>,
+    /// After this many `read_dir` calls the whole volume is gone: every `read_dir` and
+    /// `metadata` fails with not found (an unplugged drive, a dropped share).
+    pub gone_after: Option<usize>,
 }
 
 impl Default for TestPlatform {
@@ -56,6 +59,7 @@ impl Default for TestPlatform {
             forced_ids: Vec::new(),
             fast: Fast::Off,
             listed: Mutex::new(Vec::new()),
+            gone_after: None,
         }
     }
 }
@@ -76,6 +80,9 @@ impl TestPlatform {
 
 impl ScanPlatform for TestPlatform {
     fn metadata(&self, path: &Path) -> Result<FileEntry> {
+        if self.gone_after.is_some_and(|n| self.calls.load(Ordering::SeqCst) >= n) {
+            return Err(Error::NotFound(path.to_path_buf()));
+        }
         if self.deny_stat.iter().any(|p| p == path) {
             return Err(Error::PermissionDenied(path.to_path_buf()));
         }
@@ -103,6 +110,9 @@ impl ScanPlatform for TestPlatform {
             }
         }
         self.listed.lock().unwrap().push(dir.to_path_buf());
+        if self.gone_after.is_some_and(|g| n > g) {
+            return Err(Error::NotFound(dir.to_path_buf()));
+        }
         if self.deny_list.iter().any(|p| p == dir) {
             return Err(Error::PermissionDenied(dir.to_path_buf()));
         }

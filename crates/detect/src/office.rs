@@ -26,7 +26,8 @@ pub fn office_rules() -> Vec<RuleDef> {
             "**/AppData/Local/Microsoft/Office/UnsavedFiles",
             d,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
         rule(
             "Office",
             "AutoRecover files",
@@ -34,7 +35,8 @@ pub fn office_rules() -> Vec<RuleDef> {
             "**/AppData/Roaming/Microsoft/Word/*.asd",
             f,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
         rule(
             "Office",
             "AutoRecover files",
@@ -42,7 +44,8 @@ pub fn office_rules() -> Vec<RuleDef> {
             "**/AppData/Roaming/Microsoft/Excel/*.xar",
             f,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
         rule(
             "Office",
             "AutoRecover files",
@@ -50,7 +53,8 @@ pub fn office_rules() -> Vec<RuleDef> {
             "**/AppData/Roaming/Microsoft/PowerPoint/*.asd",
             f,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
         rule(
             "Office",
             "Office file cache",
@@ -73,7 +77,8 @@ pub fn office_rules() -> Vec<RuleDef> {
             "**/AppData/Local/Microsoft/Outlook/*.ost",
             f,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
         rule(
             "Outlook",
             "Offline mail cache",
@@ -81,7 +86,8 @@ pub fn office_rules() -> Vec<RuleDef> {
             "**/AppData/Local/Microsoft/Outlook/*.nst",
             f,
         )
-        .review(),
+        .review()
+        .not_rebuildable(),
         rule(
             "Teams (new)",
             "Teams cache",
@@ -192,6 +198,16 @@ mod tests {
         let sel = |n: &str| out.candidates.iter().find(|c| c.path.ends_with(n)).unwrap().default_selected;
         assert!(sel("Cache") && sel("RoamCache") && sel("OfficeFileCache"));
         assert!(!sel("UnsavedFiles") && !sel("me@x.ost") && !sel("AutoRecovery save of Doc.asd"));
+        // RF-11: unsaved work and offline mail are not "rebuildable".
+        let c = |n: &str| out.candidates.iter().find(|c| c.path.ends_with(n)).unwrap();
+        for n in ["UnsavedFiles", "me@x.ost", "AutoRecovery save of Doc.asd"] {
+            assert!(!c(n).badges.contains(mj_core::Badges::REBUILDABLE), "{n}");
+            assert_eq!(c(n).safety_override(), Some(mj_core::SafetyClass::Reversible), "{n}");
+        }
+        for n in ["Cache", "RoamCache", "OfficeFileCache"] {
+            assert!(c(n).badges.contains(mj_core::Badges::REBUILDABLE), "{n}");
+            assert_eq!(c(n).safety_override(), None, "{n}");
+        }
     }
 
     #[cfg(not(windows))]

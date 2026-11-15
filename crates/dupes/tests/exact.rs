@@ -97,6 +97,51 @@ fn hardlinks_are_one_file_not_duplicates() {
     assert_eq!(out.groups[0].members.len(), 2);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_hard_linked_copy_is_kept_since_removing_it_frees_nothing() {
+    // DUP-4: x.bin has a second name outside the scan, so trashing x.bin frees
+    // nothing; the real copy is the one whose removal frees space.
+    let t = TempDir::new("hardlinkkeep").unwrap();
+    let outside = TempDir::new("hardlinkkeep-out").unwrap();
+    let data = noise(4, 5000);
+    let x = t.write("x.bin", &data).unwrap();
+    std::fs::hard_link(&x, outside.join("x-link.bin")).unwrap();
+    let copy = t.write("x-copy.bin", &data).unwrap();
+    age(&x, 30);
+    age(&copy, 1);
+    for rule in ["newest", "oldest", "shortest_path"] {
+        let out = Harness::new(index_of(t.path())).text("keep_rule", rule).run(&ExactDuplicates).unwrap();
+        assert_one_keeper_per_group(&out);
+        assert_eq!(out.groups[0].keeper.as_ref(), Some(&x), "{rule}");
+        let selected: Vec<_> = out.candidates.iter().filter(|c| c.default_selected).collect();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].path, copy);
+        let x_row = out.candidates.iter().find(|c| c.path == x).unwrap();
+        assert_eq!(x_row.saving(), 0, "a hard-linked name frees nothing");
+        let total: u64 = out.candidates.iter().filter(|c| c.default_selected).map(|c| c.saving()).sum();
+        assert_eq!(total, selected[0].size);
+    }
+    // An explicit preferred folder still wins; the hard-linked name it leaves
+    // behind is listed, not pre-selected, and promises nothing.
+    let out = Harness::new(index_of(t.path()))
+        .text("keep_rule", "preferred_folder")
+        .text("preferred_folder", &t.path().to_string_lossy())
+        .run(&ExactDuplicates)
+        .unwrap();
+    assert_eq!(out.candidates.iter().filter(|c| c.default_selected).count(), 1);
+    // Both lie in the preferred folder: the hard-linked one is kept.
+    assert_eq!(out.groups[0].keeper.as_ref(), Some(&x));
+
+    // Two hard-linked members: whichever is not kept is listed for review only.
+    let y = t.write("y.bin", &data).unwrap();
+    std::fs::hard_link(&y, outside.join("y-link.bin")).unwrap();
+    let out = Harness::new(index_of(t.path())).text("keep_rule", "newest").run(&ExactDuplicates).unwrap();
+    let linked: Vec<_> = out.candidates.iter().filter(|c| c.path == x || c.path == y).collect();
+    assert!(linked.iter().all(|c| !c.default_selected && c.saving() == 0));
+    assert!(out.candidates.iter().any(|c| c.path == copy && c.default_selected));
+}
+
 fn index_with(t: &TempDir, extra: Vec<FileEntry>) -> FileIndex {
     let base = index_of(t.path());
     // Extra entries first: `FileIndex::new` keeps the first of two equal paths.
@@ -197,4 +242,70 @@ fn serial_worker_count_gives_the_same_groups() {
     let serial = group_names(&h.run(&ExactDuplicates).unwrap());
     let h = Harness::new(index_of(t.path()));
     assert_eq!(serial, group_names(&h.run(&ExactDuplicates).unwrap()));
+}
+
+/// Counts the hashes stored per stage; each `put` is slow, so that two detectors
+/// started together both find the cache empty at the start of a stage.
+#[derive(Default)]
+struct CountingStore {
+    inner: mj_core::MemoryFingerprintStore,
+    partial: std::sync::atomic::AtomicUsize,
+    full: std::sync::atomic::AtomicUsize,
+}
+
+impl FingerprintStore for CountingStore {
+    fn get(&self, p: &std::path::Path, s: mj_core::FileStamp) -> Option<mj_core::Fingerprints> {
+        self.inner.get(p, s)
+    }
+    fn put(&self, p: &std::path::Path, s: mj_core::FileStamp, fp: mj_core::Fingerprints) {
+        use std::sync::atomic::Ordering::SeqCst;
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        if fp.partial.is_some() {
+            self.partial.fetch_add(1, SeqCst);
+        }
+        if fp.full.is_some() && fp.partial.is_none() {
+            self.full.fetch_add(1, SeqCst);
+        }
+        self.inner.put(p, s, fp)
+    }
+}
+
+#[test]
+fn concurrent_detectors_hash_each_file_once() {
+    // DUP-7: the engine runs Exact, Similar, Attachments and Fonts at the same time and
+    // each runs the exact lane over its files: a file two of them need is read once.
+    use std::sync::atomic::Ordering::SeqCst;
+    let t = TempDir::new("singleflight").unwrap();
+    let a = noise(21, BIG);
+    t.write("one/a.bin", &a).unwrap();
+    t.write("two/a.bin", &a).unwrap();
+    let index = index_of(t.path());
+    let store = CountingStore::default();
+    let params = mj_core::ParamValues::new();
+    let cancel = mj_core::CancelToken::new();
+    let progress = Counter::default();
+    let barrier = std::sync::Barrier::new(3);
+    let groups: Vec<usize> = std::thread::scope(|s| {
+        let runs: Vec<_> = (0..3)
+            .map(|_| {
+                s.spawn(|| {
+                    let ctx = mj_core::DetectContext {
+                        index: &index,
+                        params: &params,
+                        now: Timestamp::now(),
+                        fingerprints: &store,
+                        cancel: &cancel,
+                        progress: &progress,
+                        threads: 2,
+                    };
+                    barrier.wait();
+                    mj_core::Detector::run(&ExactDuplicates, &ctx).unwrap().groups.len()
+                })
+            })
+            .collect();
+        runs.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(groups, [1, 1, 1]);
+    assert_eq!(store.partial.load(SeqCst), 2, "one partial hash per file");
+    assert_eq!(store.full.load(SeqCst), 2, "one full hash per file");
 }

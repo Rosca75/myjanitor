@@ -32,7 +32,7 @@ const tabItems = (counts) => ['all', 'clean', 'optimise', 'review_only'].map((k)
 export function renderResults(s, actions) {
   const { main, small } = splitCards(s.opps.items);
   const handlers = { onReview: (id) => actions.openStep(id), onAdd: (id) => actions.addToPlan(id), platformNote: platformNote(s) };
-  const smallSize = small.reduce((a, o) => a + o.size_before, 0);
+  const smallSize = small.reduce((a, o) => a + o.saving, 0); // the same number the cards show
   const grid = (list) => h('div', { class: 'grid', 'aria-label': copy.tabs.label }, list.map((o) => oppCard(o, handlers)));
   return h('div', { class: 'view view--overview' },
     s.completed && completedBanner(s, actions),

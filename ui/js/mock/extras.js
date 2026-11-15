@@ -103,7 +103,7 @@ const SAMPLE_TEXT = 'Setup log\n2026-09-14 08:12:01 INFO  Starting installer\n20
 /** Build the overrides. @param {any} m @param {any} sim @param {(e: string, p: any) => void} emit @param {Record<string, (r: any) => any>} base */
 export function createExtras(m, sim, emit, base) {
   const builtin = [
-    { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Anything in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }, { cond: { field: 'date', which: 'modified', cmp: 'lt', value: { ago: { amount: 90, unit: 'days' } } } }] }, topmost_only: false, builtin: true },
+    { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Files in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'kind', kind: 'file' } }, { cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }, { cond: { field: 'date', which: 'modified', cmp: 'lt', value: { ago: { amount: 90, unit: 'days' } } } }] }, topmost_only: false, builtin: true },
     { id: 'dev_junk', name: 'Dev junk', description: 'node_modules, target and build output folders', rule: { any: [{ cond: { field: 'name', mode: 'exact', pattern: 'node_modules', case_sensitive: true } }, { cond: { field: 'name', mode: 'exact', pattern: 'target', case_sensitive: true } }] }, topmost_only: true, builtin: true },
     { id: 'big_videos', name: 'Big old videos', description: 'Videos over 1 GB not touched for a year', rule: { all: [{ cond: { field: 'type_group', group: 'video' } }, { cond: { field: 'size', cmp: 'gt', bytes: GB } }] }, topmost_only: false, builtin: true },
   ];

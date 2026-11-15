@@ -296,6 +296,12 @@ pub fn decode(bytes: &[u8]) -> Result<Vec<(Box<str>, CacheRecord)>, String> {
         }
         let file_id = if has(9) { Some(FileId { volume: r.u64()?, index: r.u64()? }) } else { None };
         let fp = (!is_empty_fp(&fp)).then(|| Box::new(fp));
+        // SCAN-6: a key that starts with NUL is the old whole-path escape of a non-Unicode
+        // path; such a file is keyed differently now, so the record would never be found
+        // nor pruned. It is dropped (the file is fingerprinted again once).
+        if key.starts_with('\0') {
+            continue;
+        }
         out.push((key.into_boxed_str(), CacheRecord { size, mtime_ns, file_id, fp, seen: 0 }));
     }
     if r.pos != body.len() {

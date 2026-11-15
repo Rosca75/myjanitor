@@ -13,21 +13,45 @@ use mj_core::{
 };
 
 use crate::api::{Event, PlanAddStepRequest, PlanReorderRequest, PlanUpdateStepRequest, StepRequest};
-use crate::results::{blocked_reason, candidate_safety, is_selected, severity, skip_badges, OpportunityRecord};
+use crate::results::{candidate_safety, is_selected, severity, skip_badges, OpportunityRecord, Results};
+use crate::savings::{tally, Part, Tally};
 use crate::Engine;
+
+/// What a dry run measured for one step, and what it was measured for.
+#[derive(Debug, Clone)]
+pub struct Measured {
+    pub action: Action,
+    /// `measure_key` of the items the dry run built (ENG-4): the measurement stands for
+    /// those items, not for whatever the selection is when the dry run ends.
+    pub key: u64,
+    /// `Tally::shared` of the step at the time: the rows another step of the plan counts
+    /// were left out of the measurement, so it stands only while they are the same.
+    pub shared: (u64, u64),
+    pub estimate: Estimate,
+}
 
 /// Plan state of the session.
 #[derive(Debug, Default)]
 pub struct PlanState {
     pub plan: Plan,
-    /// Exact estimates measured by the last dry run, valid while the step's action and
-    /// the identity of its items (`measure_key` of the items the dry run built) are
-    /// unchanged.
-    pub measured: BTreeMap<StepId, (Action, u64, Estimate)>,
+    /// Exact estimates measured by the last dry run, valid while the step's action, the
+    /// identity of its items (`measure_key` of the items the dry run built) and its
+    /// overlap with the other steps are unchanged.
+    pub measured: BTreeMap<StepId, Measured>,
     /// DUP-2: the parameters the user chose for an opportunity this session (in the review:
     /// `step_params_set`, the keep rule), in the plan or not. A rescan runs the analysis
     /// with them (`params_for`), so the review shows and keeps what the user chose.
     pub chosen: BTreeMap<OpportunityId, mj_core::ParamValues>,
+}
+
+/// The account of the plan's steps (`None` for a step whose opportunity is gone): every
+/// file the steps act on is counted once, by the step that frees most for it.
+pub(crate) fn step_tallies(results: &Results, steps: &[PlanStep], skip: Badges) -> Vec<Option<Tally>> {
+    let recs: Vec<Option<&OpportunityRecord>> = steps.iter().map(|s| results.get(&s.opportunity)).collect();
+    let parts: Vec<Part<'_>> =
+        steps.iter().zip(&recs).filter_map(|(s, r)| r.map(|rec| Part { rec, action: &s.action })).collect();
+    let mut tallies = tally(&parts, skip, true).into_iter();
+    recs.iter().map(|r| r.and_then(|_| tallies.next())).collect()
 }
 
 /// One-line summary of an action.
@@ -104,33 +128,6 @@ pub(crate) fn quarantine_days(action: &Action, route: mj_actions::TrashRoute, se
     }
 }
 
-/// Estimate of a step from its record's selection.
-pub(crate) fn step_estimate(rec: &OpportunityRecord, skip: Badges, action: &Action) -> Estimate {
-    let mut e = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
-    // F-02: members of a group whose every copy is selected are skipped at apply.
-    let survivors = if crate::results::removes_copy(action) {
-        crate::results::group_survivors(rec, skip)
-    } else {
-        Default::default()
-    };
-    for c in &rec.candidates {
-        let lost = c.group.is_some_and(|g| matches!(survivors.get(&g), Some(None)));
-        if lost && is_selected(rec, c, skip) {
-            e.skipped += 1;
-        } else if is_selected(rec, c, skip) {
-            e.files += 1;
-            if !c.badges.contains(Badges::ONLINE_ONLY) {
-                e.bytes_before += c.size;
-                e.bytes_after += c.size_after.min(c.size);
-            }
-            e.confidence = e.confidence.max(c.confidence);
-        } else if blocked_reason(c, skip).is_some() && c.default_selected {
-            e.skipped += 1;
-        }
-    }
-    e
-}
-
 /// Safety class of a step: the action's class, escalated by any selected row whose own
 /// class requires confirmation.
 pub(crate) fn step_safety(action: &Action, lossy: bool, rec: Option<&OpportunityRecord>, skip: Badges) -> SafetyClass {
@@ -176,23 +173,24 @@ impl Engine {
         let mut empty_steps = Vec::new();
         let mut lose_every_copy = 0u64;
         let measured = st.measured.clone();
-        for step in &mut st.plan.steps {
+        let tallies = step_tallies(&results, &st.plan.steps, skip);
+        let mut counted_once = 0u64;
+        for (step, t) in st.plan.steps.iter_mut().zip(&tallies) {
             let rec = results.get(&step.opportunity);
             step.safety = step_safety(&step.action, step.lossy, rec, skip);
             step.summary = summary(&step.action);
-            match rec {
-                Some(rec) => {
+            match (rec, t) {
+                (Some(rec), Some(t)) => {
                     step.selection = rec.selection.clone();
                     step.estimate = match measured.get(&step.id) {
-                        Some((a, key, est)) if *a == step.action && *key == measure_key(rec, skip) => *est,
-                        _ => step_estimate(rec, skip, &step.action),
-                    };
-                    if !removes(&step.action) && !matches!(step.action, Action::None) {
-                        // Copies free nothing; optimisations keep their estimate.
-                        if matches!(step.action, Action::Copy { .. }) {
-                            step.estimate.bytes_after = step.estimate.bytes_before;
+                        Some(m)
+                            if m.action == step.action && m.key == measure_key(rec, skip) && m.shared == t.shared =>
+                        {
+                            m.estimate
                         }
-                    }
+                        _ => t.estimate(),
+                    };
+                    counted_once += t.shared.0;
                     for c in &rec.candidates {
                         let locked = c.badges & skip;
                         if !locked.is_empty() {
@@ -215,11 +213,11 @@ impl Engine {
                     if crate::results::removes_copy(&step.action) {
                         lose_every_copy += crate::results::groups_losing_every_copy(rec, skip);
                     }
-                    if step.estimate.files == 0 {
+                    if step.estimate.files == 0 && t.shared.0 == 0 {
                         empty_steps.push(step.title.clone());
                     }
                 }
-                None => {
+                _ => {
                     step.estimate = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
                     empty_steps.push(step.title.clone());
                 }
@@ -342,6 +340,16 @@ impl Engine {
                 ),
             });
         }
+        if counted_once > 0 {
+            list.push(ChecklistItem {
+                level: ChecklistLevel::Info,
+                code: "counted_once".into(),
+                text: format!(
+                    "{} listed by more than one step: each is counted once, in the step that frees most",
+                    plural(counted_once, "item is", "items are")
+                ),
+            });
+        }
         if !empty_steps.is_empty() {
             list.push(ChecklistItem {
                 level: ChecklistLevel::Info,
@@ -377,7 +385,17 @@ impl Engine {
     /// choice is reported at once (the guard checks it again, per item, before acting):
     /// absolute, not protected (also in its canonical spelling), not one of MyJanitor's
     /// folders, and not inside a scanned location.
-    pub(crate) fn check_action_destination(&self, action: &Action) -> Result<()> {
+    /// ACT-9: a quarantine retention is checked here too, against the same bounds as the
+    /// `quarantine_days` setting (0 days would be a permanent delete classed reversible).
+    pub(crate) fn check_action(&self, action: &Action) -> Result<()> {
+        if let Action::Quarantine { purge_after_days } = action {
+            if !(1..=crate::settings::MAX_DAYS).contains(purge_after_days) {
+                return Err(Error::InvalidInput(format!(
+                    "a quarantine keeps items 1 to {} days, not {purge_after_days}",
+                    crate::settings::MAX_DAYS
+                )));
+            }
+        }
         let (Action::Move { dest, .. } | Action::Copy { dest, .. }) = action else { return Ok(()) };
         if !dest.is_absolute() {
             return Err(Error::InvalidInput(format!("the destination must be an absolute folder: {}", dest.display())));
@@ -420,7 +438,7 @@ impl Engine {
         if !matches!(action, Action::None) && !o.available_actions.contains(&action.kind()) {
             return Err(Error::InvalidInput(format!("{title} cannot use the action `{:?}`", action.kind())));
         }
-        self.check_action_destination(&action)?;
+        self.check_action(&action)?;
         // One source of truth for an optimiser's parameters: the step's. Values given inside
         // the action win over the card's, then the request's `params` win over both; the
         // action carries the merged set so the optimiser really runs with what the user chose.
@@ -477,7 +495,7 @@ impl Engine {
             }
         }
         if let Some(a) = &req.action {
-            self.check_action_destination(a)?;
+            self.check_action(a)?;
         }
         {
             let mut st = lock(&self.plan);

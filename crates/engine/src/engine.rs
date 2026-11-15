@@ -115,6 +115,9 @@ pub struct Engine {
     pub(crate) tools: Mutex<Vec<ExternalTool>>,
     /// Run metadata the journal does not hold (scope roots, step titles), persisted.
     pub(crate) run_meta: Mutex<std::collections::BTreeMap<u64, crate::history::RunMeta>>,
+    /// The cards' shares of the hero total, with the hash of what they were computed
+    /// from (`Engine::card_shares`): the overview asks for them on every tab change.
+    pub(crate) shares: Mutex<Option<crate::opportunities::SharesCache>>,
     /// Bytes freed by runs applied this session.
     pub(crate) reclaimed: AtomicU64,
     pub(crate) shutting_down: AtomicBool,
@@ -185,6 +188,7 @@ impl Engine {
             schedules: Mutex::new(Vec::new()),
             tools: Mutex::new(Vec::new()),
             run_meta: Mutex::new(Default::default()),
+            shares: Mutex::new(None),
             reclaimed: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
             journal_error,
@@ -196,6 +200,9 @@ impl Engine {
             cfg,
         };
         engine.load_state();
+        // SCAN-5: Settings > Scanning are the session scope's options (an explicit
+        // `scope_set` from the CLI or a schedule still replaces them for its own scan).
+        mj_core::lock(&engine.scope).options = mj_core::lock(&engine.settings).scan.clone();
         // Recovery settles dangling intents; only the process holding the lock may do it
         // (another live process's intents are in flight, not dangling).
         if engine.instance_error.is_none() {
@@ -208,7 +215,8 @@ impl Engine {
         }
         if let Some(l) = engine.cfg.launch.clone() {
             // Preselect the scope only; an invalid path is dropped (the app opens normally).
-            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], ..mj_core::ScanScope::default() };
+            let options = mj_core::lock(&engine.settings).scan.clone();
+            let scope = mj_core::ScanScope { roots: vec![l.path.clone()], options, ..mj_core::ScanScope::default() };
             let exists = std::fs::symlink_metadata(&l.path).is_ok();
             if !exists || engine.scope_set(crate::api::ScopeSetRequest { scope }).is_err() {
                 let mut e = engine;

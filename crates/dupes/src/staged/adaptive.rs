@@ -3,7 +3,8 @@
 //! Some network mounts (GVFS/SMB) fail whole-file reads with `EINVAL` as soon
 //! as more than one is in flight. Pass 1 runs the work in parallel and watches
 //! the failure ratio: once at least [`PROBE`] items finished and more than half
-//! failed, it stops handing out work. Pass 2 then runs every item that was not
+//! failed, it stops handing out work. Only retryable outcomes count: a denied,
+//! vanished or changed file says nothing about concurrency (DUP-6). Pass 2 then runs every item that was not
 //! attempted or failed **serially**, with up to [`SERIAL_ATTEMPTS`] attempts and
 //! a short back-off. On a healthy filesystem pass 2 never runs. Errors that
 //! cannot change on retry (not found, permission denied, changed during the
@@ -90,9 +91,16 @@ where
                 return;
             }
             let r = call(i);
-            let d = done.fetch_add(1, Ordering::Relaxed) + 1;
-            let f =
-                if r.is_err() { failed.fetch_add(1, Ordering::Relaxed) + 1 } else { failed.load(Ordering::Relaxed) };
+            // DUP-6: only outcomes that can depend on concurrency count towards the
+            // verdict: a permanent failure (denied, gone, changed, panicked) is neutral.
+            let (d, f) = match &r {
+                Err(e) if !e.retryable() => {
+                    *lock(&slots[i]) = Some(r);
+                    continue;
+                }
+                Err(_) => (done.fetch_add(1, Ordering::Relaxed) + 1, failed.fetch_add(1, Ordering::Relaxed) + 1),
+                Ok(_) => (done.fetch_add(1, Ordering::Relaxed) + 1, failed.load(Ordering::Relaxed)),
+            };
             *lock(&slots[i]) = Some(r);
             if d >= PROBE && f * 2 > d {
                 abort.store(true, Ordering::Relaxed);
@@ -211,6 +219,26 @@ mod tests {
         assert!(r.results.iter().all(|x| x.is_err()));
         // NotFound once, flaky twice, panic once.
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    /// DUP-6: denied or vanished files say nothing about concurrency: a run of them
+    /// (a non-admin scan of a system drive) must not drop the stage to one thread.
+    #[test]
+    fn permanent_failures_do_not_trigger_the_serial_fallback() {
+        let calls: Vec<AtomicUsize> = (0..100).map(|_| AtomicUsize::new(0)).collect();
+        let items: Vec<usize> = (0..100).collect();
+        let r = run(&items, 4, &CancelToken::new(), |&i| {
+            calls[i].fetch_add(1, Ordering::SeqCst);
+            match i {
+                0..10 => Err(ReadError::Io(io::Error::from(io::ErrorKind::PermissionDenied))),
+                10..20 => Err(ReadError::Io(io::Error::from(io::ErrorKind::NotFound))),
+                _ => Ok(i),
+            }
+        })
+        .unwrap();
+        assert!(!r.fell_back);
+        assert!(calls.iter().all(|c| c.load(Ordering::SeqCst) == 1), "every item read once, no serial pass");
+        assert_eq!(r.results.iter().filter(|x| x.is_err()).count(), 20);
     }
 
     #[test]

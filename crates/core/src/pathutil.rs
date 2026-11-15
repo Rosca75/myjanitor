@@ -192,9 +192,19 @@ pub const CASE_INSENSITIVE: bool = cfg!(windows);
 /// Comparison key for a path: lexically normalised, separators unified to `/`,
 /// case-folded on Windows. Use it for cache keys, de-duplication and the
 /// protected-path / allowlist checks. Not a displayable path.
+///
+/// A name that is not valid Unicode keeps its valid parts as they are and writes each
+/// undecodable byte as NUL followed by two hex digits (SCAN-6, RF-5). NUL never occurs in a
+/// real name, so keys stay distinct, and a child's key always starts with its parent's key
+/// and `/`: prefix containment ([`is_within`], `FileIndex::subtree`, protected paths) and
+/// the index order hold for every name. (The wire codec [`encode_path`] escapes the whole
+/// path instead, which would put such a path outside its own folder.)
 pub fn path_key(path: &Path) -> String {
     let norm = normalize_lexical(path);
-    let mut s = encode_path(&norm);
+    let mut s = match norm.to_str() {
+        Some(s) => s.to_string(),
+        None => key_of_non_unicode(norm.as_os_str()),
+    };
     if cfg!(windows) {
         s = windows_key(&s);
     }
@@ -202,6 +212,17 @@ pub fn path_key(path: &Path) -> String {
         s.pop();
     }
     s
+}
+
+fn key_of_non_unicode(os: &std::ffi::OsStr) -> String {
+    let mut out = String::new();
+    for chunk in os.as_encoded_bytes().utf8_chunks() {
+        out.push_str(chunk.valid());
+        for b in chunk.invalid() {
+            out.push_str(&format!("\0{b:02X}"));
+        }
+    }
+    out
 }
 
 /// The Windows part of [`path_key`] on an encoded path (pure, so it is tested on every
@@ -335,6 +356,26 @@ mod tests {
         assert_eq!(decode_path(&e).unwrap(), p);
         let json = serde_json_like(&e);
         assert!(json.contains("\\u0000"));
+    }
+
+    /// SCAN-6, RF-5: a key keeps its parent's key as a prefix even when a name is not
+    /// valid Unicode, so containment and index subtrees include it.
+    #[cfg(unix)]
+    #[test]
+    fn keys_of_non_utf8_names_stay_below_their_parent() {
+        use std::os::unix::ffi::OsStringExt;
+        let bad = PathBuf::from(OsString::from_vec(b"/r/a/bad\xff.txt".to_vec()));
+        let bad_dir = PathBuf::from(OsString::from_vec(b"/r/a/\xfe".to_vec()));
+        assert!(is_within(Path::new("/r/a"), &bad));
+        assert!(is_within(Path::new("/r"), &bad));
+        assert_eq!(depth_below(Path::new("/r/a"), &bad), Some(1));
+        assert!(is_within(&bad_dir, &bad_dir.join("c.txt")));
+        assert!(path_key(&bad).starts_with("/r/a/bad"));
+        assert_ne!(path_key(&bad), path_key(Path::new("/r/a/bad%FF.txt")), "no collision with a real name");
+        assert_eq!(path_key(Path::new("/r/a/ok.txt")), "/r/a/ok.txt", "valid names are unchanged");
+        let decoded = crate::detector::env::decode(&crate::detector::env::encode_paths(&[bad.clone(), "/r/b".into()]));
+        let back: Vec<PathBuf> = decoded.iter().map(|s| decode_path(s).unwrap()).collect();
+        assert_eq!(back, vec![bad, PathBuf::from("/r/b")]);
     }
 
     #[cfg(unix)]

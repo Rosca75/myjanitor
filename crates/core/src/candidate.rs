@@ -239,6 +239,27 @@ impl KeepRule {
         };
         (0..members.len()).min_by(|&i, &j| better(&members[i], &members[j]))
     }
+
+    /// [`pick`](Self::pick) for members holding the same bytes, where `linked[i]` says
+    /// member `i` shares its data with another file name (a hard link whose other names
+    /// are not in the group). Removing such a member frees nothing, so one of them is
+    /// kept in preference and the rule chooses among them; the rule over every member
+    /// still wins when it is a preferred folder that holds its choice (an explicit wish).
+    pub fn pick_same_content(&self, members: &[KeepInfo<'_>], linked: &[bool]) -> Option<usize> {
+        let k = self.pick(members)?;
+        let is_linked = |i: usize| linked.get(i).copied().unwrap_or(false);
+        if is_linked(k) {
+            return Some(k);
+        }
+        if let KeepRule::PreferredFolder { folder } = self {
+            if crate::pathutil::is_within(folder, members[k].path) {
+                return Some(k);
+            }
+        }
+        let idx: Vec<usize> = (0..members.len()).filter(|&i| is_linked(i)).collect();
+        let sub: Vec<KeepInfo<'_>> = idx.iter().map(|&i| members[i]).collect();
+        Some(self.pick(&sub).map_or(k, |j| idx[j]))
+    }
 }
 
 /// What a detector or optimiser analysis could *not* cover. Never silently empty.

@@ -102,8 +102,6 @@ export const PLAN_BASE = {
   'opt:audio': { before: 5153960755, after: 644245094, summary: 'Opus 24 kbps mono · originals to Recycle Bin', params: { codec: 'opus', bitrate_kbps: 24 }, files: 23 },
 };
 
-/** Summary of the hero (fixed numbers of the wireframe: 41.2 + 5.1 + 2.3 = 48.6 GB). */
-export const HERO_SUMMARY = { total: 52183474995, reversible: 44238230323, opt_in: 5476083302, review_only: 2469606195, opportunities: 18 };
 
 /** Volumes. `plan_saving` is for the full wireframe plan; the backend scales it. */
 export const DRIVES = [

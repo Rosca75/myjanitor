@@ -18,7 +18,7 @@ pub mod cache;
 pub mod tree;
 pub mod walker;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use mj_core::{CancelToken, FileIndex, ProgressSink, Result, ScanScope, Timestamp};
 use mj_platform::ScanPlatform;
@@ -71,6 +71,28 @@ pub fn effective_roots(scope: &ScanScope) -> Vec<PathBuf> {
     roots.dedup_by_key(|r| mj_core::pathutil::path_key(r));
     let all = roots.clone();
     roots.retain(|r| !all.iter().any(|o| o != r && mj_core::pathutil::is_within(o, r)));
+    roots
+}
+
+/// [`effective_roots`], keeping a nested root that the outer walk would not enter (SCAN-8):
+/// with `one_file_system` on, a root on another volume than its nearest containing root
+/// (a second disk mounted at `/home/me/Data`) is walked as a root of its own. The outer
+/// walk stops at the mount point, so nothing is indexed twice. A root whose volume cannot
+/// be read collapses as before.
+pub fn effective_roots_on(scope: &ScanScope, platform: &dyn mj_platform::ScanPlatform) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = scope.roots.iter().map(|r| mj_core::pathutil::normalize_lexical(r)).collect();
+    roots.sort_by_key(|r| mj_core::pathutil::path_key(r));
+    roots.dedup_by_key(|r| mj_core::pathutil::path_key(r));
+    let all = roots.clone();
+    let volume = |p: &Path| platform.metadata(p).ok().and_then(|e| e.file_id).map(|f| f.volume);
+    roots.retain(|r| {
+        let nearest =
+            all.iter().filter(|o| *o != r && mj_core::pathutil::is_within(o, r)).max_by_key(|o| o.components().count());
+        match nearest {
+            None => true,
+            Some(o) => scope.options.one_file_system && volume(r).is_some_and(|v| Some(v) != volume(o)),
+        }
+    });
     roots
 }
 

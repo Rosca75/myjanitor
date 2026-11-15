@@ -23,7 +23,7 @@ State: todo / in progress / done / blocked.
 | 3 | W3-E | Settings, schedules, CLI, context menu, portable | Sonnet | done |
 | 4 | W4-1 | Integration pass | Opus | done |
 | 4 | W4-2 | Adversarial review of destructive paths | Opus | done (review 1: 19 fixed, F-12 accepted; review 2: all fixed) |
-| 4 | W4-3 | CI | Sonnet | done (first run unproven) |
-| 4 | W4-4 | Docs | Sonnet | in progress |
+| 4 | W4-3 | CI | Sonnet | done (CI run green, see STATUS.md) |
+| 4 | W4-4 | Docs | Sonnet | done |
 | 5 | W5-1 | Review-2 fixes + T1 gap closure | Opus | done |
 | 5 | W5-2 | Docs refresh (Windows verification level, review status, feature status) | Sonnet | done |

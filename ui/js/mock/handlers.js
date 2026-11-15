@@ -289,7 +289,7 @@ export function createHandlers(m, sim, emit) {
       return structuredClone(o);
     },
     presets_list: () => [
-      { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Anything in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }] }, topmost_only: false, builtin: true },
+      { id: 'downloads_older_90d', name: 'Downloads older than 90 days', description: 'Files in a Downloads folder not modified for 90 days', rule: { all: [{ cond: { field: 'kind', kind: 'file' } }, { cond: { field: 'path', mode: 'wildcard', pattern: '**/Downloads/**', case_sensitive: false } }] }, topmost_only: false, builtin: true },
       ...m.presets,
     ],
     preset_save: notYet('preset_save'),

@@ -157,7 +157,7 @@ test('header offers Add to plan, or Apply plan when the step is already in it', 
   assert.equal(env.$('.header__badges').textContent.includes('In plan'), false);
   await env.actions.openStep('det:exact_duplicates');
   await env.settle();
-  assert.equal(env.$('[data-fk="step-apply"]').textContent, 'Apply plan  ·  29.3 GB');
+  assert.equal(env.$('[data-fk="step-apply"]').textContent, 'Apply plan  ·  33.1 GB');
 });
 
 test('lossy confirmation dialog: what happens, tiles, originals, synced warning, gating', async () => {

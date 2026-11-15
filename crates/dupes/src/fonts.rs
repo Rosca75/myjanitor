@@ -79,7 +79,7 @@ impl Detector for DuplicateFonts {
             let keeper = members
                 .iter()
                 .position(|e| is_system_font_path(&e.path))
-                .unwrap_or_else(|| keep::pick(&KeepRule::ShortestPath, &members, &[]));
+                .unwrap_or_else(|| keep::pick_same_content(&KeepRule::ShortestPath, &members, &[]));
             let count = members.len();
             let label = format!("{count} copies of the font {}", members[keeper].name());
             keep::emit(
