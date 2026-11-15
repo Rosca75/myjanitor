@@ -184,8 +184,9 @@ impl DetectContext<'_> {
             return false;
         };
         env::decode(t).iter().any(|entry| match crate::pathutil::decode_path(entry) {
-            Ok(p) if p.is_absolute() && !entry.contains(['*', '?', '[']) => crate::pathutil::is_within(&p, path),
-            _ => crate::glob::Glob::platform(entry, crate::glob::GlobMode::Path).matches_path(path),
+            // RF-2: the shared classifier; an absolute entry is a folder even with `[` in it.
+            Ok(p) if p.is_absolute() && !crate::glob::is_pattern_entry(entry) => crate::pathutil::is_within(&p, path),
+            _ => crate::glob::entry_glob(entry).matches_path(path),
         })
     }
 }

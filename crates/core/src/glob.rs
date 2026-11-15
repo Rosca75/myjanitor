@@ -189,6 +189,39 @@ impl Glob {
     }
 }
 
+/// True for a settings entry spelled as an absolute path: a leading `/` or `\`, or a drive
+/// letter followed by `:` (judged on the text, so a Windows entry is recognised on any OS).
+pub fn is_absolute_entry(s: &str) -> bool {
+    let b = s.as_bytes();
+    s.starts_with('/') || s.starts_with('\\') || (b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':')
+}
+
+/// The one classifier for protected-path and exclusion entries (RF-2, SCAN-2, SCAN-3). `[`
+/// and `]` are legal in file names (`D:\Photos [2019]`), so in an absolute entry only `*` or
+/// `?` makes a pattern; a relative entry (`**/Clients/**`, `*.[ch]`) is a pattern when it
+/// holds any of `*`, `?` or `[`.
+pub fn is_pattern_entry(s: &str) -> bool {
+    if is_absolute_entry(s) {
+        s.contains(['*', '?'])
+    } else {
+        s.contains(['*', '?', '['])
+    }
+}
+
+/// Compile a protected-path or exclusion entry as a path glob with the platform's case rule.
+/// In an absolute entry `[` is literal (it is rewritten to the class `[[]`), so
+/// `D:\Photos [raw]\*.tmp` matches the folder of that name; a relative entry compiles as
+/// written.
+pub fn entry_glob(s: &str) -> Glob {
+    if is_absolute_entry(s) && s.contains('[') {
+        let mut g = Glob::platform(&s.replace('[', "[[]"), GlobMode::Path);
+        g.pattern = s.to_string();
+        g
+    } else {
+        Glob::platform(s, GlobMode::Path)
+    }
+}
+
 fn parse_class(chars: &[char], start: usize, ci: bool) -> Option<(Tok, usize)> {
     let mut i = start + 1;
     let negated = i < chars.len() && (chars[i] == '!' || chars[i] == '^');
@@ -269,5 +302,20 @@ mod tests {
         let p = "*a*a*a*a*a*a*a*a*a*a*a*a*b";
         let t = "a".repeat(200);
         assert!(!name(p, &t));
+    }
+
+    #[test]
+    fn entries_with_brackets() {
+        assert!(!is_pattern_entry("/home/me/Clients [2024]"));
+        assert!(!is_pattern_entry("D:\\Photos [raw]"));
+        assert!(is_pattern_entry("D:\\Photos [raw]\\*.tmp"));
+        assert!(is_pattern_entry("**/Clients/**"));
+        assert!(is_pattern_entry("*.[ch]"));
+        assert!(!is_pattern_entry("node_modules"));
+        let g = entry_glob("/data/[raw] */x");
+        assert!(g.matches("/data/[raw] 1/x"));
+        assert!(!g.matches("/data/r 1/x"));
+        assert_eq!(g.pattern(), "/data/[raw] */x");
+        assert!(entry_glob("*.[ch]").matches_path(std::path::Path::new("a/b.c")));
     }
 }

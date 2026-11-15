@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mj_core::glob::{Glob, GlobMode};
+use mj_core::glob::{entry_glob, is_absolute_entry, is_pattern_entry, Glob, GlobMode};
 use mj_core::pathutil::path_key;
 
 fn env_path(k: &str) -> Option<PathBuf> {
@@ -182,10 +182,6 @@ pub fn canonical_spelling(path: &Path) -> Option<PathBuf> {
     (path_key(&c) != path_key(path)).then_some(c)
 }
 
-fn is_glob(s: &str) -> bool {
-    s.contains(['*', '?', '['])
-}
-
 /// The effective protected set.
 #[derive(Debug, Clone)]
 pub struct ProtectedPaths {
@@ -244,10 +240,24 @@ impl ProtectedPaths {
         self
     }
 
-    /// Built-ins plus the user's protected paths. A user entry containing `*`, `?` or `[`
-    /// is a pattern (`**/Clients/**`), any other entry a folder.
+    /// Built-ins plus the user's protected paths, classified by
+    /// [`mj_core::glob::is_pattern_entry`] (RF-2, SCAN-2): a relative entry containing `*`,
+    /// `?` or `[` is a pattern (`**/Clients/**`); an absolute entry is always the folder of
+    /// that exact name (`D:\Clients [2024]`), and when it also holds `*` or `?` it is in
+    /// addition a pattern whose brackets are literal. Treating an entry as both can only
+    /// protect more, never less.
     pub fn new(user: &[PathBuf]) -> Self {
-        let (pats, folders): (Vec<&PathBuf>, Vec<&PathBuf>) = user.iter().partition(|p| is_glob(&p.to_string_lossy()));
+        let mut pats = Vec::new();
+        let mut folders = Vec::new();
+        for p in user {
+            let s = p.to_string_lossy();
+            if is_pattern_entry(&s) {
+                pats.push(entry_glob(&s));
+            }
+            if !is_pattern_entry(&s) || is_absolute_entry(&s) {
+                folders.push(p.clone());
+            }
+        }
         ProtectedPaths {
             folders: builtin_paths().into_iter().map(PathBuf::from).collect(),
             exact: builtin_exact().into_iter().map(PathBuf::from).collect(),
@@ -257,8 +267,8 @@ impl ProtectedPaths {
                 .map(|p| Glob::platform(p, GlobMode::Path))
                 .collect(),
             vcs_patterns: builtin_vcs_patterns().iter().map(|p| Glob::platform(p, GlobMode::Path)).collect(),
-            user: folders.into_iter().cloned().collect(),
-            user_patterns: pats.iter().map(|p| Glob::platform(&p.to_string_lossy(), GlobMode::Path)).collect(),
+            user: folders,
+            user_patterns: pats,
             folder_prefixes: Vec::new(),
             exact_keys: Vec::new(),
         }
@@ -362,5 +372,24 @@ mod tests {
         let p = ProtectedPaths::empty().with_app_dirs(&[PathBuf::from("/q")]).with_patterns(&["*.key".into()]);
         assert!(p.is_protected(Path::new("/q/1/2/x")));
         assert!(p.is_protected(Path::new("/a/b.key")));
+    }
+
+    /// RF-2 / SCAN-2: a protected folder whose name holds `[`, `*` or `?` is a folder, not a
+    /// never-matching glob.
+    #[test]
+    fn a_literal_folder_with_glob_characters_is_protected() {
+        let p = ProtectedPaths::new(&[PathBuf::from("/home/me/Clients [2024]"), PathBuf::from("**/Clients/**")]);
+        assert!(p.is_protected(Path::new("/home/me/Clients [2024]")));
+        assert!(p.is_protected(Path::new("/home/me/Clients [2024]/a.doc")));
+        assert!(p.has_protected_below(Path::new("/home/me")));
+        assert!(!p.is_protected(Path::new("/home/me/Clients 2/a.doc")), "brackets are not a class");
+        assert!(p.is_protected(Path::new("/data/Clients/a.pdf")), "relative patterns stay patterns");
+        // An absolute entry with a real wildcard is a pattern whose brackets are literal, and
+        // also the folder of that exact name.
+        let p = ProtectedPaths::new(&[PathBuf::from("/data/[raw] */keep/**"), PathBuf::from("/srv/what?")]);
+        assert!(p.is_protected(Path::new("/data/[raw] 2019/keep/a.cr2")));
+        assert!(!p.is_protected(Path::new("/data/r 2019/keep/a.cr2")));
+        assert!(p.is_protected(Path::new("/srv/what?/x")), "a folder literally named `what?`");
+        assert!(p.is_protected(Path::new("/srv/whatx")));
     }
 }

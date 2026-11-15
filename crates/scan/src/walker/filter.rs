@@ -18,7 +18,7 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
-use mj_core::glob::{Glob, GlobMode};
+use mj_core::glob::{entry_glob, is_absolute_entry, is_pattern_entry, Glob, GlobMode};
 use mj_core::pathutil::{is_within, path_key, CASE_INSENSITIVE};
 use mj_core::{Attributes, FileEntry, ScanScope};
 
@@ -51,18 +51,27 @@ impl ScopeFilter {
         };
         for raw in scope.exclude.iter().chain(extra) {
             let p = raw.trim();
+            // SCAN-3: `node_modules/` (the gitignore spelling) means the folder; paths are
+            // matched without a trailing separator. A bare root keeps its separator.
+            let trimmed = p.trim_end_matches(['/', '\\']);
+            let p = if trimmed.is_empty() || trimmed.ends_with(':') { p } else { trimmed };
             if p.is_empty() {
                 continue;
             }
-            let g = Glob::platform(p, GlobMode::Path);
-            let absolute = Path::new(p).is_absolute() || p.starts_with('/');
-            if !g.is_wildcard() && absolute {
+            // One classifier with the protected list (RF-2, SCAN-3): an absolute entry is
+            // always the folder of that exact name (`D:\Photos [2019]`), and with `*` or `?`
+            // also a pattern whose brackets are literal.
+            let absolute = Path::new(p).is_absolute() || is_absolute_entry(p);
+            if absolute {
                 let name = Path::new(p).file_name().map(|n| fold(&n.to_string_lossy())).unwrap_or_default();
                 f.paths.push((path_key(Path::new(p)), name));
-            } else if !absolute && (p.contains('/') || p.contains('\\')) && !p.starts_with("**") {
+                if is_pattern_entry(p) {
+                    f.globs.push(entry_glob(p));
+                }
+            } else if (p.contains('/') || p.contains('\\')) && !p.starts_with("**") {
                 f.globs.push(Glob::platform(&format!("**/{p}"), GlobMode::Path));
             } else {
-                f.globs.push(g);
+                f.globs.push(Glob::platform(p, GlobMode::Path));
             }
         }
         f.include = scope
@@ -176,5 +185,19 @@ mod tests {
         e.attrs |= Attributes::HIDDEN;
         assert!(f.skips_hidden(&e));
         assert!(!filter(&[], &[], true).skips_hidden(&e));
+    }
+
+    /// SCAN-3: an absolute exclusion holding `[` is that folder; a trailing separator on a
+    /// relative entry does not make it match nothing.
+    #[test]
+    fn literal_paths_with_brackets_and_trailing_separators() {
+        let f = filter(&["/data/Photos [2019]", "node_modules/", "build/out/", "/srv/[x] */cache"], &[], true);
+        assert!(ex(&f, "/data/Photos [2019]"));
+        assert!(!ex(&f, "/data/Photos 2"));
+        assert!(f.excludes_root(Path::new("/data/Photos [2019]/sub")));
+        assert!(ex(&f, "/a/b/node_modules"));
+        assert!(ex(&f, "/p/build/out"));
+        assert!(ex(&f, "/srv/[x] web/cache"));
+        assert!(!ex(&f, "/srv/x web/cache"));
     }
 }
