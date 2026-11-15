@@ -43,7 +43,7 @@ const ACTIONS = {
  * Both survive paging and selection changes and reset when another step opens.
  * @param {string} id
  */
-export const freshStep = (id) => ({ id, detail: null, page: null, subGroup: null, offset: 0, loading: true, advancedOpen: false, pendingAction: null, preview: null, previewFor: null, sort: 'group', descending: false, filter: '', minSize: 0, keepGroups: true, focusId: null, previewLoading: false });
+export const freshStep = (id) => ({ id, detail: null, page: null, subGroup: null, offset: 0, loading: true, advancedOpen: false, pendingAction: null, preview: null, previewFor: null, sort: 'group', descending: false, filter: '', minSize: 0, keepGroups: true, focusId: null, previewLoading: false, error: null, pageError: null });
 
 /**
  * Table operations over one step slot.
@@ -64,20 +64,49 @@ export function createStepOps(c, slot) {
     const req = { opportunity_id: s.id, sub_group: s.subGroup, offset: s.offset, limit: PAGE_SIZE, sort: s.sort, descending: s.descending, keep_groups: s.keepGroups !== false };
     if (s.filter) req.filter = s.filter;
     if (s.minSize > 0) req.min_size = s.minSize;
-    const page = await api.candidatesPage(req);
+    let page;
+    try {
+      page = await api.candidatesPage(req);
+    } catch (e) {
+      // UI-10: the table shows the failure with Retry, not a spinner for ever.
+      if (gens.current(`${slot.key}:page`, g) && cur()?.id === s.id) patch({ page: null, loading: false, pageError: toErrorInfo(e) });
+      throw e;
+    }
     if (!gens.current(`${slot.key}:page`, g) || cur()?.id !== s.id) return;
     // With groups kept together the engine starts the page at a group boundary.
-    patch({ page, loading: false, offset: typeof page.offset === 'number' ? page.offset : s.offset });
+    patch({ page, loading: false, pageError: null, offset: typeof page.offset === 'number' ? page.offset : s.offset });
     // Thumbnails load after the rows are drawn and patch their own cells.
     if (page.has_groups) void thumbs.load(s.id, page.rows ?? [], page.groups ?? []);
   }
   async function loadDetail() {
     const id = oppId();
     const g = gens.next(`${slot.key}:detail`);
-    const detail = await api.stepDetail({ opportunity_id: id });
-    if (gens.current(`${slot.key}:detail`, g) && cur()?.id === id) patch({ detail });
+    let detail;
+    try {
+      detail = await api.stepDetail({ opportunity_id: id });
+    } catch (e) {
+      // UI-10: an error with Retry instead of "Loading…" for ever; a step a rescan dropped
+      // no longer shows its old rows (UI-6).
+      if (gens.current(`${slot.key}:detail`, g) && cur()?.id === id) patch({ detail: null, page: null, loading: false, error: toErrorInfo(e) });
+      throw e;
+    }
+    if (gens.current(`${slot.key}:detail`, g) && cur()?.id === id) patch({ detail, error: null });
   }
   const reload = () => Promise.all([loadDetail(), loadPage()]);
+
+  /**
+   * UI-6: read the open step again after a rescan or an apply (candidate ids are valid for
+   * one scan generation, applied rows are gone). Paging, sort and filters stay; a page
+   * that no longer exists falls back to the first. Failures show in the view, not as toasts.
+   */
+  async function refresh() {
+    if (!cur()) return;
+    try {
+      await reload();
+      const s = cur();
+      if (s && s.offset > 0 && s.page && !(s.page.rows ?? []).length) { patch({ offset: 0 }); await loadPage(); }
+    } catch { /* shown by the view */ }
+  }
 
   /** Fetch a preview for one row; failures show as "no preview" with the reason. @param {any} row */
   async function loadPreview(row) {
@@ -94,6 +123,7 @@ export function createStepOps(c, slot) {
 
   return {
     reloadStep: guard(reload),
+    refreshStep: refresh,
     /** @param {string|null} key */
     setSubGroup: guard(async (key) => { patch({ subGroup: key, offset: 0 }); await loadPage(); }),
     /** @param {number} offset */

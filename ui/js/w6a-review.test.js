@@ -90,7 +90,7 @@ test('a scan_stop answer that arrives after scan://done does not leave the overv
   doneBeforeAnswer(env, 'scan_stop', 'cancelled');
   await env.actions.stopScan();
   assert.equal(env.state().scan.state, 'cancelled');
-  assert.equal(env.$('[data-fk="scan-stop"]'), null);
+  assert.ok(!env.$('[data-fk="scan-stop"]')); // never inspects a DOM node on failure
   await env.settle();
 });
 
@@ -101,4 +101,88 @@ test('a scan_start answer that arrives after its own scan://done does not leave 
   assert.equal(env.state().scan.state, 'done');
   await env.settle();
   assert.equal(env.state().scan.state, 'done');
+});
+
+// ---------------------------------------------------------------- UI-6 the open review follows a rescan
+
+const rowIds = (env) => env.$$('[data-row]').map((r) => r.getAttribute('data-row'));
+
+test('the open step review reloads its rows after a rescan instead of keeping stale ids', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const before = rowIds(env);
+  assert.ok(before.length > 0);
+  // The rescan gives every candidate a new id (ids are valid for one generation).
+  const m = env.backend.model;
+  for (const r of m.rows.get('det:exact_duplicates')) r.id += 1_000_000;
+  m.selection.set('det:exact_duplicates', new Set(m.rows.get('det:exact_duplicates').filter((r) => r.default_selected).map((r) => r.id)));
+  m.scan.generation += 1;
+  env.clearCalls();
+  env.backend.emit('scan://done', { ...structuredClone(m.scan), state: 'done' });
+  env.backend.emit('opportunities://changed', { generation: m.scan.generation });
+  await env.settle();
+  assert.equal(env.sent('candidates_page').length, 1, 'the rows are read again, once for both events');
+  const after = rowIds(env);
+  assert.equal(after.length, before.length);
+  assert.ok(after.every((id) => !before.includes(id)), 'only the new ids are shown');
+});
+
+test('the open Custom-search results reload after a finished apply', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  const { freshStep } = await import('./ctl-step.js');
+  env.store.set({ custom: { ...env.state().custom, result: { id: 'det:exact_duplicates', title: 'x', count: 3 }, step: freshStep('det:exact_duplicates') } });
+  env.clearCalls();
+  env.backend.emit('history://changed', { run_id: 1 });
+  await env.settle();
+  assert.deepEqual(env.sent('candidates_page').map((c) => c.req.opportunity_id), ['det:exact_duplicates']);
+  assert.ok(env.state().custom.step.page, 'the results slot holds the fresh page');
+});
+
+// ---------------------------------------------------------------- UI-10 a failed load is not "Loading..." forever
+
+test('a failed step_detail shows an error with Retry instead of Loading forever', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  env.backend.failNext('step_detail', { code: 'invalid_input', message: 'unknown opportunity det:exact_duplicates' });
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const err = env.$('.state--error');
+  assert.ok(err, 'an error block');
+  assert.match(err.textContent, /unknown opportunity/);
+  assert.equal(env.$('.view').textContent.includes('Loading'), false);
+  await env.click(err.querySelector('button'));
+  assert.ok(!env.$('.state--error')); // never inspects a DOM node on failure
+  assert.ok(env.$$('[data-row]').length > 0, 'Retry loads the review');
+});
+
+test('a failed candidates_page shows an error with Retry under the step header', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  env.backend.failNext('candidates_page', { code: 'io', message: 'disk went away' });
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const err = env.$('.state--error');
+  assert.ok(err, 'an error block');
+  assert.match(err.textContent, /disk went away/);
+  await env.click(err.querySelector('button'));
+  assert.ok(!env.$('.state--error')); // never inspects a DOM node on failure
+  assert.ok(env.$$('[data-row]').length > 0);
+});
+
+// ---------------------------------------------------------------- UI-5 the category lists follow the plan and rescans
+
+test('Clean: "+ Add" turns the card into an in-plan card at once, and a rescan refreshes the list', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  env.actions.navigate('clean');
+  await env.settle();
+  const add = env.$('.view [data-fk^="add-"]');
+  assert.ok(add, 'a card that is not in the plan');
+  const id = add.getAttribute('data-fk').slice(4);
+  await env.click(add);
+  assert.ok(!env.$(`[data-fk="add-${id}"]`), 'no second "+ Add"'); // never inspects a DOM node on failure
+  assert.ok(env.state().category.items.find((o) => o.id === id).in_plan);
+  // A finished scan re-reads the list on screen.
+  env.clearCalls();
+  env.backend.emit('scan://done', { ...structuredClone(env.backend.model.scan), state: 'done' });
+  await env.settle();
+  assert.ok(env.sent('opportunities_list').some((c) => c.req.tab === 'clean'), 'the Clean list is read again');
 });

@@ -113,6 +113,13 @@ function coreActions(c) {
     set({ scan: withoutProgress(status) });
   };
 
+  /** Overview cards, plus the category list when one is shown (UI-5). */
+  const refreshVisible = async () => {
+    const name = get().route.name;
+    await Promise.all([refreshOpps(), ['clean', 'optimise', 'archive'].includes(name) ? c.actions.loadCategory(name) : null]);
+  };
+  let stepRefreshQueued = false;
+
   const refreshHistory = async () => {
     const [history, lastReport] = await Promise.all([soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] }), soft(api.reportLast(), null)]);
     set({ history, lastReport, undoable: history.runs.some((r) => r.undoable) });
@@ -135,8 +142,26 @@ function coreActions(c) {
       if (info?.launch?.mode === 'optimise') c.actions.navigate('optimise');
       else if (info?.launch?.mode === 'duplicates') c.actions.navigate('clean');
     },
-    refreshOpps: guard(refreshOpps),
+    /**
+     * Re-read the cards the user can see: the Overview's and, on Clean / Optimise /
+     * Archive, that list too (UI-5: else "+ Add" stays after adding and sizes go stale).
+     */
+    refreshOpps: guard(refreshVisible),
     refreshHistory: guard(refreshHistory),
+    /**
+     * UI-6: re-read the open step review and the Custom-search results after a rescan or
+     * an apply. Events of one change arrive together: they make one refresh.
+     */
+    refreshOpenStep() {
+      if (stepRefreshQueued) return;
+      stepRefreshQueued = true;
+      setTimeout(() => {
+        stepRefreshQueued = false;
+        const s = get();
+        if (s.route.name === 'step' && s.step) void c.actions.refreshStep();
+        if (s.custom?.step) void c.actions.custom_refreshStep();
+      }, 0);
+    },
 
     /** Hash-free router: the route lives in the store. @param {string} name @param {object} [params] */
     navigate(name, params = {}) {
@@ -188,10 +213,10 @@ function coreActions(c) {
     addToPlan: guard(async (id) => {
       const action = get().pendingActions[id];
       set({ plan: await api.planAddStep({ opportunity_id: id, ...(action ? { action } : {}) }) });
-      await refreshOpps();
+      await refreshVisible();
     }),
     /** @param {number} stepId */
-    removeStep: guard(async (stepId) => { set({ plan: await api.planRemoveStep({ step_id: stepId }) }); await refreshOpps(); }),
+    removeStep: guard(async (stepId) => { set({ plan: await api.planRemoveStep({ step_id: stepId }) }); await refreshVisible(); }),
     /** Move a step up (-1) or down (+1) with the arrow buttons or the keyboard. @param {number} stepId @param {number} delta */
     moveStep: guard(async (stepId, delta) => {
       const ids = get().plan.steps.map((s) => s.id);

@@ -16,7 +16,7 @@ import { basename, dirname, formatBytes, displayPath, middleEllipsis, formatCoun
 import { button, checkbox, select } from '../../components/controls.js';
 import { badge, rowBadge } from '../../components/badge.js';
 import { tabs } from '../../components/tabs.js';
-import { loadingBlock, emptyBlock } from '../../components/states.js';
+import { loadingBlock, emptyBlock, errorBlock } from '../../components/states.js';
 import { PAGE_SIZE } from '../../ctl-step.js';
 import { thumbContent } from '../../thumbs.js';
 
@@ -146,7 +146,7 @@ export function renderTable(st, ops, o = {}) {
     prev = r.group;
     body.push(tableRow(r, audio, ops, thumbs));
   }
-  const empty = st.loading ? loadingBlock() : st.filter || st.minSize > 0 ? emptyBlock({ title: copy.step2.filteredEmpty }) : emptyBlock({ title: copy.step.empty });
+  const empty = st.pageError ? errorBlock(st.pageError, { onRetry: () => ops.reloadStep(), fk: 'rows-retry' }) : st.loading ? loadingBlock() : st.filter || st.minSize > 0 ? emptyBlock({ title: copy.step2.filteredEmpty }) : emptyBlock({ title: copy.step.empty });
   const fid = o.filterId ?? 'filter';
   return h('div', { class: 'tablewrap' },
     h('div', { class: 'table-tools' },

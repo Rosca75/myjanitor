@@ -3,6 +3,7 @@
 import { h } from '../../dom.js';
 import { copy } from '../../copy.js';
 import { formatBytes, formatAbout, formatCount } from '../../format.js';
+import { errorBlock } from '../../components/states.js';
 import { renderTable } from './table.js';
 import { renderShrinkPanel } from './shrink-panel.js';
 import { renderCleanPanel } from './clean-panel.js';
@@ -13,6 +14,8 @@ export const nounFor = (opp) => (opp.id === 'opt:audio' ? 'recordings' : copy.st
 /** @param {any} s @param {any} actions */
 export function renderStep(s, actions) {
   const st = s.step;
+  // UI-10: a failed load says so and offers Retry.
+  if (st && !st.detail && st.error) return h('div', { class: 'view' }, errorBlock(st.error, { onRetry: () => actions.reloadStep(), fk: 'step-retry' }));
   if (!st || (!st.detail && !st.loading)) return h('div', { class: 'view' }, h('p', { class: 'empty-note' }, copy.step.notFound));
   if (!st.detail) return h('div', { class: 'view' }, h('p', { class: 'empty-note' }, copy.step.loading));
   const opp = st.detail.opportunity;
