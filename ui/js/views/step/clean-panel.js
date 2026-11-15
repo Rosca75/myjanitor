@@ -8,6 +8,8 @@ import { previewPane, compareButton } from './preview-pane.js';
 
 const BASIC = ['trash', 'quarantine', 'move', 'copy'];
 const TO_FOLDER = ['move', 'copy'];
+/** CLN-ACT-06 link actions and the app_info capability each needs. */
+const LINKS = [['hardlink', 'hardlinks'], ['reflink', 'reflinks']];
 
 /** Which action is in force: the plan step's, else the one picked before adding. @param {any} s */
 function currentAction(s) {
@@ -46,6 +48,14 @@ export function renderCleanPanel(s, actions) {
       ? h('div', { class: 'tiles', role: 'radiogroup', 'aria-label': copy.clean.action }, BASIC.filter((k) => offered.includes(k)).map(tile))
       : h('p', { class: 'note' }, opp.description),
     structure,
+    LINKS.some(([k]) => offered.includes(k)) && h('div', { class: 'setting' },
+      h('p', { class: 'kv__k', id: 'link-label' }, copy.clean.linkTitle),
+      h('p', { class: 'setting__help' }, copy.clean.linkIntro),
+      h('div', { class: 'tiles', role: 'radiogroup', 'aria-labelledby': 'link-label' },
+        LINKS.filter(([k]) => offered.includes(k)).map(([k, cap]) => {
+          const can = !!s.info?.capabilities?.includes(cap);
+          return radioTile({ title: copy.clean.actions[k].label, sub: can ? copy.clean.actions[k].help : copy.clean.actions[k].unavailable, selected: act.kind === k, disabled: !can, fk: `act-${k}`, onSelect: () => actions.setStepAction(k) });
+        }))),
     dup && h('div', { class: 'setting' },
       h('label', { class: 'setting__text' }, h('span', { class: 'setting__label' }, copy.clean.keep), h('span', { class: 'setting__help' }, copy.clean.keepHelp)),
       select({ label: copy.clean.keep, value: keepValue(opp.params.keep_rule), fk: 'keep-rule', options: [...Object.entries(copy.clean.keepRules).map(([value, label]) => ({ value, label })), { value: 'preferred_folder', label: copy.step2.keepFolder }], onChange: (v) => (v === 'preferred_folder' ? actions.openBrowser({ mode: 'keep' }) : actions.applyKeepRule(v)) })),

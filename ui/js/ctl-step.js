@@ -17,6 +17,9 @@ const ACTIONS = {
   // CLN-ACT-05: folder structure kept by default (the relative path below the scan root).
   move: (dest, keep = true) => ({ kind: 'move', dest, keep_structure: keep }),
   copy: (dest, keep = true) => ({ kind: 'copy', dest, keep_structure: keep }),
+  // CLN-ACT-06: duplicates become extra names of the kept copy (asks for confirmation).
+  hardlink: () => ({ kind: 'hardlink' }),
+  reflink: () => ({ kind: 'reflink' }),
 };
 
 /** A fresh step state. @param {string} id */

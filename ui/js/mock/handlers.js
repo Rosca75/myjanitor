@@ -306,9 +306,10 @@ export function createHandlers(m, sim, emit) {
       const n = st.estimate.files;
       const permanent = st.safety === 'permanent';
       const audio = o.id === 'opt:audio';
+      const link = st.action?.kind === 'hardlink';
       return {
         step_id: st.id,
-        title: permanent ? `Delete ${n} ${o.unit} permanently?` : `Compress ${n} ${audio ? 'recordings' : o.unit}?`,
+        title: link ? `Replace ${n} duplicate files with hard links?` : permanent ? `Delete ${n} ${o.unit} permanently?` : `Compress ${n} ${audio ? 'recordings' : o.unit}?`,
         body: permanent ? 'This cannot be undone. The files do not go to the Recycle Bin and History cannot bring them back.' : audio ? 'This is lossy. The new files sound fine for speech but cannot be turned back into the originals.' : 'This is lossy. The new files cannot be turned back into the originals.',
         files: n,
         bytes_now: st.estimate.bytes_before,

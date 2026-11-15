@@ -123,7 +123,7 @@ test('what happens to them: the default route is named from app_info, keep rule,
   await env.settle();
   const panel = env.$('.clean');
   assert.equal(panel.querySelector('.panel__title').textContent, 'What happens to them');
-  const tiles = panel.querySelectorAll('.tile');
+  const tiles = panel.querySelectorAll('.tile').filter((t) => !['act-hardlink', 'act-reflink'].includes(t.getAttribute('data-fk')));
   // CLN-ACT-02: the mock is Windows with the default route (MyJanitor quarantine).
   assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['MyJanitor quarantine', 'Quarantine', 'Move…', 'Copy…']);
   assert.equal(tiles[0].getAttribute('aria-checked'), 'true');

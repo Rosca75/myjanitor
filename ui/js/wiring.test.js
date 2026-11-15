@@ -345,6 +345,21 @@ test('Copy picks a destination, keeps the folder structure by default and can tu
   assert.equal(req.action.keep_structure, false);
 });
 
+test('CLN-ACT-06: duplicates offer hard links (confirmed in the dialog) and reflinks only where supported', async () => {
+  const env = await makeEnv();
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const link = env.$('[data-fk="act-hardlink"]');
+  assert.ok(link && !link.disabled, 'the Windows mock has hard links');
+  const reflink = env.$('[data-fk="act-reflink"]');
+  assert.ok(reflink && reflink.disabled, 'no reflinks on NTFS: disabled with a reason');
+  assert.match(env.$('.clean').textContent, /needs a volume with reflinks/);
+  await env.click(link);
+  const step = env.state().plan.steps.find((s) => s.opportunity === 'det:exact_duplicates');
+  assert.deepEqual(step.action, { kind: 'hardlink' });
+  assert.equal(step.safety, 'lossy_opt_in', 'needs the confirmation');
+});
+
 test('Undo last action sends undo_last once a run exists', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
