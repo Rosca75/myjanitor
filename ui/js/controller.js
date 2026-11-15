@@ -101,6 +101,18 @@ function coreActions(c) {
     if (c.gens.current('opps', g)) set({ opps, drives }); // a newer refresh is on its way: ignore this stale answer
   };
 
+  /** Has scan://done of `generation` (or a newer one) already arrived? @param {number} generation */
+  const doneAlready = (generation) => (get().scanDoneGen ?? 0) >= generation;
+  /**
+   * The answer of scan_pause / scan_resume / scan_stop, unless it is older news than a
+   * scan://done that overtook it (UI-4: else the overview would stay "Stopping…").
+   * @param {any} status
+   */
+  const applyScanAnswer = (status) => {
+    if (['scanning', 'paused', 'stopping'].includes(status.state) && doneAlready(status.generation)) return;
+    set({ scan: withoutProgress(status) });
+  };
+
   const refreshHistory = async () => {
     const [history, lastReport] = await Promise.all([soft(api.historyList({ offset: 0, limit: 50 }), { total: 0, runs: [] }), soft(api.reportLast(), null)]);
     set({ history, lastReport, undoable: history.runs.some((r) => r.undoable) });
@@ -155,11 +167,14 @@ function coreActions(c) {
     // ----------------------------------------------------------------- scan
     startScan: guard(async () => {
       const r = await api.scanStart({});
-      set({ scan: { ...get().scan, state: 'scanning', generation: r.generation }, scanProgress: null, detectors: {}, completed: null });
+      // UI-4: events and command answers travel on separate channels; a scan this short may
+      // already have reported done, and that state must stay.
+      if (doneAlready(r.generation)) set({ completed: null });
+      else set({ scan: { ...get().scan, state: 'scanning', generation: r.generation }, scanProgress: null, detectors: {}, completed: null });
     }),
-    pauseScan: guard(async () => set({ scan: withoutProgress(await api.scanPause()) })),
-    resumeScan: guard(async () => set({ scan: withoutProgress(await api.scanResume()) })),
-    stopScan: guard(async () => set({ scan: withoutProgress(await api.scanStop()) })),
+    pauseScan: guard(async () => applyScanAnswer(await api.scanPause())),
+    resumeScan: guard(async () => applyScanAnswer(await api.scanResume())),
+    stopScan: guard(async () => applyScanAnswer(await api.scanStop())),
 
     // ------------------------------------------------------------- overview
     /** @param {string} tab */

@@ -65,6 +65,7 @@ export function initialState() {
 
     scope: { roots: [], include: [], exclude: [] },
     scan: { state: 'idle', generation: 0, cached: false },
+    scanDoneGen: 0, // newest generation whose scan://done arrived (UI-4)
     scanProgress: null, // kept apart from `scan` so 50 ms progress never re-renders the controls
     jobProgress: {}, // job id -> progress, for the same reason
     detectors: {}, // opportunity_id -> DetectorTotalsEvent (live cards while scanning)

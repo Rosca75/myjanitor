@@ -67,3 +67,38 @@ test('without a recorded rule the dropdown shows the default of the card setting
   assert.equal(keepValue({ params: { keep_rule: 'newest' }, settings }), 'newest');
   assert.equal(keepValue({ params: { keep_rule: { rule: 'shortest_path' } }, settings }), 'shortest_path');
 });
+
+// ---------------------------------------------------------------- UI-4 scan responses after scan://done
+
+/** `cmd` answers only after the scan's done event reached the UI (another channel, no order). */
+function doneBeforeAnswer(env, cmd, state) {
+  const call = env.backend.call.bind(env.backend);
+  env.backend.call = async (c, req) => {
+    const r = await call(c, req);
+    if (c === cmd) {
+      const status = { ...env.backend.model.scan, generation: r.generation, state };
+      env.backend.emit('scan://done', structuredClone(status));
+    }
+    return r;
+  };
+}
+
+test('a scan_stop answer that arrives after scan://done does not leave the overview stopping', async () => {
+  const env = await makeEnv({ scenario: 'results', speed: 1 });
+  await env.actions.startScan();
+  assert.equal(env.state().scan.state, 'scanning');
+  doneBeforeAnswer(env, 'scan_stop', 'cancelled');
+  await env.actions.stopScan();
+  assert.equal(env.state().scan.state, 'cancelled');
+  assert.equal(env.$('[data-fk="scan-stop"]'), null);
+  await env.settle();
+});
+
+test('a scan_start answer that arrives after its own scan://done does not leave it scanning', async () => {
+  const env = await makeEnv({ scenario: 'results' });
+  doneBeforeAnswer(env, 'scan_start', 'done');
+  await env.actions.startScan();
+  assert.equal(env.state().scan.state, 'done');
+  await env.settle();
+  assert.equal(env.state().scan.state, 'done');
+});

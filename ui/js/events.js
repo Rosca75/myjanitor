@@ -21,7 +21,7 @@ export async function bridgeEvents({ api, store, actions }) {
   const handlers = {
     'scan://progress': (p) => { if (current(p.generation)) set({ scanProgress: p }); },
     'scan://detector': (p) => { if (current(p.generation)) set({ detectors: { ...get().detectors, [p.opportunity_id]: p } }); },
-    'scan://done': (p) => { if (current(p.generation)) { set({ scan: withoutProgress(p), scanProgress: p.progress ?? get().scanProgress, detectors: {} }); actions.refreshOpps(); } },
+    'scan://done': (p) => { if (current(p.generation)) { set({ scan: withoutProgress(p), scanDoneGen: Math.max(get().scanDoneGen ?? 0, p.generation), scanProgress: p.progress ?? get().scanProgress, detectors: {} }); actions.refreshOpps(); } },
     'opportunities://changed': () => { actions.refreshOpps(); },
     'plan://changed': (plan) => set({ plan }),
     'plan://dry_run': (r) => {
