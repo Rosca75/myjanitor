@@ -119,7 +119,13 @@ impl Ctx {
         let mut cfg = EngineConfig::new(dirs.data.clone(), dirs.cache.clone());
         cfg.portable = dirs.portable;
         cfg.events = sink.clone();
+        // CLN-ACT-04: expired quarantine items are purged at the start of the commands
+        // that change files, not by read-only ones (`scan`, `list`, `history`...).
+        cfg.purge_at_start = false;
         let engine = Engine::new(cfg)?;
+        if is_acting(a) {
+            engine.quarantine_auto_purge();
+        }
         // AUT-07: a configured temp folder becomes this process's temp folder.
         if engine.settings_get()?.performance.temp_dir.is_some() {
             let t = engine.temp_dir();
@@ -241,6 +247,12 @@ impl Ctx {
         let ids: Vec<_> = s.jobs.iter().map(|j| j.id).collect();
         self.wait_jobs(&ids)
     }
+}
+
+/// Commands that change files (they purge expired quarantine items first, CLN-ACT-04).
+pub fn is_acting(a: &Parsed) -> bool {
+    matches!((a.cmd.name, a.cmd.sub), ("apply", _) | ("undo", _) | ("run-profile", _) | ("quarantine", Some("purge")))
+        || (a.cmd.name == "clean" && a.flag("apply"))
 }
 
 /// True when stdin and stdout are terminals (a typed confirmation is possible).

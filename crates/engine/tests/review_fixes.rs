@@ -80,6 +80,7 @@ fn f02_apply_keeps_one_copy_even_when_every_copy_is_selected() {
             acknowledged: true,
             originals: mj_core::OriginalsPolicy::RecycleBin,
             synced_online_only: false,
+            selection_digest: Some(e.plan_confirmation_info(StepRequest { step_id }).unwrap().selection_digest),
         }];
         e.plan_apply(PlanApplyRequest { confirmations }).unwrap();
         wait_jobs(e);
@@ -113,6 +114,9 @@ fn f04_folder_that_gained_a_file_after_the_scan_is_not_deleted() {
         acknowledged: true,
         originals: mj_core::OriginalsPolicy::RecycleBin,
         synced_online_only: false,
+        selection_digest: Some(
+            e.plan_confirmation_info(StepRequest { step_id: plan.steps[0].id }).unwrap().selection_digest,
+        ),
     }];
     e.plan_apply(PlanApplyRequest { confirmations }).unwrap();
     wait_jobs(e);
@@ -177,7 +181,9 @@ fn f13_second_process_neither_recovers_nor_acts() {
         j.append(&entry).unwrap();
     }
     std::fs::create_dir_all(app.join("data")).unwrap();
-    std::fs::write(app.join("data/myjanitor.lock"), "1").unwrap();
+    // G-06: the other process holds the OS lock on the file (another open of it stands
+    // for that process); a pid in the file means nothing any more.
+    let _other = mj_platform::lockfile::open_locked(&app.join("data/myjanitor.lock")).unwrap().unwrap();
     let e = mj_engine::Engine::new(config(&app, std::sync::Arc::new(TimedSink::default()))).unwrap();
     assert!(e.instance_conflict().is_some());
     assert!(temp.exists(), "the other process's in-flight output was left alone");

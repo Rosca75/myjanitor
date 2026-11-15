@@ -38,6 +38,7 @@ fn intent(run: RunId, idx: u64, action: ActionKind, original: &Path, stamp: File
         previous_compression: None,
         output_sha256: None,
         retention_days: None,
+        original_link: false,
         undo_of: None,
     }
 }

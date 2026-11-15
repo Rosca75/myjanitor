@@ -150,7 +150,9 @@ test('Apply plan asks for confirmation first and sends plan_apply only after the
   env.$('[data-fk="dlg-ack"]').click();
   await env.settle();
   await env.click(env.$('[data-fk="dlg-act"]'));
-  assert.deepEqual(last(env, 'plan_apply'), { confirmations: [{ step_id: stepId, acknowledged: true, originals: { policy: 'recycle_bin' }, synced_online_only: false }] });
+  const sent = last(env, 'plan_apply');
+  assert.equal(typeof sent.confirmations[0].selection_digest, 'string', 'the confirmation is bound to what the dialog showed (G-04)');
+  assert.deepEqual(sent, { confirmations: [{ step_id: stepId, acknowledged: true, selection_digest: sent.confirmations[0].selection_digest, originals: { policy: 'recycle_bin' }, synced_online_only: false }] });
   assert.equal(env.$('[role="dialog"]'), null);
 });
 
@@ -321,6 +323,41 @@ test('Move opens the folder browser and sends the chosen destination', async () 
   const req = last(env, 'plan_add_step');
   assert.equal(req.action.kind, 'move');
   assert.equal(typeof req.action.dest, 'string');
+  assert.equal(req.action.keep_structure, true, 'CLN-ACT-05: folder structure kept by default');
+});
+
+test('Copy picks a destination, keeps the folder structure by default and can turn it off', async () => {
+  const env = await makeEnv();
+  await env.actions.openStep('det:old_installers');
+  await env.settle();
+  await env.click(env.$('[data-fk="act-copy"]'));
+  assert.equal(env.state().browser.mode, 'copy');
+  await env.click(env.$('[data-fk="browser-choose"]'));
+  const keep = env.$('[data-fk="keep-structure"]');
+  assert.ok(keep, 'the option shows once a destination is chosen');
+  assert.equal(keep.checked, true);
+  keep.setChecked(false);
+  await env.settle();
+  await env.click(env.$('[data-fk="step-add"]'));
+  const req = last(env, 'plan_add_step');
+  assert.equal(req.action.kind, 'copy');
+  assert.equal(typeof req.action.dest, 'string');
+  assert.equal(req.action.keep_structure, false);
+});
+
+test('CLN-ACT-06: duplicates offer hard links (confirmed in the dialog) and reflinks only where supported', async () => {
+  const env = await makeEnv();
+  await env.actions.openStep('det:exact_duplicates');
+  await env.settle();
+  const link = env.$('[data-fk="act-hardlink"]');
+  assert.ok(link && !link.disabled, 'the Windows mock has hard links');
+  const reflink = env.$('[data-fk="act-reflink"]');
+  assert.ok(reflink && reflink.disabled, 'no reflinks on NTFS: disabled with a reason');
+  assert.match(env.$('.clean').textContent, /needs a volume with reflinks/);
+  await env.click(link);
+  const step = env.state().plan.steps.find((s) => s.opportunity === 'det:exact_duplicates');
+  assert.deepEqual(step.action, { kind: 'hardlink' });
+  assert.equal(step.safety, 'lossy_opt_in', 'needs the confirmation');
 });
 
 test('Undo last action sends undo_last once a run exists', async () => {

@@ -49,7 +49,13 @@ impl Detector for StaleFiles {
             category: Category::Clean,
             safety: SafetyClass::ReviewOnly,
             default_action: ActionKind::None,
-            available_actions: vec![ActionKind::None, ActionKind::Archive, ActionKind::Move, ActionKind::Trash],
+            available_actions: vec![
+                ActionKind::None,
+                ActionKind::Archive,
+                ActionKind::Move,
+                ActionKind::Copy,
+                ActionKind::Trash,
+            ],
             settings: vec![
                 common::number_setting(
                     "months",

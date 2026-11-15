@@ -240,6 +240,7 @@ fn new_entry(ctx: &ExecContext<'_>, item: &ActionItem, id: EntryId, kind: Action
         previous_compression: None,
         output_sha256: None,
         retention_days: None,
+        original_link: std::fs::symlink_metadata(&item.path).is_ok_and(|m| m.file_type().is_symlink()),
         undo_of: None,
     }
 }
@@ -592,8 +593,14 @@ fn is_empty_folder_item(item: &ActionItem) -> bool {
 
 /// F-04: right before acting on a folder, its subtree must still be what the scan saw.
 fn recheck_tree(ctx: &ExecContext<'_>, item: &ActionItem) -> Result<()> {
-    if item.target != TargetKind::Folder || matches!(item.action, Action::Copy { .. }) {
+    if matches!(item.action, Action::Copy { .. }) {
         return Ok(());
+    }
+    // G-09: a file item is re-stat'ed against its scan stamp and file id the same way,
+    // so a write between (for example) an archive's verification and the removal of its
+    // source is never lost.
+    if item.target != TargetKind::Folder {
+        return ctx.guard.restat(item, ctx.platform).map(|_| ());
     }
     let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
     if item.expected_tree != Some(walk.stamp()) {
@@ -922,9 +929,11 @@ fn optimise(
         };
         let out = match res {
             Ok(o) => o,
-            // A `create_new` / no-replace refusal means the temp name was taken by someone
-            // else between the check and the write: that file is not ours to delete.
-            Err(err @ (Error::Io { kind: "already_exists", .. } | Error::Conflict(_))) => return Err(err),
+            // A `create_new` / no-replace refusal of the temp name itself means someone else
+            // took it between the check and the write: that file is not ours to delete. Any
+            // other failure (G-08: a `Conflict` for another reason included) leaves no
+            // output of ours beside the user's file.
+            Err(err) if err.is_destination_taken(&temp) => return Err(err),
             Err(err) => {
                 cleanup();
                 return Err(err);
@@ -1095,6 +1104,28 @@ fn archive(
             Err(err) => return skip(ctx, e, err),
         }
     };
+    // G-14: an archive stores no links (they are only listed in INDEX.csv) and a 7z
+    // archive no empty folders; when the sources would go, those would exist nowhere.
+    if plan.is_some() && item.target == TargetKind::Folder {
+        let (links, empty_dirs) = fsops::links_and_empty_dirs(&item.path);
+        let empty = if format == mj_core::ArchiveFormat::SevenZip { empty_dirs } else { 0 };
+        if links > 0 || empty > 0 {
+            let what = match (links, empty) {
+                (l, 0) => format!("{l} link(s)"),
+                (0, d) => format!("{d} empty folder(s)"),
+                (l, d) => format!("{l} link(s) and {d} empty folder(s)"),
+            };
+            return skip(
+                ctx,
+                e,
+                Error::Conflict(format!(
+                    "skipped: {} holds {what} the archive cannot store, so its sources were kept; \
+                     archive it with \"keep the originals\" or remove them first",
+                    item.path.display()
+                )),
+            );
+        }
+    }
     if let Some(p) = &plan {
         retain::note_plan(&mut e, p);
     }

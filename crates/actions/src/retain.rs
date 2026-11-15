@@ -202,9 +202,32 @@ pub fn restore(platform: &dyn Platform, quarantine_dir: &Path, entry: &JournalEn
 /// SHA-256 when there is one, else the recorded size (files; folders carry no hash).
 /// A mismatch (the user replaced the file at a Move destination, a trash name reused)
 /// is a `conflict` and nothing is restored.
+///
+/// G-07: the kind must match too: a file entry is restored only from a regular file, a
+/// folder entry only from a real folder; a link, a folder or anything else found where a
+/// moved file was (or the reverse) is refused, never moved back.
 fn verify_retained(entry: &JournalEntry, retained: &Path) -> Result<()> {
-    let Ok(md) = std::fs::symlink_metadata(retained) else { return Ok(()) };
-    if !md.is_file() || entry.target != mj_core::TargetKind::File {
+    let md = std::fs::symlink_metadata(retained).map_err(|e| Error::io(retained, e))?;
+    let kind_ok = match (entry.original_link, entry.target) {
+        (true, _) => md.file_type().is_symlink(),
+        (false, mj_core::TargetKind::File) => md.file_type().is_file(),
+        (false, mj_core::TargetKind::Folder) => md.file_type().is_dir(),
+    };
+    if !kind_ok {
+        return Err(Error::Conflict(format!(
+            "{} is not the {} that was moved there (it is now a {}); nothing was restored",
+            retained.display(),
+            if entry.target == mj_core::TargetKind::File { "file" } else { "folder" },
+            if md.file_type().is_symlink() {
+                "link"
+            } else if md.is_dir() {
+                "folder"
+            } else {
+                "file"
+            }
+        )));
+    }
+    if entry.target != mj_core::TargetKind::File || entry.original_link {
         return Ok(());
     }
     let same = match &entry.original_sha256 {

@@ -16,6 +16,7 @@
 
 pub mod action;
 pub mod ffi;
+pub mod lockfile;
 pub mod native;
 pub mod scan;
 pub mod traits;

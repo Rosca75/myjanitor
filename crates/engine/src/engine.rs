@@ -36,9 +36,11 @@ pub struct EngineConfig {
     pub quarantine_dir: PathBuf,
     /// Scratch folder for dry-run optimiser outputs (default `<cache>/tmp`).
     pub temp_dir: PathBuf,
-    /// Where "to Recycle Bin / Trash" goes (default: the OS rule, D-2E01). Tests use the
-    /// quarantine so nothing ever reaches the user's real Trash.
-    pub trash_route: TrashRoute,
+    /// Where "to Recycle Bin / Trash" goes. `None` (default) follows the OS rule (D-2E01)
+    /// and, on Windows, the `windows_recycle_bin` setting. `Some(route)` pins the route:
+    /// no setting can change it. Tests pin the quarantine so nothing ever reaches the
+    /// user's real Trash or Recycle Bin.
+    pub trash_route: Option<TrashRoute>,
     pub portable: bool,
     pub events: Arc<dyn EventSink>,
     pub platform: Arc<dyn Platform>,
@@ -48,6 +50,9 @@ pub struct EngineConfig {
     /// Context-menu launch (`--optimise` / `--duplicates <path>`): the scope starts as
     /// that path and `app_info` reports it. Never scans or applies by itself.
     pub launch: Option<crate::api::LaunchIntent>,
+    /// CLN-ACT-04: purge expired quarantine items when the engine starts (the GUI). The
+    /// CLI turns it off and purges at the start of its acting commands instead.
+    pub purge_at_start: bool,
 }
 
 impl EngineConfig {
@@ -59,12 +64,13 @@ impl EngineConfig {
             temp_dir: cache_dir.join("tmp"),
             data_dir,
             cache_dir,
-            trash_route: TrashRoute::default_for_os(),
+            trash_route: None,
             portable: false,
             events: Arc::new(crate::api::NullSink),
             platform: Arc::new(NativePlatform::new()),
             persist: true,
             launch: None,
+            purge_at_start: true,
         }
     }
 
@@ -185,6 +191,11 @@ impl Engine {
         // (another live process's intents are in flight, not dangling).
         if engine.instance_error.is_none() {
             engine.recover_journal();
+            // CLN-ACT-04: expired quarantine items go automatically, through the guarded
+            // purge (only exact quarantine slots, each item's own retention).
+            if engine.cfg.purge_at_start && engine.cfg.persist {
+                engine.quarantine_auto_purge();
+            }
         }
         if let Some(l) = engine.cfg.launch.clone() {
             // Preselect the scope only; an invalid path is dropped (the app opens normally).

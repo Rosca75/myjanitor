@@ -48,6 +48,10 @@ pub struct AppInfo {
     /// by `drives_list`.
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// CLN-ACT-02: where "Recycle Bin / Trash" removals actually go: `recycle_bin`
+    /// (Windows, setting on), `trash` (Linux freedesktop Trash) or `quarantine`
+    /// (MyJanitor quarantine: the Windows default). The UI names the route from this.
+    pub trash_route: String,
     /// How the app was opened from a context-menu entry (`--optimise <path>` /
     /// `--duplicates <path>`): the scope is already set to `path`; the UI opens the
     /// matching view. Nothing is scanned or applied automatically.
@@ -627,6 +631,9 @@ pub struct ConfirmationInfo {
     pub action_label: String,
     /// True for permanent (irreversible) steps: the button uses the danger colour.
     pub permanent: bool,
+    /// G-04: digest of exactly what the dialog describes (the step's action and its items
+    /// with their scan stamps). Sent back in `StepConfirmation.selection_digest`.
+    pub selection_digest: String,
 }
 
 /// `plan_apply` request: one confirmation per step whose safety requires it.
@@ -774,6 +781,20 @@ pub struct QuarantineInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oldest: Option<Timestamp>,
     pub purge_after_days: u32,
+}
+
+/// One item held in the quarantine (CLI `quarantine list`; not an IPC command).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuarantineItem {
+    #[serde(with = "mj_core::pathutil::serde_path")]
+    pub original: PathBuf,
+    #[serde(with = "mj_core::pathutil::serde_path")]
+    pub location: PathBuf,
+    pub bytes: u64,
+    pub quarantined: Timestamp,
+    /// When the automatic purge removes it.
+    pub expires: Timestamp,
+    pub run_id: mj_core::RunId,
 }
 
 /// `quarantine_purge` request.

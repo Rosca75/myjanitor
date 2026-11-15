@@ -19,6 +19,7 @@ impl Engine {
             elevated: self.platform().is_elevated(),
             journal_persistent: self.journal.is_persistent(),
             capabilities: capabilities(self.cfg.portable),
+            trash_route: self.trash_route_name().into(),
             launch: self.cfg.launch.clone(),
         })
     }

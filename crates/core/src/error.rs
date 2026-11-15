@@ -70,6 +70,23 @@ impl Error {
         }
     }
 
+    /// G-08: true only when this error says that `dst` itself was already taken (a
+    /// `create_new` or no-replace refusal naming exactly that path). Such a file is someone
+    /// else's and must not be cleaned up; any other failure leaves a file that is ours.
+    pub fn is_destination_taken(&self, dst: &Path) -> bool {
+        match self {
+            Error::Io { kind: "already_exists", path: Some(p), .. } => {
+                crate::pathutil::path_key(p) == crate::pathutil::path_key(dst)
+            }
+            Error::Conflict(m) => {
+                let name = dst.display().to_string();
+                m.strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.starts_with(" already exists") || rest.starts_with(" exists;"))
+            }
+            _ => false,
+        }
+    }
+
     /// Shorthand for [`Error::Unsupported`].
     pub fn unsupported(feature: impl Into<String>, reason: impl Into<String>) -> Self {
         Error::Unsupported { feature: feature.into(), reason: reason.into() }
@@ -253,6 +270,27 @@ impl From<&Error> for ErrorInfo {
 impl fmt::Display for ErrorInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.message, self.code)
+    }
+}
+
+#[cfg(test)]
+mod g08_tests {
+    use super::Error;
+    use std::path::Path;
+
+    #[test]
+    fn g08_only_a_refusal_naming_the_destination_means_taken() {
+        let d = Path::new("/x/.a.mj-1.tmp.jpg");
+        assert!(
+            Error::Conflict(format!("{} already exists; nothing was overwritten", d.display())).is_destination_taken(d)
+        );
+        assert!(
+            Error::Io { path: Some(d.into()), kind: "already_exists", message: String::new() }.is_destination_taken(d)
+        );
+        assert!(!Error::Conflict("the PDF changed while reading".into()).is_destination_taken(d));
+        assert!(!Error::Conflict("/other already exists".into()).is_destination_taken(d));
+        assert!(!Error::Io { path: Some("/other".into()), kind: "already_exists", message: String::new() }
+            .is_destination_taken(d));
     }
 }
 

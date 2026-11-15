@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeEnv } from './testing/env.js';
+import { actionLabel } from './views/step/clean-panel.js';
 
 const texts = (els) => els.map((e) => e.textContent);
 
@@ -116,15 +117,20 @@ test('listen is disabled with its reason when the audio tool is missing', async 
   assert.match(env.$('.shrink').textContent, /Unavailable: The audio tool \(ffmpeg\) was not detected/);
 });
 
-test('what happens to them: action tiles with Recycle Bin by default, keep rule, collapsed advanced', async () => {
+test('what happens to them: the default route is named from app_info, keep rule, collapsed advanced', async () => {
   const env = await makeEnv();
   await env.actions.openStep('det:exact_duplicates');
   await env.settle();
   const panel = env.$('.clean');
   assert.equal(panel.querySelector('.panel__title').textContent, 'What happens to them');
-  const tiles = panel.querySelectorAll('.tile');
-  assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['Recycle Bin', 'Quarantine', 'Move…']);
+  const tiles = panel.querySelectorAll('.tile').filter((t) => !['act-hardlink', 'act-reflink'].includes(t.getAttribute('data-fk')));
+  // CLN-ACT-02: the mock is Windows with the default route (MyJanitor quarantine).
+  assert.deepEqual(tiles.map((t) => t.querySelector('.tile__title').textContent), ['MyJanitor quarantine', 'Quarantine', 'Move…', 'Copy…']);
   assert.equal(tiles[0].getAttribute('aria-checked'), 'true');
+  for (const [route, label] of [['recycle_bin', 'Recycle Bin'], ['trash', 'Trash'], ['quarantine', 'MyJanitor quarantine']]) {
+    assert.equal(actionLabel('trash', { trash_route: route }).label, label, route);
+  }
+  assert.equal(actionLabel('quarantine', { trash_route: 'recycle_bin' }).label, 'Quarantine');
   const keep = panel.querySelector('select');
   assert.equal(keep.getAttribute('aria-label'), 'Keep the');
   assert.deepEqual(keep.querySelectorAll('option').map((o) => o.textContent), ['Newest copy', 'Oldest copy', 'Shortest path', 'Highest resolution', 'Preferred folder…']);

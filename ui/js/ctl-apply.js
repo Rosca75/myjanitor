@@ -43,7 +43,8 @@ export function applyActions(c) {
       const d = get().dialog;
       if (!d || !d.current.ack) return;
       const info = d.infos[d.index];
-      const conf = { step_id: info.step_id, acknowledged: true };
+      // G-04: the acknowledgement names exactly what this dialog showed.
+      const conf = { step_id: info.step_id, acknowledged: true, selection_digest: info.selection_digest };
       if (info.originals_options.length) conf.originals = info.originals_options[d.current.originalsIndex].policy;
       if (info.synced) conf.synced_online_only = d.current.onlineOnly;
       const answers = [...d.answers, conf];

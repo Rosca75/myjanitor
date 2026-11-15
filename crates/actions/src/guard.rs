@@ -233,10 +233,32 @@ impl Guard {
     /// for. `owned_tree` is set for regenerable artefact folders a detector owns as a whole
     /// (`node_modules`, build output, caches): version-control metadata inside them may
     /// go with them; every other rule still applies.
+    ///
+    /// G-01: every comparison is made in the item's own spelling **and** in its canonical
+    /// one (a symlinked scan root, a junction, a mapped or `subst` drive), so a protected
+    /// entry registered under the real location is seen below a folder reached through a
+    /// link, and the reverse.
     pub fn check_tree(&self, path: &Path, platform: &dyn ScanPlatform, owned_tree: bool) -> Result<TreeWalk> {
-        if self.protected.has_protected_below(path) {
+        let canon = crate::protected::canonical_spelling(path);
+        if self.protected.has_protected_below(path)
+            || canon.as_deref().is_some_and(|c| self.protected.has_protected_below(c))
+        {
             return Err(Error::Protected(path.to_path_buf()));
         }
+        let protected_entry = |p: &Path| {
+            let hit = |q: &Path| {
+                if owned_tree {
+                    self.protected.is_protected_in_owned_tree(q)
+                } else {
+                    self.protected.is_protected(q)
+                }
+            };
+            hit(p)
+                || canon
+                    .as_deref()
+                    .and_then(|c| p.strip_prefix(path).ok().map(|rel| c.join(rel)))
+                    .is_some_and(|q| hit(&q))
+        };
         let top = platform.metadata(path)?;
         let volume = top.file_id.map(|f| f.volume);
         let mut walk = TreeWalk { newest_mtime: top.modified.unwrap_or_default(), ..TreeWalk::default() };
@@ -247,12 +269,7 @@ impl Guard {
             }
             for item in platform.read_dir(&dir)? {
                 let md = platform.metadata(&item.path)?;
-                let hit = if owned_tree {
-                    self.protected.is_protected_in_owned_tree(&item.path)
-                } else {
-                    self.protected.is_protected(&item.path)
-                };
-                if hit {
+                if protected_entry(&item.path) {
                     return Err(Error::Protected(item.path.clone()));
                 }
                 walk.entries += 1;
@@ -285,6 +302,23 @@ impl Guard {
     /// (lexically and in its canonical form, as far as it exists), and not inside the item.
     pub fn check_destination(&self, dest: &Path, item: &Path) -> Result<()> {
         plain_absolute(dest)?;
+        // F-19 residual: on Windows a destination with a device name or a trailing dot or
+        // space in any component resolves differently through the two path APIs.
+        if cfg!(windows) {
+            if let Some(c) = dest.components().find(|c| match c {
+                Component::Normal(n) => {
+                    let n = n.to_string_lossy();
+                    windows_device_name(&n) || n.ends_with('.') || n.ends_with(' ')
+                }
+                _ => false,
+            }) {
+                return Err(Error::InvalidInput(format!(
+                    "{} has a Windows name with more than one meaning ({}): choose another folder",
+                    dest.display(),
+                    c.as_os_str().to_string_lossy()
+                )));
+            }
+        }
         if self.protected.is_protected(dest) {
             return Err(Error::Protected(dest.to_path_buf()));
         }
@@ -322,6 +356,9 @@ pub fn windows_ambiguous_name(name: &str) -> bool {
     if name.ends_with('.') || name.ends_with(' ') {
         return true;
     }
+    if windows_device_name(name) {
+        return true;
+    }
     let (stem, ext) = match name.rsplit_once('.') {
         Some((s, e)) => (s, Some(e)),
         None => (name, None),
@@ -332,6 +369,13 @@ pub fn windows_ambiguous_name(name: &str) -> bool {
         && !num.is_empty()
         && num.chars().all(|c| c.is_ascii_digit())
         && ext.is_none_or(|e| e.chars().count() <= 3)
+}
+
+/// F-19 residual: a DOS device name (`CON`, `NUL`, `COM1`, `LPT1.txt`, ...), which the
+/// Win32 normaliser maps to a device while the verbatim API sees a file. Pure.
+pub fn windows_device_name(name: &str) -> bool {
+    let stem = name.split('.').next().unwrap_or("").trim_end_matches(' ');
+    mj_core::pathutil::WINDOWS_RESERVED_NAMES.iter().any(|r| r.eq_ignore_ascii_case(stem))
 }
 
 /// True when the fresh metadata still has the scanned size and mtime.
@@ -402,10 +446,32 @@ mod tests {
 
     #[test]
     fn f19_windows_names_with_two_spellings_are_recognised() {
-        for bad in ["PROGRA~1", "DOCUME~2.TXT", "Windows.", "Windows ", "report.pdf.", "x~12"] {
+        for bad in [
+            "PROGRA~1",
+            "DOCUME~2.TXT",
+            "Windows.",
+            "Windows ",
+            "report.pdf.",
+            "x~12",
+            "CON",
+            "nul.txt",
+            "COM1",
+            "lpt9.log",
+        ] {
             assert!(windows_ambiguous_name(bad), "{bad}");
         }
-        for ok in ["Program Files", "file~old.txt", "a~b", "long-name~1.backup", "~1", ".", "..", "notes.txt"] {
+        for ok in [
+            "Program Files",
+            "file~old.txt",
+            "a~b",
+            "long-name~1.backup",
+            "~1",
+            ".",
+            "..",
+            "notes.txt",
+            "console",
+            "CONFIG.sys",
+        ] {
             assert!(!windows_ambiguous_name(ok), "{ok}");
         }
     }

@@ -135,6 +135,46 @@ pub fn cache(a: &Parsed) -> Res {
     Ok(())
 }
 
+/// `quarantine list` / `quarantine purge` (CLN-ACT-04).
+pub fn quarantine(a: &Parsed) -> Res {
+    let ctx = Ctx::open(a)?;
+    if a.cmd.sub == Some("list") {
+        let items = ctx.engine.quarantine_items();
+        if ctx.json {
+            println!("{}", json(&items));
+            return Ok(());
+        }
+        let info = ctx.engine.quarantine_info()?;
+        println!("Quarantine ({}): {} item(s), {}", info.dir.display(), info.items, bytes(info.bytes));
+        for i in &items {
+            println!("  {}  {}  expires {}", bytes(i.bytes), i.original.display(), crate::out::when(i.expires));
+        }
+        return Ok(());
+    }
+    let older = a.number("older-than")?;
+    // An explicit age deletes items before their own retention: ask, as `apply` does.
+    if older.is_some() && !a.flag("yes") {
+        if !crate::ctx::interactive() {
+            return Err(Fail::Usage("`quarantine purge --older-than` needs --yes when not on a terminal".into()));
+        }
+        if !crate::ctx::confirm_typed("Quarantined items older than that are deleted for good.", "PURGE") {
+            return Err(Fail::Error("cancelled: nothing was changed".into()));
+        }
+    }
+    let req =
+        mj_engine::api::QuarantinePurgeRequest { older_than_days: older.map(|d| u32::try_from(d).unwrap_or(u32::MAX)) };
+    let job = ctx.engine.quarantine_purge(req)?;
+    let jobs = ctx.wait_jobs(&[job.id])?;
+    let freed: u64 = jobs.iter().filter_map(|j| j.outcome.as_ref()).map(|o| o.bytes_saved).sum();
+    if ctx.json {
+        println!("{}", json(&jobs));
+    } else {
+        let left = ctx.engine.quarantine_info()?;
+        println!("Freed {}; {} item(s) remain in the quarantine.", bytes(freed), left.items);
+    }
+    Ok(())
+}
+
 fn find_schedule(ctx: &Ctx, name_or_id: &str) -> Res<Schedule> {
     let all = ctx.engine.schedules_list()?;
     let lower = name_or_id.to_lowercase();

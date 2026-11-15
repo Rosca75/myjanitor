@@ -79,7 +79,9 @@ impl Engine {
         let protected = ProtectedPaths::new(&settings.safety.protected_paths).with_app_dirs(&self.cfg.app_dirs());
         let guard = Guard::new(roots, protected);
         let tools = lock(&self.tools).clone();
-        let _ = std::fs::create_dir_all(&self.cfg.temp_dir);
+        // AUT-07: the user's temp folder when valid, else the engine's own.
+        let scratch = self.scratch_dir();
+        let _ = std::fs::create_dir_all(&scratch);
         let ctx = ExecContext {
             platform: self.platform(),
             guard: &guard,
@@ -87,7 +89,7 @@ impl Engine {
             services: Services { optimisers: &self.optimisers, archiver: Some(self.archiver.as_ref()), tools: &tools },
             settings: &settings,
             quarantine_dir: &self.cfg.quarantine_dir,
-            temp_dir: &self.cfg.temp_dir,
+            temp_dir: &scratch,
             run_id,
             job_id,
             step_id,
@@ -98,7 +100,32 @@ impl Engine {
     }
 
     pub(crate) fn exec_options(&self, confirmed: bool) -> ExecOptions {
-        ExecOptions { confirmed, trash_route: self.cfg.trash_route, ..ExecOptions::default() }
+        ExecOptions { confirmed, trash_route: self.trash_route(), ..ExecOptions::default() }
+    }
+
+    /// CLN-ACT-02: the route "Recycle Bin / Trash" removals take. A route pinned in the
+    /// config is always used as is. Otherwise the OS default applies, except on Windows
+    /// where the `windows_recycle_bin` setting switches the default (MyJanitor's
+    /// quarantine) to the real Recycle Bin.
+    pub(crate) fn trash_route(&self) -> mj_actions::TrashRoute {
+        if let Some(pinned) = self.cfg.trash_route {
+            return pinned;
+        }
+        let default = mj_actions::TrashRoute::default_for_os();
+        if cfg!(windows) && self.cfg.persist && lock(&self.settings).general.windows_recycle_bin {
+            mj_actions::TrashRoute::Platform
+        } else {
+            default
+        }
+    }
+
+    /// The name of the route for `app_info` (`recycle_bin`, `trash` or `quarantine`).
+    pub(crate) fn trash_route_name(&self) -> &'static str {
+        match self.trash_route() {
+            mj_actions::TrashRoute::Quarantine => "quarantine",
+            mj_actions::TrashRoute::Platform if cfg!(windows) => "recycle_bin",
+            mj_actions::TrashRoute::Platform => "trash",
+        }
     }
 
     /// Expand a plan step into action items from the current selection.
@@ -225,7 +252,8 @@ impl Engine {
         if plan.steps.is_empty() {
             return Err(Error::InvalidInput("the plan is empty".into()));
         }
-        let works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
+        let mut works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
+        skip_kept_copies(works.iter_mut());
         let total: u64 = works.iter().map(|w| w.items.len() as u64).sum();
         let job = self.new_job(JobKind::DryRun, None, None, "Dry run", total, plan.estimate.bytes_before);
         let plan_id = plan.id;
@@ -338,10 +366,10 @@ impl Engine {
                 can_online_only |= r.can_dehydrate && cfg!(windows);
             }
         }
-        let recycle = if cfg!(windows) && self.cfg.trash_route == mj_actions::TrashRoute::Quarantine {
-            "Keep in MyJanitor's quarantine (restorable, default)"
-        } else {
-            "Move to Recycle Bin / Trash (default)"
+        let recycle = match self.trash_route_name() {
+            "quarantine" => "Keep in MyJanitor quarantine (restorable, default)",
+            "recycle_bin" => "Move to the Recycle Bin (default; restore is best effort)",
+            _ => "Move to the Trash (default)",
         };
         let has_originals = matches!(step.action, Action::Optimise { .. } | Action::Archive { .. });
         let originals_options = if has_originals {
@@ -417,6 +445,7 @@ impl Engine {
             },
             action_label: label,
             permanent,
+            selection_digest: selection_digest(&work),
         })
     }
 
@@ -442,8 +471,19 @@ impl Engine {
             if confirm && conf.is_none() {
                 return Err(Error::ConfirmationRequired(format!("step {} ({}) needs confirmation", s.id.0, s.title)));
             }
-            works.push((self.build_step(s, conf)?, confirm));
+            let work = self.build_step(s, conf)?;
+            // G-04: the acknowledgement covers what the dialog showed, nothing else.
+            if confirm && conf.and_then(|c| c.selection_digest.as_deref()) != Some(selection_digest(&work).as_str()) {
+                return Err(Error::ConfirmationRequired(format!(
+                    "step {} ({}) changed since it was confirmed (a new scan or a selection change): \
+                     review it and confirm it again",
+                    s.id.0, s.title
+                )));
+            }
+            works.push((work, confirm));
         }
+        // G-03: the copy one step keeps is kept by every other step of the run too.
+        skip_kept_copies(works.iter_mut().map(|(w, _)| w));
         let now = Timestamp::now();
         let run_id = self.journal.next_run_id(now);
         let titles: Vec<String> = plan.steps.iter().map(|s| s.title.clone()).collect();
@@ -498,6 +538,8 @@ impl Engine {
             outcome.as_ref().map(|o| o.bytes_saved).unwrap_or(0)
         };
         self.reclaimed.fetch_add(saved, Ordering::Relaxed);
+        // CLN-ACT-04: expired quarantine items are purged after each completed step.
+        self.quarantine_auto_purge();
         self.emit(Event::HistoryChanged(HistoryChanged { run_id: Some(run.run_id) }));
         JobResult { outcome: outcome.or_else(|| Some(JobOutcome::default())), error, report: true }
     }
@@ -538,6 +580,96 @@ impl Engine {
         let _ = self.plan_changed(plan);
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
         done
+    }
+}
+
+/// G-04: a digest of what a step would act on: its action and every item's path, kind,
+/// scan stamp, subtree stamp and file id, in a stable order. The originals choice and the
+/// synced-folder choice are the dialog's own answers and are not part of it.
+pub(crate) fn selection_digest(w: &StepWork) -> String {
+    let mut lines: Vec<String> = w
+        .items
+        .iter()
+        .map(|i| {
+            format!(
+                "{}\t{:?}\t{}\t{}\t{:?}\t{:?}",
+                mj_core::pathutil::path_key(&i.path),
+                i.target,
+                i.expected.size,
+                i.expected.mtime.0,
+                i.expected_tree,
+                i.expected_id
+            )
+        })
+        .collect();
+    lines.sort();
+    let mut h = mj_core::hash::Sha256::new();
+    let action = with_originals(&w.step.action, Some(&OriginalsPolicy::RecycleBin));
+    h.update(format!("{action:?}\n{}\n", w.step.id.0).as_bytes());
+    for l in &lines {
+        h.update(l.as_bytes());
+        h.update(b"\n");
+    }
+    h.finish_hex()
+}
+
+/// True when `action`, run on a kept copy (or a folder holding one), could leave no copy of
+/// its group where the user can reach it: removals, moves, archives that take their
+/// sources away, and optimisations or archives that delete the originals (G-03).
+fn takes_copy_away(action: &Action) -> bool {
+    match action {
+        Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete | Action::Move { .. } => true,
+        Action::Archive { keep_sources, originals, .. } => !keep_sources || *originals == OriginalsPolicy::Delete,
+        Action::Optimise { originals, .. } => *originals == OriginalsPolicy::Delete,
+        _ => false,
+    }
+}
+
+/// G-03: "one copy is always kept" across the whole run. Every copy a step keeps (the
+/// survivor of a removed duplicate, the source of a link) is collected over every step;
+/// any item of any step that is such a copy, or a folder holding one, and whose action
+/// would take it away, is dropped from its step and reported, whatever the step order.
+pub(crate) fn skip_kept_copies<'a>(works: impl Iterator<Item = &'a mut StepWork>) {
+    use mj_core::pathutil::path_key;
+    let mut works: Vec<&mut StepWork> = works.collect();
+    // The key of every kept copy and of each of its ancestors: an item is refused when its
+    // own key is in the set (it is a kept copy, or holds one).
+    let mut held: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for w in works.iter() {
+        for i in &w.items {
+            for k in i.keep.as_ref().map(|k| &k.path).into_iter().chain(i.link_source.as_ref()) {
+                let mut cur = Some(k.as_path());
+                while let Some(p) = cur {
+                    if !held.insert(path_key(p)) {
+                        break;
+                    }
+                    cur = p.parent();
+                }
+            }
+        }
+    }
+    if held.is_empty() {
+        return;
+    }
+    for w in works.iter_mut() {
+        let mut skipped = 0u64;
+        let mut items = Vec::with_capacity(w.items.len());
+        let mut sizes = Vec::with_capacity(w.sizes.len());
+        for (item, size) in w.items.drain(..).zip(w.sizes.drain(..)) {
+            if takes_copy_away(&item.action) && held.contains(&path_key(&item.path)) {
+                skipped += 1;
+            } else {
+                items.push(item);
+                sizes.push(size);
+            }
+        }
+        w.items = items;
+        w.sizes = sizes;
+        if skipped > 0 {
+            w.warnings.push(format!(
+                "{skipped} item(s) skipped: they are, or hold, the copy another step keeps, so one copy is always kept"
+            ));
+        }
     }
 }
 

@@ -41,7 +41,7 @@ pub fn config(app: &TempDir, events: Arc<TimedSink>) -> EngineConfig {
     let mut cfg =
         EngineConfig::with_dirs(app.join("data"), app.join("cache"), app.join("journal"), app.join("quarantine"));
     cfg.temp_dir = app.join("tmp");
-    cfg.trash_route = mj_actions::TrashRoute::Quarantine;
+    cfg.trash_route = Some(mj_actions::TrashRoute::Quarantine);
     cfg.events = events;
     cfg
 }

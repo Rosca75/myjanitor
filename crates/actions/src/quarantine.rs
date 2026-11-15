@@ -113,7 +113,7 @@ pub struct QuarantineSummary {
     pub oldest: Option<Timestamp>,
 }
 
-/// Items currently held (entries `done` whose `retained_at` is in the quarantine).
+/// Items currently held (entries `done` or `undo_failed` whose `retained_at` is in the quarantine).
 pub fn summary(journal: &Journal, quarantine_dir: &Path) -> QuarantineSummary {
     let mut s = QuarantineSummary::default();
     for e in held(journal, quarantine_dir) {
@@ -124,11 +124,18 @@ pub fn summary(journal: &Journal, quarantine_dir: &Path) -> QuarantineSummary {
     s
 }
 
+/// The entries [`summary`] counts (held items in their own quarantine slot).
+pub fn held_entries(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
+    held(journal, quarantine_dir)
+}
+
 fn held(journal: &Journal, quarantine_dir: &Path) -> Vec<JournalEntry> {
     journal
         .all_entries()
         .into_iter()
-        .filter(|e| e.state == JournalState::Done)
+        // G-13: an item whose undo was refused (`undo_failed`, retryable) is still in its
+        // slot: it is counted and purged like any other held item.
+        .filter(|e| matches!(e.state, JournalState::Done | JournalState::UndoFailed))
         // Undo records copy their source's `retained_at`; they hold nothing.
         .filter(|e| e.undo_of.is_none())
         // F-05: only the slot the quarantine itself assigned to this entry is held (and

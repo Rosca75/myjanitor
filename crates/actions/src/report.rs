@@ -162,6 +162,65 @@ pub fn report_html(report: &Report, out: &mut dyn Write) -> Result<()> {
     w(out, "</body></html>\n")
 }
 
+/// CLN-ACT-11: report of one run as a paginated, text-only PDF table (path, size, action,
+/// status). Returns the number of characters the PDF font could not show (replaced by `?`).
+pub fn report_pdf(report: &Report, out: &mut dyn Write) -> Result<u64> {
+    let t = &report.totals;
+    let sub = format!(
+        "Started {} - {} files, {} done, {} skipped, {} failed, {} saved",
+        report.started.to_rfc3339(),
+        t.files,
+        t.succeeded,
+        t.skipped,
+        t.failed,
+        mj_core::size::format_bytes(t.bytes_saved)
+    );
+    let mut rows = Vec::new();
+    for s in &report.sections {
+        for i in &s.items {
+            rows.push(vec![
+                mj_core::pathutil::display_lossy(&i.path),
+                mj_core::size::format_bytes(i.bytes_before),
+                s.action.clone(),
+                status_name(i.status).to_string(),
+            ]);
+        }
+    }
+    let pdf = mj_formats::pdf::table::table_pdf(
+        &format!("MyJanitor report - {}", report.title),
+        &sub,
+        &["Path", "Size", "Action", "Status"],
+        &[6.0, 1.1, 1.7, 1.0],
+        &rows,
+    );
+    out.write_all(&pdf.bytes).map_err(Error::from)?;
+    Ok(pdf.replaced)
+}
+
+/// CLN-ACT-11: candidate list as a paginated, text-only PDF table (path, size, action, status).
+pub fn candidates_pdf(title: &str, candidates: &[Candidate], out: &mut dyn Write) -> Result<u64> {
+    let rows: Vec<Vec<String>> = candidates
+        .iter()
+        .map(|c| {
+            vec![
+                mj_core::pathutil::display_lossy(&c.path),
+                mj_core::size::format_bytes(c.size),
+                opportunity_name(&c.source),
+                if c.default_selected { "selected" } else { "not selected" }.to_string(),
+            ]
+        })
+        .collect();
+    let pdf = mj_formats::pdf::table::table_pdf(
+        title,
+        &format!("{} item(s)", candidates.len()),
+        &["Path", "Size", "Opportunity", "Status"],
+        &[6.0, 1.1, 1.7, 1.2],
+        &rows,
+    );
+    out.write_all(&pdf.bytes).map_err(Error::from)?;
+    Ok(pdf.replaced)
+}
+
 /// Audit log of journal entries (file, action, size before/after, SHA-256, time, state).
 pub fn audit_csv(entries: &[JournalEntry], out: &mut dyn Write) -> Result<()> {
     out.write_all(BOM).map_err(Error::from)?;

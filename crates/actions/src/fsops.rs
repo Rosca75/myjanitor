@@ -87,6 +87,57 @@ fn read_full(f: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(n)
 }
 
+/// G-02: the identity of one source entry at the moment it was copied: kind, size,
+/// mtime, and on Unix the device, inode and change time (any write, truncate, rename over
+/// or permission change moves the change time), plus a link's target. A cross-volume move
+/// deletes a source entry only while its fresh signature still equals this one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntrySig {
+    kind: char,
+    size: u64,
+    mtime: Option<std::time::SystemTime>,
+    extra: (u64, u64, i64, i64),
+    link: Option<PathBuf>,
+}
+
+/// The signature of `path` (never follows a link).
+pub fn entry_sig(path: &Path) -> std::io::Result<EntrySig> {
+    let md = fs::symlink_metadata(path)?;
+    let ft = md.file_type();
+    let kind = if ft.is_symlink() {
+        'l'
+    } else if ft.is_dir() {
+        'd'
+    } else if ft.is_file() {
+        'f'
+    } else {
+        'o'
+    };
+    #[cfg(unix)]
+    let extra = {
+        use std::os::unix::fs::MetadataExt;
+        (md.dev(), md.ino(), md.ctime(), md.ctime_nsec())
+    };
+    #[cfg(windows)]
+    let extra = {
+        use std::os::windows::fs::MetadataExt;
+        (md.creation_time(), u64::from(md.file_attributes()), 0, 0)
+    };
+    #[cfg(not(any(unix, windows)))]
+    let extra = (0, 0, 0, 0);
+    Ok(EntrySig {
+        kind,
+        size: if kind == 'f' { md.len() } else { 0 },
+        mtime: if kind == 'd' { None } else { md.modified().ok() },
+        extra: if kind == 'd' { (0, 0, 0, 0) } else { extra },
+        link: if kind == 'l' { fs::read_link(path).ok() } else { None },
+    })
+}
+
+/// G-02: what a verified copy holds, keyed by the path relative to the copied item (`""`
+/// for a single file), with each entry's signature as it was when it was copied.
+pub type CopyManifest = std::collections::BTreeMap<PathBuf, EntrySig>;
+
 /// Size and mtime of `path` (lstat).
 pub fn stamp_of(path: &Path) -> Result<FileStamp> {
     let md = fs::symlink_metadata(path).map_err(|e| Error::io(path, e))?;
@@ -204,11 +255,28 @@ pub fn copy_file_verified(src: &Path, dst: &Path) -> Result<ContentHash> {
     // Sibling of F-16: `dst` is removed on failure only once this call created it; an
     // existing file there is someone else's and is never touched.
     let out = OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| Error::io(dst, e))?;
-    let result = copy_file_inner(src, &smd, &mut input, out, dst);
+    let before = entry_sig(src).map_err(|e| Error::io(src, e))?;
+    let result = copy_file_inner(src, &smd, &mut input, out, dst).and_then(|h| {
+        // G-02: a file written while it was being read gives a copy that is neither the
+        // old nor the new content: refuse, the source stays as it is.
+        match entry_sig(src) {
+            Ok(after) if after == before && after.size == h.size => Ok(h),
+            Ok(_) => Err(Error::Changed(src.to_path_buf())),
+            Err(e) => Err(Error::io(src, e)),
+        }
+    });
     if result.is_err() {
         let _ = fs::remove_file(dst);
     }
     result
+}
+
+/// [`copy_file_verified`] that also returns the source's signature at copy time (G-02).
+fn copy_file_recorded(src: &Path, dst: &Path) -> Result<EntrySig> {
+    let sig = entry_sig(src).map_err(|e| Error::io(src, e))?;
+    copy_file_verified(src, dst)?;
+    // `copy_file_verified` already compared the signature before and after the read.
+    Ok(sig)
 }
 
 fn copy_file_inner(src: &Path, smd: &fs::Metadata, input: &mut File, mut out: File, dst: &Path) -> Result<ContentHash> {
@@ -250,21 +318,32 @@ fn copy_file_inner(src: &Path, smd: &fs::Metadata, input: &mut File, mut out: Fi
 /// Copy a file, folder or link to `dst` (must not exist), verifying every file. Links are
 /// recreated as links, never followed. On failure everything written is removed.
 pub fn copy_item_verified(src: &Path, dst: &Path) -> Result<()> {
+    copy_item_recorded(src, dst).map(|_| ())
+}
+
+/// [`copy_item_verified`] returning the manifest of what was copied (G-02).
+pub fn copy_item_recorded(src: &Path, dst: &Path) -> Result<CopyManifest> {
     let md = fs::symlink_metadata(src).map_err(|e| Error::io(src, e))?;
+    let mut manifest = CopyManifest::new();
     if md.file_type().is_symlink() {
-        return copy_link(src, dst);
+        let sig = entry_sig(src).map_err(|e| Error::io(src, e))?;
+        copy_link(src, dst)?;
+        manifest.insert(PathBuf::new(), sig);
+        return Ok(manifest);
     }
     if md.is_file() {
-        return copy_file_verified(src, dst).map(|_| ());
+        manifest.insert(PathBuf::new(), copy_file_recorded(src, dst)?);
+        return Ok(manifest);
     }
     // Sibling of F-16: the top folder is created here; only once it is ours is a failed
     // copy removed again (a folder that already existed is never touched).
     fs::create_dir(dst).map_err(|e| Error::io(dst, e))?;
-    let r = copy_tree(src, dst);
-    if r.is_err() {
+    let r = copy_tree(src, dst, &mut manifest);
+    if let Err(e) = r {
         let _ = fs::remove_dir_all(dst);
+        return Err(e);
     }
-    r
+    Ok(manifest)
 }
 
 fn copy_link(src: &Path, dst: &Path) -> Result<()> {
@@ -280,7 +359,7 @@ fn copy_link(src: &Path, dst: &Path) -> Result<()> {
     }
 }
 
-fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
+fn copy_tree(src: &Path, dst: &Path, manifest: &mut CopyManifest) -> Result<()> {
     // (source dir, destination dir, depth); folder mtimes/permissions applied afterwards.
     let mut stack = vec![(src.to_path_buf(), dst.to_path_buf(), 0usize)];
     let mut dirs = Vec::new();
@@ -295,13 +374,17 @@ fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
             let sp = e.path();
             let dp = d.join(e.file_name());
             let ft = e.file_type().map_err(|e| Error::io(&sp, e))?;
+            let rel = sp.strip_prefix(src).map(Path::to_path_buf).unwrap_or_else(|_| sp.clone());
             if ft.is_symlink() {
+                let sig = entry_sig(&sp).map_err(|e| Error::io(&sp, e))?;
                 copy_link(&sp, &dp)?;
+                manifest.insert(rel, sig);
             } else if ft.is_dir() {
                 fs::create_dir(&dp).map_err(|e| Error::io(&dp, e))?;
+                manifest.insert(rel, entry_sig(&sp).map_err(|e| Error::io(&sp, e))?);
                 stack.push((sp, dp, depth + 1));
             } else if ft.is_file() {
-                copy_file_verified(&sp, &dp)?;
+                manifest.insert(rel, copy_file_recorded(&sp, &dp)?);
             } else {
                 return Err(Error::unsupported("Copy", format!("{} is a special file", sp.display())));
             }
@@ -358,12 +441,23 @@ pub fn move_item_with(
     force_copy: bool,
     remove: &dyn Fn(&Path, bool) -> std::io::Result<()>,
 ) -> Result<MoveHow> {
+    move_item_hooked(src, dst, force_copy, &|| {}, remove)
+}
+
+/// [`move_item_with`] with a hook that runs after the copy verified and before the source
+/// is compared with it (tests: something writes into the source at that moment).
+pub fn move_item_hooked(
+    src: &Path,
+    dst: &Path,
+    force_copy: bool,
+    after_copy: &dyn Fn(),
+    remove: &dyn Fn(&Path, bool) -> std::io::Result<()>,
+) -> Result<MoveHow> {
     if force_copy {
         if exists(dst) {
             return Err(Error::Conflict(format!("{} already exists; nothing was overwritten", dst.display())));
         }
-        copy_item_verified(src, dst)?;
-        return Ok(remove_source(src, remove));
+        return copy_then_remove(src, dst, after_copy, remove);
     }
     match rename_no_replace_io(src, dst) {
         Ok(()) => {
@@ -375,12 +469,7 @@ pub fn move_item_with(
             }
             Ok(MoveHow::Renamed)
         }
-        Err(e) if is_cross_device(&e) => {
-            // Copy, verify (size + xxh64 re-read) and fsync everything first; a failure
-            // there removes the partial copy and leaves the source untouched.
-            copy_item_verified(src, dst)?;
-            Ok(remove_source(src, remove))
-        }
+        Err(e) if is_cross_device(&e) => copy_then_remove(src, dst, after_copy, remove),
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             Err(Error::Conflict(format!("{} already exists; nothing was overwritten", dst.display())))
         }
@@ -388,14 +477,77 @@ pub fn move_item_with(
     }
 }
 
+/// The cross-volume half of a move: copy, verify (size + xxh64 re-read) and fsync
+/// everything first (a failure there removes the partial copy and leaves the source
+/// untouched); then (G-02) compare the whole source with what was copied, and when anything
+/// changed, appeared or disappeared meanwhile remove our own copy again and refuse
+/// (`changed`: the source is complete and untouched); else delete the source entry by entry,
+/// each only while it is still exactly what was copied.
+fn copy_then_remove(
+    src: &Path,
+    dst: &Path,
+    after_copy: &dyn Fn(),
+    remove: &dyn Fn(&Path, bool) -> std::io::Result<()>,
+) -> Result<MoveHow> {
+    let manifest = copy_item_recorded(src, dst)?;
+    after_copy();
+    if !source_matches(src, &manifest) {
+        // The copy is ours (created by this call, verified) and the source is complete:
+        // removing the copy loses nothing, keeping it would leave a stale duplicate.
+        let _ = remove_item(dst);
+        return Err(Error::Changed(src.to_path_buf()));
+    }
+    Ok(remove_source(src, &manifest, remove))
+}
+
+/// G-02: true when every entry below `src` (and `src` itself) is in `manifest` with the
+/// same signature, and nothing in `manifest` is missing.
+fn source_matches(src: &Path, manifest: &CopyManifest) -> bool {
+    let Ok(top) = fs::symlink_metadata(src) else { return false };
+    if !top.is_dir() {
+        return manifest.len() == 1 && manifest.get(Path::new("")) == entry_sig(src).ok().as_ref();
+    }
+    let mut seen = 0usize;
+    let mut stack = vec![(src.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        let Ok(rd) = fs::read_dir(&d) else { return false };
+        for e in rd {
+            let Ok(e) = e else { return false };
+            let p = e.path();
+            let Ok(rel) = p.strip_prefix(src) else { return false };
+            let Ok(sig) = entry_sig(&p) else { return false };
+            if manifest.get(rel) != Some(&sig) {
+                return false;
+            }
+            seen += 1;
+            if sig.kind == 'd' {
+                stack.push((p, depth + 1));
+            }
+        }
+    }
+    seen == manifest.len()
+}
+
 /// F-09: delete the source of a verified cross-volume copy entry by entry, deepest first,
 /// carrying on past failures so as little as possible is left in two places; links are
-/// removed, never followed.
-fn remove_source(src: &Path, remove: &dyn Fn(&Path, bool) -> std::io::Result<()>) -> MoveHow {
+/// removed, never followed. G-02: an entry is deleted only while its fresh signature is
+/// still the one recorded when it was copied; anything else (changed, or not in the copy
+/// at all) is left and counted, and a folder is removed only when empty.
+fn remove_source(src: &Path, manifest: &CopyManifest, remove: &dyn Fn(&Path, bool) -> std::io::Result<()>) -> MoveHow {
     let mut left = 0u64;
+    let unchanged = |p: &Path| {
+        let rel = p.strip_prefix(src).unwrap_or(p);
+        match (entry_sig(p), manifest.get(rel)) {
+            (Ok(now), Some(was)) => now == *was,
+            _ => false,
+        }
+    };
     let is_dir = fs::symlink_metadata(src).map(|m| m.is_dir()).unwrap_or(false);
     if !is_dir {
-        if remove(src, false).is_err() {
+        if !unchanged(src) || remove(src, false).is_err() {
             left += 1;
         }
     } else {
@@ -403,7 +555,9 @@ fn remove_source(src: &Path, remove: &dyn Fn(&Path, bool) -> std::io::Result<()>
         let mut stack = vec![(src.to_path_buf(), false, 0usize)];
         while let Some((p, expanded, depth)) = stack.pop() {
             if expanded {
-                if remove(&p, true).is_err() {
+                let rel = p.strip_prefix(src).unwrap_or(&p);
+                let ours = rel.as_os_str().is_empty() || manifest.contains_key(rel);
+                if !ours || remove(&p, true).is_err() {
                     left += 1;
                 }
                 continue;
@@ -415,7 +569,7 @@ fn remove_source(src: &Path, remove: &dyn Fn(&Path, bool) -> std::io::Result<()>
                 let dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
                 if dir && depth < MAX_DEPTH {
                     stack.push((cp, false, depth + 1));
-                } else if remove(&cp, false).is_err() {
+                } else if !unchanged(&cp) || remove(&cp, false).is_err() {
                     left += 1;
                 }
             }
@@ -471,6 +625,28 @@ pub fn tree_size(path: &Path) -> u64 {
         }
     }
     total
+}
+
+/// G-14: links and empty folders below `path` (never following links; bounded depth).
+pub fn links_and_empty_dirs(path: &Path) -> (u64, u64) {
+    let (mut links, mut empty) = (0u64, 0u64);
+    let mut stack = vec![(path.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        let mut n = 0usize;
+        for e in rd.flatten() {
+            n += 1;
+            match e.file_type() {
+                Ok(t) if t.is_symlink() => links += 1,
+                Ok(t) if t.is_dir() && depth < MAX_DEPTH => stack.push((e.path(), depth + 1)),
+                _ => {}
+            }
+        }
+        if n == 0 && d != path {
+            empty += 1;
+        }
+    }
+    (links, empty)
 }
 
 /// Hex of an xxh64.

@@ -7,6 +7,10 @@ import { formatBytes } from './format.js';
 const mk = (scenario = 'results') => createMockBackend({ scenario, speed: 0 });
 const GB = 1024 ** 3;
 
+
+/** A dialog answer bound to what the dialog showed (G-04). */
+const ackOf = async (b, step_id) => ({ step_id, acknowledged: true, selection_digest: (await b.call('plan_confirmation_info', { step_id })).selection_digest });
+
 test('the mock answers every command of IPC.md or says not_implemented, never crashes', async () => {
   const b = mk();
   const reqs = { scope_set: { scope: { roots: ['C:\\a'], include: [], exclude: [] } }, scope_add_root: { path: 'C:\\x' }, scope_remove_root: { path: 'C:\\x' }, fs_list_dir: {}, opportunities_list: {}, step_detail: { opportunity_id: 'opt:audio' }, candidates_page: { opportunity_id: 'opt:audio' }, selection_set: { opportunity_id: 'opt:audio', selected: true }, selection_apply_keep_rule: { opportunity_id: 'det:exact_duplicates', rule: { rule: 'newest' } }, selection_reset: { opportunity_id: 'opt:audio' }, step_params_set: { opportunity_id: 'opt:audio' }, candidate_preview: { candidate_id: 1041 }, search_parse: { query: 'a' }, search_suggest: { query: 'ex', cursor: 2 }, plan_confirmation_info: { step_id: 12 }, history_run_detail: { run_id: 1 }, settings_set: { settings: {} }, protected_paths_set: { user: [] } };
@@ -85,7 +89,7 @@ test('plan_apply needs the acknowledgement of lossy steps (confirmation_required
   const plan = await b.call('plan_get');
   const lossy = plan.steps.find((s) => s.lossy);
   await assert.rejects(b.call('plan_apply', { confirmations: [{ step_id: lossy.id, acknowledged: false }] }), (e) => e.code === 'confirmation_required');
-  const started = await b.call('plan_apply', { confirmations: [{ step_id: lossy.id, acknowledged: true }] });
+  const started = await b.call('plan_apply', { confirmations: [await ackOf(b, lossy.id)] });
   assert.equal(started.jobs.length, 4);
   assert.ok(started.jobs.every((j) => j.state === 'queued' && j.kind === 'apply'));
   await assert.rejects(b.call('plan_apply', { confirmations: [] }), (e) => e.code === 'conflict');
@@ -102,7 +106,7 @@ test('the apply run emits state, progress and done events in order, then history
   const log = [];
   for (const e of ['job://state', 'job://progress', 'job://done', 'history://changed', 'plan://changed']) await b.listen(e, (p) => log.push([e, p.state ?? p.job?.state ?? '']));
   const plan = await b.call('plan_get');
-  await b.call('plan_apply', { confirmations: [{ step_id: plan.steps.find((s) => s.lossy).id, acknowledged: true }] });
+  await b.call('plan_apply', { confirmations: [await ackOf(b, plan.steps.find((s) => s.lossy).id)] });
   await b.whenIdle();
   const names = log.map((l) => l[0]);
   assert.ok(names.indexOf('job://state') < names.indexOf('job://progress'));
@@ -115,7 +119,7 @@ test('undo_last restores the newest undoable run and fails when there is none', 
   const b = mk();
   await assert.rejects(b.call('undo_last'), (e) => e.code === 'invalid_input');
   const plan = await b.call('plan_get');
-  await b.call('plan_apply', { confirmations: [{ step_id: plan.steps.find((s) => s.lossy).id, acknowledged: true }] });
+  await b.call('plan_apply', { confirmations: [await ackOf(b, plan.steps.find((s) => s.lossy).id)] });
   await b.whenIdle();
   const job = await b.call('undo_last');
   assert.equal(job.kind, 'undo');

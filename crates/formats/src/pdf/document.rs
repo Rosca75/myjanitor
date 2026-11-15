@@ -213,7 +213,11 @@ pub fn read_xref(data: &[u8]) -> Result<Xref> {
         let o = usize::try_from(off).ok().filter(|o| *o < data.len()).ok_or_else(|| err("xref offset out of range"))?;
         let trailer = if data[o..].starts_with(b"xref") {
             let (entries, trailer) = classic_section(data, o)?;
-            // Hybrid file: the hidden xref stream overrides this table.
+            // Hybrid file (ISO 32000-1, 7.5.8.4): readers consult the table first and the
+            // hidden xref stream only for what the table does not hold (objects the table
+            // lists as free, typically those in object streams). G-10: when the table and
+            // the stream disagree on an object the table lists as in use, other readers
+            // show something else than this one would: refuse rather than pick.
             if let Some(stm) = trailer.get(b"XRefStm").and_then(Object::as_int) {
                 let so = usize::try_from(stm).ok().filter(|s| *s < data.len()).ok_or_else(|| err("bad /XRefStm"))?;
                 let (sentries, sdict) = stream_section(data, so)?;
@@ -221,9 +225,24 @@ pub fn read_xref(data: &[u8]) -> Result<Xref> {
                     x.encrypted = true;
                 }
                 x.has_xref_stream = true;
+                let table: HashMap<u32, &XrefEntry> = entries.iter().map(|(n, e)| (*n, e)).collect();
+                for (n, se) in &sentries {
+                    if let Some(te) = table.get(n) {
+                        if !matches!(te, XrefEntry::Free) && *te != se {
+                            return Err(err(format!(
+                                "hybrid file: the cross-reference table and stream disagree on object {n}"
+                            )));
+                        }
+                    }
+                }
+                let (used, free): (Vec<_>, Vec<_>) =
+                    entries.into_iter().partition(|(_, e)| !matches!(e, XrefEntry::Free));
+                merge(&mut x.entries, used);
                 merge(&mut x.entries, sentries);
+                merge(&mut x.entries, free);
+            } else {
+                merge(&mut x.entries, entries);
             }
-            merge(&mut x.entries, entries);
             trailer
         } else {
             let (entries, dict) = stream_section(data, o)?;

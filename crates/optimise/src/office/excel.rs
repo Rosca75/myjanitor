@@ -667,7 +667,12 @@ fn ops(pkg: &mut Pkg, p: &ParamValues, rep: &mut OpReport) -> Result<()> {
         drop_pivot_records(pkg, &wb, rep)?;
     }
     if p.bool(P_STYLES, false) {
-        remove_unused_styles(pkg, &wb, rep)?;
+        // G-05 sibling: a template's named styles are part of what it provides.
+        if pk::is_template(pkg, &wb) {
+            rep.notes.push("template: cell styles are kept".into());
+        } else {
+            remove_unused_styles(pkg, &wb, rep)?;
+        }
     }
     if p.bool(P_CF, false) {
         dedupe_conditional_formats(pkg, &wb, rep)?;
