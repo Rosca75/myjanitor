@@ -401,10 +401,12 @@ mod tests {
         (vec![crate::tools::tool_at("cjxl", &exe)], log)
     }
 
+    #[cfg(unix)]
     fn reversible() -> ParamValues {
         ParamValues::new().with("format", spec::t("jxl")).with("lossless", spec::b(true))
     }
 
+    #[cfg(unix)]
     fn run_on(d: &TempDir, src: &Path, p: &ParamValues, tools: &[ExternalTool]) -> (OptimiseOutput, bool) {
         let (dst, c) = (d.join(format!("{}.jxl", src.file_name().unwrap().to_string_lossy())), CancelToken::new());
         let _ = std::fs::remove_file(&dst);
@@ -413,6 +415,7 @@ mod tests {
         (ImageLossy.optimise(&job).unwrap(), dst.exists())
     }
 
+    #[cfg(unix)]
     fn tiny_jpeg() -> Vec<u8> {
         let seg = |m: u8, body: &[u8]| {
             [vec![0xFF, m], ((body.len() + 2) as u16).to_be_bytes().to_vec(), body.to_vec()].concat()
