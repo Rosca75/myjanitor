@@ -2,10 +2,12 @@
 //! Owner: W3-A.
 //!
 //! On by default (lossless for what the user sees and edits): repack at the
-//! maximum deflate level, thumbnail removal, media deduplication (PPT-08) and
-//! removal of slide layouts no slide uses (PPT-04, at least one layout is kept
-//! per master). Opt-in: unused masters, speaker notes, comments, hidden slides,
-//! custom XML, embedded fonts, embedded chart workbooks. Picture and media
+//! maximum deflate level, thumbnail removal and media deduplication (PPT-08).
+//! Opt-in, and classed as changing the document (so they need the confirmation and
+//! cannot be scheduled): removal of slide layouts no slide uses (PPT-04, at least one
+//! layout is kept per master) and of unused masters, never applied to templates
+//! (`.potx`/`.potm`, whose layouts are their content: G-05); speaker notes, comments,
+//! hidden slides, custom XML, embedded fonts, embedded chart workbooks. Picture and media
 //! re-encoding (PPT-01/02/03/07/09) and font subsetting need codecs that are not
 //! bundled and are shown disabled with the reason.
 
@@ -45,16 +47,18 @@ fn settings() -> Vec<mj_core::SettingSpec> {
         toggle(
             P_LAYOUTS,
             "Remove unused slide layouts",
-            "Layouts no slide uses; one layout is always kept per master (OPT-PPT-04)",
-            true,
+            "Layouts no slide uses; one layout is always kept per master. Changes the deck: new slides can no \
+             longer use them. Never applied to templates (OPT-PPT-04)",
             false,
+            true,
         ),
         toggle(
             P_MASTERS,
             "Remove unused slide masters",
-            "Masters none of whose layouts is used by a slide; one master is always kept",
+            "Masters none of whose layouts is used by a slide; one master is always kept. Changes the deck. \
+             Never applied to templates",
             false,
-            false,
+            true,
         ),
         toggle(P_NOTES, "Remove speaker notes", "Deletes the notes of every slide (OPT-PPT-10)", false, true),
         toggle(P_COMMENTS, "Remove comments", "Deletes review comments on slides (OPT-PPT-10)", false, true),
@@ -157,6 +161,7 @@ fn remove_layouts(pkg: &mut Pkg, pres: &str, rep: &mut OpReport) -> Result<()> {
         pk::remove_rel_and_refs(pkg, master, rid)?;
     }
     if !list.is_empty() {
+        rep.lossy = true;
         let names: Vec<_> = list.iter().map(|x| x.3.clone()).collect();
         rep.notes.push(format!("{} unused slide layout(s) removed: {}", list.len(), names.join(", ")));
     }
@@ -188,6 +193,7 @@ fn remove_masters(pkg: &mut Pkg, pres: &str, rep: &mut OpReport) -> Result<()> {
         pk::remove_rel_and_refs(pkg, pres, rid)?;
     }
     if !drop.is_empty() {
+        rep.lossy = true;
         rep.notes.push(format!("{} unused slide master(s) removed", drop.len()));
     }
     Ok(())
@@ -359,10 +365,15 @@ fn ops(pkg: &mut Pkg, p: &ParamValues, rep: &mut OpReport) -> Result<()> {
             rep.notes.push(format!("comments removed from {n} slide(s)"));
         }
     }
-    if p.bool(P_MASTERS, false) {
+    // G-05: a template's layouts and masters are what the template is for.
+    let template = pk::is_template(pkg, &pres);
+    if template && (p.bool(P_MASTERS, false) || p.bool(P_LAYOUTS, false)) {
+        rep.notes.push("template: slide layouts and masters are kept".into());
+    }
+    if p.bool(P_MASTERS, false) && !template {
         remove_masters(pkg, &pres, rep)?;
     }
-    if p.bool(P_LAYOUTS, true) {
+    if p.bool(P_LAYOUTS, false) && !template {
         remove_layouts(pkg, &pres, rep)?;
     }
     if p.bool(P_CUSTOM_XML, false) {
@@ -389,7 +400,9 @@ fn columns(e: &FileEntry) -> BTreeMap<String, String> {
     }
     if let Ok(mut pkg) = mj_formats::ooxml::Package::open_file(&e.path, Default::default()) {
         if let Ok(pres) = pk::main_part(&mut pkg) {
-            if let Ok(list) = unused_layouts(&mut pkg, &pres) {
+            if let Ok(list) =
+                unused_layouts(&mut pkg, &pres).map(|l| if pk::is_template(&mut pkg, &pres) { Vec::new() } else { l })
+            {
                 if !list.is_empty() {
                     m.insert("unused_layouts".into(), list.iter().map(|x| x.3.clone()).collect::<Vec<_>>().join(", "));
                 }
@@ -432,9 +445,15 @@ impl Optimiser for PowerPoint {
 
     fn estimate(&self, entry: &FileEntry, params: &ParamValues) -> Result<Estimate> {
         let mut extra = 0;
-        if params.bool(P_LAYOUTS, true) {
+        if params.bool(P_LAYOUTS, false) {
             if let Ok(mut pkg) = mj_formats::ooxml::Package::open_file(&entry.path, Default::default()) {
-                if let Ok(pres) = pk::main_part(&mut pkg) {
+                if let Ok(pres) = pk::main_part(&mut pkg).and_then(|p| {
+                    if pk::is_template(&mut pkg, &p) {
+                        Err(mj_core::Error::InvalidInput("template".into()))
+                    } else {
+                        Ok(p)
+                    }
+                }) {
                     for (_, _, l, _) in unused_layouts(&mut pkg, &pres).unwrap_or_default() {
                         extra += pkg.entry(&l).map(|e| e.compressed_size).unwrap_or(0);
                     }
@@ -454,7 +473,7 @@ impl Optimiser for PowerPoint {
             ctx,
             &[FileKind::Pptx],
             &["docx", "xlsx", "docm", "xlsm"],
-            |_, _| "Lossless repack, duplicate media and unused layouts".into(),
+            |_, _| "Lossless repack and duplicate media".into(),
             columns,
         )
     }
@@ -478,9 +497,14 @@ pub(crate) mod tests {
     /// A deck: 1 master with 3 layouts (only layout1 used), slide1 (notes, comments,
     /// image1), slide2 hidden (image2 = copy of image1), an embedded font, custom XML.
     pub fn deck(labelled: bool, signed: bool) -> Vec<u8> {
+        deck_as(labelled, signed, "presentation.main")
+    }
+
+    /// [`deck`] with another main-part content type (`template.main` for a `.potx`).
+    pub fn deck_as(labelled: bool, signed: bool, main: &str) -> Vec<u8> {
         let img = noise(20_000, 7);
         let mut ov = vec![
-            ("ppt/presentation.xml".to_string(), ct("presentation.main")),
+            ("ppt/presentation.xml".to_string(), ct(main)),
             ("ppt/slideMasters/slideMaster1.xml".into(), ct("slideMaster")),
             ("ppt/slides/slide1.xml".into(), ct("slide")),
             ("ppt/slides/slide2.xml".into(), ct("slide")),
@@ -558,7 +582,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn defaults_are_lossless_dedup_layouts_thumbnail() {
+    fn defaults_are_lossless_dedup_thumbnail_and_keep_layouts() {
         let t = TempDir::new("ppt").unwrap();
         let (o, dst) = run_on(&PowerPoint, &t, "deck.pptx", &deck(false, false), &ParamValues::new());
         assert!(o.skipped.is_none(), "{o:?}");
@@ -571,14 +595,14 @@ pub(crate) mod tests {
         assert!(!n.contains(&"docProps/thumbnail.jpeg"));
         assert!(!n.contains(&"ppt/media/image2.png"), "duplicate merged");
         assert!(part(&all, "ppt/slides/_rels/slide2.xml.rels").unwrap().contains("../media/image1.png"));
-        assert!(!n.contains(&"ppt/slideLayouts/slideLayout2.xml") && !n.contains(&"ppt/slideLayouts/slideLayout3.xml"));
-        assert!(!n.contains(&"ppt/slideLayouts/_rels/slideLayout3.xml.rels"));
-        assert!(!n.contains(&"ppt/media/image3.png"), "only used by a removed layout");
+        // G-05: layouts stay unless asked for.
         let master = part(&all, "ppt/slideMasters/slideMaster1.xml").unwrap();
-        assert_eq!(master.matches("sldLayoutId ").count(), 1);
-        assert!(!part(&all, "[Content_Types].xml").unwrap().contains("slideLayout2"));
+        assert_eq!(master.matches("sldLayoutId ").count(), 3);
         // Opt-in content is kept by default.
         for keep in [
+            "ppt/slideLayouts/slideLayout2.xml",
+            "ppt/slideLayouts/slideLayout3.xml",
+            "ppt/media/image3.png",
             "ppt/notesSlides/notesSlide1.xml",
             "ppt/comments/comment1.xml",
             "ppt/slides/slide2.xml",
@@ -592,7 +616,43 @@ pub(crate) mod tests {
         for p in ["ppt/slides/slide1.xml", "ppt/theme/theme1.xml", "ppt/media/image1.png", "ppt/presentation.xml"] {
             assert_eq!(part(&src, p), part(&all, p), "{p}");
         }
+        assert!(!o.notes.iter().any(|x| x.contains("Layout 2")), "{:?}", o.notes);
+    }
+
+    #[test]
+    fn g05_layout_removal_is_opt_in_changes_the_deck_and_never_touches_templates() {
+        let spec = settings().into_iter().find(|s| s.key == P_LAYOUTS).unwrap();
+        assert!(spec.lossy && matches!(spec.kind, mj_core::SettingKind::Toggle { default: false }));
+        let masters = settings().into_iter().find(|s| s.key == P_MASTERS).unwrap();
+        assert!(masters.lossy);
+        let mut p = ParamValues::new();
+        p.set(P_LAYOUTS, ParamValue::Bool(true));
+        p.set(P_MASTERS, ParamValue::Bool(true));
+        let t = TempDir::new("ppt-g05").unwrap();
+        let (o, dst) = run_on(&PowerPoint, &t, "deck.pptx", &deck(false, false), &p);
+        assert!(o.skipped.is_none(), "{o:?}");
+        assert!(o.lossy, "removing layouts is reported as changing the document");
+        let all = read_all(&dst);
+        let n = names(&all);
+        assert!(!n.contains(&"ppt/slideLayouts/slideLayout2.xml") && !n.contains(&"ppt/slideLayouts/slideLayout3.xml"));
+        assert!(!n.contains(&"ppt/slideLayouts/_rels/slideLayout3.xml.rels"));
+        assert!(!n.contains(&"ppt/media/image3.png"), "only used by a removed layout");
+        assert!(!part(&all, "[Content_Types].xml").unwrap().contains("slideLayout2"));
         assert!(o.notes.iter().any(|x| x.contains("Layout 2")), "{:?}", o.notes);
+        for name in ["template.potx", "template.potm"] {
+            let t = TempDir::new("ppt-g05t").unwrap();
+            let main = if name.ends_with('x') { "template.main" } else { "template.macroEnabled.main" };
+            let (o, dst) = run_on(&PowerPoint, &t, name, &deck_as(false, false, main), &p);
+            let all = read_all(&dst);
+            let n = names(&all);
+            for keep in
+                ["ppt/slideLayouts/slideLayout2.xml", "ppt/slideLayouts/slideLayout3.xml", "ppt/media/image3.png"]
+            {
+                assert!(n.contains(&keep), "{name}: {keep} removed from a template");
+            }
+            assert!(!o.lossy, "{name}");
+            assert!(o.notes.iter().any(|x| x.contains("template")), "{name}: {:?}", o.notes);
+        }
     }
 
     #[test]
