@@ -78,8 +78,8 @@ Notes starting with "Requires ffmpeg on PATH" describe the reason the card shows
 
 | ID | Feature | Tier | Platform | Owner | Status | Note |
 |---|---|---|---|---|---|---|
-| CLN-DET-01 | Exact duplicates (staged: size, partial hash, full hash) | T1 | Win+Linux | W2-B | done | Staged size, head/middle/tail 64 KB partial hash, full xxHash64 plus SHA-256 confirmation; hard links and online-only files never reported as duplicates; keep rules. |
-| CLN-DET-02 | Similar images (perceptual hash, similarity threshold) | T2 | Win+Linux | W2-B | done | dHash and pHash on JPEG (EXIF thumbnail or bounded zune-jpeg decode) and PNG. HEIC, RAW and WebP are not decoded; interlaced PNG is exact-match only; EXIF orientation is not applied. Only near-identical groups are pre-selected. |
+| CLN-DET-01 | Exact duplicates (staged: size, partial hash, full hash) | T1 | Win+Linux | W2-B | done | Staged size, head/middle/tail 64 KB partial hash, full xxHash64 plus SHA-256 confirmation; hard links and online-only files never reported as duplicates, and a copy with other hard links promises no space and is never pre-selected (it is kept in preference); keep rules. Detectors running together read each file once per stage. |
+| CLN-DET-02 | Similar images (perceptual hash, similarity threshold) | T2 | Win+Linux | W2-B | done | dHash and pHash on JPEG (EXIF thumbnail or bounded zune-jpeg decode) and PNG; a thumbnail match is always confirmed on the decoded main picture, and flat images never match. HEIC, RAW and WebP are not decoded; interlaced PNG is exact-match only; EXIF orientation is not applied. Only near-identical groups are pre-selected. |
 | CLN-DET-03 | Similar videos | T3 | Win+Linux | W3-C | not-targeted | Not built: no detector and no UI entry. |
 | CLN-DET-04 | Same music (tags or audio fingerprint) | T3 | Win+Linux | W3-C | not-targeted | Not built: no detector and no UI entry. |
 | CLN-DET-05 | Duplicate meeting recordings (same meeting from several sources, audio fingerprint) | T3 | Win+Linux | W3-C | not-targeted | Not built: no detector and no UI entry. |

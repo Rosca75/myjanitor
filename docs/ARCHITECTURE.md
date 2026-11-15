@@ -185,14 +185,14 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 |---|---|
 | Store | **One global store** `<cache dir>/scan-cache.bin` (D-106), keyed by `path_key` (lexically normalised, `/` separators, case-folded on Windows; an undecodable byte of a non-Unicode name is written as NUL plus two hex digits, so a key always extends its folder's key). Overlapping roots share entries; no per-root merge logic. |
 | Validity | Stamp `{size: u64, mtime_ns: i64}` compared by **exact equality**. An entry whose mtime is within 2 s of the scan start, or in the future, is not trusted (still being written / clock skew). Optional `FileId` (Linux `st_dev`+`st_ino`) carries fingerprints across renames when `(id, size, mtime)` match. |
-| Contents | `mj_core::Fingerprints`: `partial`, `full` (xxh64), `sha256`, `dhash`, `phash`, `width`, `height`, `exif` (`Some` only when really captured), `flags` (`unreadable`, `no_thumbnail`, `from_thumbnail`, `decode_failed`). Every stage is an explicit `Option`; **no zero sentinels** (D-006). Derived scores (quality score) are never cached. |
+| Contents | `mj_core::Fingerprints`: `partial`, `full` (xxh64), `sha256`, `dhash`, `phash`, `width`, `height`, `exif` (`Some` only when really captured), `flags` (`unreadable`, `no_thumbnail`, `from_thumbnail`, `decode_failed`, `main_decoded`). Every stage is an explicit `Option`; **no zero sentinels** (D-006). Derived scores (quality score) are never cached. |
 | Versions | `format_version` (layout) and `algo_version` = `FINGERPRINT_ALGO_VERSION` (meaning: window layout, seed, grid, downsampler). Any mismatch = empty cache. Bump `algo_version` whenever the meaning of a stored value changes, not only its shape. |
 | Format | In-house little-endian binary, documented in `crates/scan/src/cache/format.rs`: magic `MJCACHE\0`, versions, entry count, records with a presence bitmask then only present fields, trailer = xxh64 of everything before it. |
 | Load | Whole file into memory at engine start; bad magic, version, trailer or any parse error → empty cache, one log line, never fatal. |
 | Save | After a completed scan (and after hash stages finish): write `<file>.tmp` in the same directory, `sync_all`, rename over the target (atomic). Cache write failures are ignored. |
 | Pruning | On save, drop entries under a scanned root that the completed scan did not see, and entries under roots that no longer exist (D-006). |
 | Lookup | `FingerprintStore::get(path, stamp)` returns data only on an exact stamp match; `put` merges stages under the same stamp and replaces on a different stamp, so later scans add stages lazily (e.g. a full hash to an entry that only had a partial). |
-| Staged hashing | Size buckets across **all** files (cache hits included, D-006); partial = xxh64 over head + middle + tail windows of 64 KiB (D-005), whole file when ≤ 192 KiB (stored as `full` too); full hash streamed in 1 MiB buffers for partial collisions only; SHA-256 (or byte compare) confirmation of a group before deletion is offered; files sharing a `FileId` are hard links, not duplicates. |
+| Staged hashing | Size buckets across **all** files (cache hits included, D-006); partial = xxh64 over head + middle + tail windows of 64 KiB (D-005), whole file when ≤ 192 KiB (stored as `full` too); full hash streamed in 1 MiB buffers for partial collisions only; SHA-256 (or byte compare) confirmation of a group before deletion is offered; files sharing a `FileId` are hard links, not duplicates, and a member with other hard links frees nothing (size 0, never pre-selected, kept in preference; W6-B D-B40). Partial and full reads are single-flight across the concurrently running content detectors (W6-B D-B43). |
 | Diagnostics | Every failed open/read/decode counted (`Diagnostics::unreadable`, `skipped["no_thumbnail"]`, ...); the UI must say "N files could not be compared". |
 
 Perceptual matching follows research §4-§7 unchanged: box-averaged grids,
@@ -203,8 +203,13 @@ confidence from the group diameter, deterministic ordering, no aspect-ratio
 bucketing, no full-decode fallback for files without an embedded thumbnail
 **for HEIC**. Deviation D-2B04: a JPEG without an embedded thumbnail (and any PNG) is
 fully decoded by default within limits (64 MiB file, 64 MP, 32768 px a side, at most
-two images over 16 MP at once); the `decode_full` toggle restores the strict
-reference behaviour (`skipped["no_thumbnail"]`).
+two images over 16 MP or 16 MiB at once; PNG decodes in O(width) memory); the
+`decode_full` toggle restores the strict reference behaviour (`skipped["no_thumbnail"]`).
+Deviation W6-B D-B39: an EXIF thumbnail is used only when it lies in the APP1 segment,
+is at most 1024x1024 and has the main frame's shape, and a thumbnail fingerprint never
+decides a match: every thumbnail-sourced image that would join a group is decoded in
+full and the grouping redone. A zero dHash is unusable in every mode (D-B41). Clusters
+over 2048 members report the 2t diameter bound (D-B44).
 
 ## 7. Safety model
 

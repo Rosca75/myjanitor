@@ -524,3 +524,105 @@ The audio card's own cover-art handling was not part of this change.
 JPEG COM segments (captions, scanning notes) were removed by the default thumbnail pass and
 by "Remove GPS position only", without a word in the labels. They are now removed only by
 "Remove all metadata", which says so; the labels of the other policies are true again.
+
+# W6-B, fourth task: review round 2, duplicate detection
+
+Findings DUP-1 and DUP-3 to DUP-8 (DUP-2 is the other lane's). Rule applied wherever a fix
+was a judgement call: a false duplicate is the worst outcome, so report fewer matches and
+pre-select fewer.
+
+## D-B39 A thumbnail is a hint, never a verdict (DUP-1)
+
+A JPEG was fingerprinted from its EXIF thumbnail whenever one decoded, and nothing compared
+it with the main picture. Editors that copy EXIF verbatim (lossless crop or rotation,
+retouching) leave the old thumbnail behind, so a retouched or cropped picture was "100 %
+similar" to its original and pre-selected; the test `embedded_thumbnail_is_used_before_a_full_decode`
+pinned that as intended. Now:
+
+- the thumbnail is read only inside the APP1 segment (it was read from anywhere after it),
+  only up to 1024x1024 pixels (refused from its header, before any pixel), and only when
+  its shape matches the main frame within 3 % (orientation-aware: a lossless rotation, a
+  crop or a padded thumbnail fails, and the image is decoded in full instead);
+- a thumbnail fingerprint never decides a match: after grouping, every thumbnail-sourced
+  image that is part of a group is decoded in full (gated like any decode), its hashes
+  replace the thumbnail's (cached with the new `MAIN_DECODED` flag, since the cache merge
+  keeps `FROM_THUMBNAIL`), and the grouping is redone until no unchecked thumbnail is in a
+  group. This also corrects fingerprints cached by earlier versions, so no cache version
+  bump was needed. The check runs whatever `decode_full` says: that setting is about images
+  without a thumbnail, and checking a proposed match costs one decode per candidate only;
+- an image whose main picture cannot be decoded (too large, corrupt) keeps its thumbnail
+  fingerprint, and its group is shown with nothing pre-selected.
+
+The fast path stays for the common case (an image that matches nothing is never decoded).
+The old test now asserts the opposite and three tests were added (stale thumbnail never
+groups in either `decode_full` mode, a good thumbnail still groups and is pre-selected,
+a thumbnail of another shape is not used). Not covered by a test: a thumbnail whose IFD
+offset points past the APP1 segment (building one needs a hand-made EXIF layout).
+
+## D-B40 A hard-linked copy frees nothing and is kept in preference (DUP-4)
+
+The dupes lanes keep one path per file id, so any member with `links > 1` has its other
+names outside the group: removing it frees nothing. The row's size is now 0 (like an
+online-only row, `Candidate.size` is reclaimable bytes), so the savings account
+(`crates/engine/src/savings.rs`), which counts a removed row's whole size, agrees with the
+dry run's `hardlink_not_freed` without any change of its own. Such a row is never
+pre-selected and says why ("Shares its data with another file name: removing it frees no
+space"). In a group of identical files (exact, attachment copies, fonts) a hard-linked member
+is kept in preference, the keep rule choosing among such members
+(`KeepRule::pick_same_content`), because keeping it lets removing the plain copies free
+their space; the exception is a preferred-folder rule whose choice lies in that folder (an
+explicit wish wins; the hard-linked name it leaves is listed, not pre-selected). Similar
+images and version chains are different files, so their keeper is the rule's alone. The
+keep rule re-applied from the UI (`mj_actions::select::apply_keep_rule`) follows the same
+two rules. Hard-linked rows of the other detectors (`crates/detect/src/common.rs`) still
+count their whole size; that is outside this task (open item).
+
+## D-B41 A zero dHash is unusable in every mode (DUP-3)
+
+The pHash of a flat image is rounding noise that is identical for different grey levels, so
+pHash mode grouped a black, a grey and a white picture at distance 0 and pre-selected them.
+A fingerprint with a zero dHash (no cell darker than its left neighbour: flat images first
+of all) is now unusable in every mode and counted as `flat_image`. Checking the dHash rather
+than changing `phash()` also covers hashes already cached. Cost: an image whose rows only
+ever brighten left to right is no longer matched in pHash mode either (it already was not in
+dHash and "both" modes). Two unit assertions that pinned the old pHash behaviour were
+changed.
+
+## D-B42 Decodes stay within a memory bound (DUP-5)
+
+The PNG decoder inflated the whole raw image (8 bytes a pixel for RGBA16, 128 MB at 16 MP,
+from a file that compresses ~1000:1) on every I/O worker. It now inflates the IDAT chunks in
+place, one scanline at a time, unfilters against the previous line and feeds the grid
+accumulator: memory is O(width) (a counting-allocator test decodes 2000x2000 RGBA16 under
+4 MB). Files over 16 MiB are read and decoded under the two-at-a-time gate, and so is a JPEG
+whose frame header lies outside the 128 KiB window (its size is unknown). Whole-file reads of
+JPEGs and PNGs up to 16 MiB still run on every worker (bounded by the 64 MiB read limit and
+the worker count); that is the accepted remaining cost.
+
+## D-B43 One read per file and stage across detectors (DUP-7)
+
+The engine runs the content detectors together and each runs the exact lane over its files,
+reading the cache only at the start of a stage. Partial and full reads are now single-flight
+within the process (`staged/flight.rs`): the first reader stores its result in the
+fingerprint cache before it lets the others go, and they take it from there. A failed read
+is redone by each waiter (each reports its own error), never shared. This was chosen over
+reordering the engine (running exact duplicates alone first), which is in the other lane's
+files and would serialise the scan. Not done: a cap on the total number of I/O threads across
+detectors running together (open item).
+
+## D-B44 Huge near-identical sets (DUP-8)
+
+Leader refinement partitions the remaining set in one pass instead of `Vec::contains` per
+item; a cluster over 2048 members reports the bound 2t as its diameter (every member is
+within t of the leader), which can only lower the confidence and so never adds a
+pre-selection; the cancel token is checked for every item searched and every leader. The
+BK-tree candidate search itself stays O(n x neighbours) for one huge dense set; it is now
+cancellable.
+
+## D-B45 Permanent read failures are neutral for the serial fallback (DUP-6)
+
+The adaptive reader counted every failure towards "concurrent reads fail on this
+filesystem", so a run of permission-denied files (a non-admin scan of `C:\`) dropped the rest
+of the stage to one thread. Only retryable outcomes count now; denied, vanished, changed
+and panicked items are neutral (neither done nor failed for the verdict).
+
