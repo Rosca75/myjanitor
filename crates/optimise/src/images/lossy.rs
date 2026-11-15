@@ -159,6 +159,24 @@ fn ratio(s: &EncodeSpec, jpeg_in: bool) -> f64 {
     r.clamp(0.03, 1.5)
 }
 
+/// What the encoders will read: `Ok(true)` for a JPEG, `Ok(false)` for a PNG, by content. `Err` (a
+/// reason to skip) for anything else, and for a picture followed by data other than zero padding
+/// (a motion photo's video, an appended file): a WebP, AVIF or JPEG XL file cannot carry it, so the
+/// conversion would delete it without the user asking (OPT-1).
+fn source_kind(buf: &[u8]) -> std::result::Result<bool, &'static str> {
+    const TRAILER: &str = "Data follows the picture (for example a motion photo's video); converting would lose it";
+    let has_trailer = |t: &[u8]| t.iter().any(|&b| b != 0);
+    if buf.starts_with(&mj_formats::png::SIGNATURE) {
+        let png = mj_formats::png::parse(buf).map_err(|_| "The PNG could not be read completely")?;
+        return if has_trailer(&png.trailing) { Err(TRAILER) } else { Ok(false) };
+    }
+    if mj_formats::jpeg::is_jpeg(buf) {
+        let end = mj_formats::jpeg::image_end(buf).ok_or("The JPEG does not end where expected")?;
+        return if has_trailer(&buf[end..]) { Err(TRAILER) } else { Ok(true) };
+    }
+    Err("The file is not a JPEG or PNG picture, whatever its name says")
+}
+
 impl Optimiser for ImageLossy {
     fn info(&self) -> OptimiserInfo {
         OptimiserInfo {
@@ -198,7 +216,20 @@ impl Optimiser for ImageLossy {
     fn optimise(&self, job: &OptimiseJob<'_>) -> Result<OptimiseOutput> {
         job.cancel.checkpoint()?;
         let before = std::fs::metadata(job.src).map_err(|e| Error::io(job.src, e))?.len();
-        let s = encode_spec(job.params, job.src).ok_or_else(|| Error::InvalidInput("unknown image format".into()))?;
+        let mut s =
+            encode_spec(job.params, job.src).ok_or_else(|| Error::InvalidInput("unknown image format".into()))?;
+        // The encoders read the content, not the name: route by content (OPT-3) and never convert a
+        // file whose picture is followed by data the new format cannot hold (OPT-1).
+        let src = match common::read_bounded(job.src, common::MAX_IN_MEMORY) {
+            Ok(b) => b,
+            Err(Error::Unsupported { reason, .. }) => return Ok(common::skipped(before, reason)),
+            Err(e) => return Err(e),
+        };
+        match source_kind(&src) {
+            Ok(is_jpeg) => s.input_is_jpeg = is_jpeg,
+            Err(reason) => return Ok(common::skipped(before, reason)),
+        }
+        drop(src);
         if s.resize.is_some() && s.target != Target::Webp {
             return Err(Error::unsupported(
                 "resize",
@@ -356,6 +387,91 @@ mod tests {
             progress: &NullProgress,
         });
         assert!(r.is_err() && !dst2.exists());
+    }
+
+    /// A fake cjxl that logs its arguments and writes a tiny JPEG XL codestream; returns (tools, log).
+    #[cfg(unix)]
+    fn fake_cjxl(d: &TempDir) -> (Vec<ExternalTool>, std::path::PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let (exe, log) = (d.join("cjxl"), d.join("cjxl-args.txt"));
+        let body =
+            format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '\\377\\012tiny' > \"$2\"\n", log.display());
+        std::fs::write(&exe, body).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (vec![crate::tools::tool_at("cjxl", &exe)], log)
+    }
+
+    fn reversible() -> ParamValues {
+        ParamValues::new().with("format", spec::t("jxl")).with("lossless", spec::b(true))
+    }
+
+    fn run_on(d: &TempDir, src: &Path, p: &ParamValues, tools: &[ExternalTool]) -> (OptimiseOutput, bool) {
+        let (dst, c) = (d.join(format!("{}.jxl", src.file_name().unwrap().to_string_lossy())), CancelToken::new());
+        let _ = std::fs::remove_file(&dst);
+        let job =
+            OptimiseJob { src, dst: &dst, params: p, tools, temp_dir: d.path(), cancel: &c, progress: &NullProgress };
+        (ImageLossy.optimise(&job).unwrap(), dst.exists())
+    }
+
+    fn tiny_jpeg() -> Vec<u8> {
+        let seg = |m: u8, body: &[u8]| {
+            [vec![0xFF, m], ((body.len() + 2) as u16).to_be_bytes().to_vec(), body.to_vec()].concat()
+        };
+        [
+            vec![0xFF, 0xD8],
+            seg(0xC0, &[8, 0, 8, 0, 8, 1, 1, 0x11, 0]),
+            seg(0xDA, &[1, 1, 0, 0, 63, 0]),
+            vec![0x55; 70_000],
+            vec![0xFF, 0xD9],
+        ]
+        .concat()
+    }
+
+    /// OPT-3: the "Reversible" preset on a PNG named .jpg must encode its pixels losslessly (`-d 0`),
+    /// not ask cjxl for a JPEG transcode it cannot do (and then encode at its lossy default).
+    #[cfg(unix)]
+    #[test]
+    fn reversible_preset_on_png_named_jpg_is_pixel_lossless() {
+        let d = TempDir::new("lossy-misnamed").unwrap();
+        let (tools, log) = fake_cjxl(&d);
+        let src = d.write("screenshot.jpg", &rgb_png(400, 200, &[], 1)).unwrap();
+        let (r, written) = run_on(&d, &src, &reversible(), &tools);
+        let args = std::fs::read_to_string(&log).unwrap();
+        assert!(args.contains("-d\n0\n") && !args.contains("--lossless_jpeg=1"), "{args}");
+        assert!(!r.lossy && written);
+        // A real JPEG named .png is transcoded as a JPEG (the bit-exact path).
+        let src = d.write("photo.png", &tiny_jpeg()).unwrap();
+        let (r, _) = run_on(&d, &src, &reversible(), &tools);
+        assert!(std::fs::read_to_string(&log).unwrap().contains("--lossless_jpeg=1") && !r.lossy);
+        // Neither a JPEG nor a PNG: skipped, the encoder is not run.
+        std::fs::remove_file(&log).unwrap();
+        let src = d.write("notes.jpg", &[b'x'; 70_000]).unwrap();
+        let (r, written) = run_on(&d, &src, &reversible(), &tools);
+        assert!(r.skipped.is_some() && !written && !log.exists());
+    }
+
+    /// OPT-1: a motion photo (video appended after the JPEG's EOI) or a PNG with data after IEND is
+    /// never converted: the new file could not carry that data.
+    #[cfg(unix)]
+    #[test]
+    fn pictures_followed_by_data_are_never_converted() {
+        let d = TempDir::new("lossy-trailer").unwrap();
+        let (tools, log) = fake_cjxl(&d);
+        let video: Vec<u8> = b"ftypmp42 video".iter().copied().cycle().take(50_000).collect();
+        for (name, bytes) in [
+            ("PXL_1.MP.jpg", [tiny_jpeg(), video.clone()].concat()),
+            ("a.png", [rgb_png(400, 200, &[], 1), video.clone()].concat()),
+        ] {
+            let src = d.write(name, &bytes).unwrap();
+            for p in [reversible(), ParamValues::new().with("format", spec::t("jxl"))] {
+                let (r, written) = run_on(&d, &src, &p, &tools);
+                assert!(r.skipped.unwrap().contains("motion photo") && !written && !log.exists(), "{name}");
+            }
+        }
+        // Zero padding after the EOI is no data: the conversion runs.
+        let src = d.write("padded.jpg", &[tiny_jpeg(), vec![0; 4096]].concat()).unwrap();
+        let (r, written) = run_on(&d, &src, &reversible(), &tools);
+        assert!(r.skipped.is_none() && written);
     }
 
     /// Runs only where the real encoders exist; reports which ones it exercised.
