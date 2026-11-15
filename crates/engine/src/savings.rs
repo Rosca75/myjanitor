@@ -195,6 +195,15 @@ fn holds(outer: &str, inner: &str) -> bool {
         && (outer.ends_with('\0') || inner.as_bytes()[outer.len()] == 0)
 }
 
+/// Groups by id; the first of a repeated id wins, as a linear search would.
+fn by_first_id(groups: &[mj_core::CandidateGroup]) -> HashMap<GroupId, &mj_core::CandidateGroup> {
+    let mut m = HashMap::with_capacity(groups.len());
+    for g in groups {
+        m.entry(g.id).or_insert(g);
+    }
+    m
+}
+
 /// The account of `parts`: one [`Tally`] per participant, in order.
 pub(crate) fn tally(parts: &[Part<'_>], skip: Badges, cross: bool) -> Vec<Tally> {
     let mut out: Vec<Tally> = Vec::with_capacity(parts.len());
@@ -204,6 +213,9 @@ pub(crate) fn tally(parts: &[Part<'_>], skip: Badges, cross: bool) -> Vec<Tally>
         let rec = p.rec;
         let f = frees(p.action);
         let links = matches!(p.action, Action::Hardlink | Action::Reflink);
+        // Looked up only by the links, once per card (not once per selected row).
+        let by_id: HashMap<GroupId, &mj_core::CandidateGroup> =
+            if links { by_first_id(&rec.groups) } else { HashMap::new() };
         let survivors = if removes_copy(p.action) { group_survivors(rec, skip) } else { HashMap::new() };
         let mut acted: HashSet<GroupId> = HashSet::new();
         let mut kept_here: Vec<std::path::PathBuf> = Vec::new();
@@ -237,7 +249,7 @@ pub(crate) fn tally(parts: &[Part<'_>], skip: Badges, cross: bool) -> Vec<Tally>
                 }
             } else {
                 t.selected += 1;
-                let group = c.group.and_then(|g| rec.groups.iter().find(|x| x.id == g));
+                let group = c.group.and_then(|g| by_id.get(&g).copied());
                 let lost = c.group.is_some_and(|g| matches!(survivors.get(&g), Some(None)))
                     || (links && !group.and_then(|g| g.keeper.as_ref()).is_some_and(|k| *k != c.path));
                 if lost {
@@ -699,5 +711,33 @@ mod tests {
         let mut keys = [tree_key("/a/b.txt".as_ref()), tree_key("/a/b/c".as_ref()), tree_key("/a/b".as_ref())];
         keys.sort();
         assert_eq!(keys, [tree_key("/a/b".as_ref()), tree_key("/a/b/c".as_ref()), tree_key("/a/b.txt".as_ref())]);
+    }
+
+    #[test]
+    #[ignore = "timing; run with --ignored --nocapture"]
+    fn tally_is_linear_in_the_number_of_groups() {
+        let n = 150_000u64;
+        let cands: Vec<Candidate> = (0..n)
+            .map(|i| Candidate { group: Some(GroupId(i / 2)), ..cand(i, &format!("/r/{i:07}.bin"), 1000, 1000, true) })
+            .collect();
+        let groups: Vec<CandidateGroup> = (0..n / 2)
+            .map(|g| CandidateGroup {
+                id: GroupId(g),
+                kind: GroupKind::Exact,
+                label: String::new(),
+                confidence: 100.0,
+                keeper: Some(format!("/r/{:07}.bin", g * 2).into()),
+                members: vec![format!("/r/{:07}.bin", g * 2).into(), format!("/r/{:07}.bin", g * 2 + 1).into()],
+            })
+            .collect();
+        let r = rec("d", SafetyClass::Reversible, cands, groups);
+        for a in [Action::Trash, Action::Hardlink] {
+            let t = std::time::Instant::now();
+            let out = tally(&[Part { rec: &r, action: &a }], Badges::empty(), true);
+            let took = t.elapsed();
+            println!("{a:?}: {took:?}");
+            assert!(out[0].selected > 0);
+            assert!(took < std::time::Duration::from_secs(2), "tally took {took:?}: quadratic group lookup?");
+        }
     }
 }
