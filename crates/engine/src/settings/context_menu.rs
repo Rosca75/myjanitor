@@ -175,10 +175,12 @@ pub fn desktop_file(exe: &Path) -> String {
     s
 }
 
-/// A Nautilus script: Nautilus passes the selection as arguments.
+/// A Nautilus script: Nautilus passes the selection as names relative to the current folder.
+/// The script makes the name absolute and passes it in the inline `--flag=value` form, so a
+/// folder named like a launch option (`--data-dir=x`) is never read as one (IPC-11).
 pub fn nautilus_script(exe: &Path, e: &Entry) -> String {
     format!(
-        "#!/bin/sh\n# {MARKER}\nfor p in \"$@\"; do\n  exec {} {} \"$p\"\ndone\n",
+        "#!/bin/sh\n# {MARKER}\nfor p in \"$@\"; do\n  case \"$p\" in /*) ;; *) p=\"$PWD/$p\" ;; esac\n  exec {} {}=\"$p\"\ndone\n",
         sh_quote(&exe.display().to_string()),
         e.flag
     )
@@ -386,8 +388,30 @@ mod tests {
     fn nautilus_script_is_a_quoted_shell_script() {
         let s = nautilus_script(Path::new("/opt/it's/myjanitor"), &ENTRIES[1]);
         assert!(s.starts_with("#!/bin/sh\n"));
-        assert!(s.contains("exec '/opt/it'\\''s/myjanitor' --duplicates \"$p\""));
+        assert!(s.contains("exec '/opt/it'\\''s/myjanitor' --duplicates=\"$p\""));
+        assert!(s.contains("p=\"$PWD/$p\""));
         assert!(s.contains(MARKER));
+    }
+
+    /// IPC-11: run the generated script with a folder named like a flag.
+    #[cfg(unix)]
+    #[test]
+    fn nautilus_script_never_hands_a_folder_name_over_as_a_flag() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = mj_core::testutil::TempDir::new("nautilus-script").unwrap();
+        let fake = dir.write("fake-exe", b"#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = dir.write("script.sh", nautilus_script(&fake, &ENTRIES[1]).as_bytes()).unwrap();
+        for name in ["--data-dir=cfg", "plain"] {
+            let out = std::process::Command::new("sh").arg(&script).arg(name).current_dir(dir.path()).output().unwrap();
+            let got = String::from_utf8(out.stdout).unwrap();
+            let lines: Vec<&str> = got.lines().collect();
+            assert_eq!(lines.len(), 1, "{got}");
+            assert!(lines[0].starts_with("--duplicates=/"), "{got}");
+            assert!(lines[0].ends_with(&format!("/{name}")), "{got}");
+        }
+        let abs = std::process::Command::new("sh").arg(&script).arg("/abs/--x").output().unwrap();
+        assert_eq!(String::from_utf8(abs.stdout).unwrap(), "--duplicates=/abs/--x\n");
     }
 
     #[test]
