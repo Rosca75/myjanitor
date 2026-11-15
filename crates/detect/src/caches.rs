@@ -329,6 +329,23 @@ mod tests {
         assert_eq!(rel(&out, t.path()), vec!["u/.config/Microsoft/Teams/Cache"]);
     }
 
+    /// RF-7: a temp child folder is aged by the newest thing inside it, not by its own
+    /// mtime (which only moves when a direct child is added or removed).
+    #[test]
+    fn rf7_a_temp_folder_with_a_fresh_file_inside_is_not_listed() {
+        let t = TempDir::new("caches-rf7").unwrap();
+        t.write("u/AppData/Local/Temp/work/out/fresh.bin", b"running").unwrap();
+        t.write("u/AppData/Local/Temp/done/out/old.bin", b"finished").unwrap();
+        let old = mj_core::Timestamp::now().add_days(-3).to_system_time();
+        mj_core::testutil::set_mtime(&t.join("u/AppData/Local/Temp/done/out/old.bin"), old).unwrap();
+        for d in ["work/out", "work", "done/out", "done"] {
+            mj_core::testutil::set_mtime(&t.join("u/AppData/Local/Temp").join(d), old).unwrap();
+        }
+        let out = run(&AppCaches, &index_of(t.path()), &Default::default());
+        assert_eq!(rel(&out, t.path()), vec!["u/AppData/Local/Temp/done"]);
+        assert_eq!(out.diagnostics.skipped["recently_modified"], 1);
+    }
+
     #[test]
     fn built_in_rules_group_per_application_and_leave_user_data_alone() {
         let t = fixture();

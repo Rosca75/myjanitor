@@ -193,7 +193,13 @@ pub fn run_rules(
             out.diagnostics.skip("runtime_session_file");
             continue;
         }
-        if r.aged && !common::before(e.modified, cutoff) {
+        // RF-7: a folder is as recent as the newest thing inside it; its own mtime only
+        // moves when a direct child is added or removed. An unknown time counts as recent.
+        let old_enough = || {
+            common::before(e.modified, cutoff)
+                && (e.kind != EntryKind::Dir || ix.subtree(pos).all(|j| common::before(ix.entry(j).modified, cutoff)))
+        };
+        if r.aged && !old_enough() {
             out.diagnostics.skip("recently_modified");
             continue;
         }

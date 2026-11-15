@@ -355,3 +355,13 @@ read collapses (the old behaviour). Also: a directory skipped as another filesys
 a hole for the cache, so scanning only the outer location no longer prunes the
 fingerprints that a scan of the mount recorded. On Windows a folder-mounted volume is a
 reparse point that `scope_add_root` refuses, so this is a Linux/macOS case.
+
+## D-B26 A temp folder is as old as the newest thing in it (RF-7)
+
+The minimum-age gate of `aged` rules (`**/AppData/Local/Temp/*`, `**/Windows/Temp/*`,
+`/tmp/*`, `/var/tmp/*`) read the matched entry's own mtime. For a folder that only moves
+when a direct child is added or removed, so a three-day-old build folder with a file
+written ten minutes ago passed the 24 h gate and was pre-selected whole. A matched folder
+now passes only when it and every entry below it (files and subfolders) are older than the
+cutoff; an unknown time counts as recent, as before. The subtree is read only for aged
+rules that matched a folder.
