@@ -60,9 +60,11 @@ pub struct Opportunity {
     /// One-line description with live numbers ("214 files in 61 groups · keeps newest").
     pub description: String,
     pub safety: SafetyClass,
-    /// Sum of selected candidates' current size.
+    /// Current size of the rows `saving` counts.
     pub size_before: u64,
-    /// Estimated saving of the selected candidates with the current parameters.
+    /// Bytes this card frees with its current selection and action: the number the card
+    /// shows. In `opportunities_list` it is the card's share of `SavingsSummary::total`
+    /// (every file counted once, see `overlap`); in `step_detail` the card on its own.
     pub saving: u64,
     pub confidence: Confidence,
     /// Count shown on the card, in `unit`s.
@@ -71,6 +73,18 @@ pub struct Opportunity {
     /// Total candidates (selected or not).
     pub candidates: u64,
     pub selected: u64,
+    /// Saving of selected rows that is not in `saving` because another opportunity counts
+    /// the same file (it frees more there, removes the folder holding it, or keeps the
+    /// file as the last copy of a group). `saving + overlap` is the card on its own.
+    #[serde(default)]
+    pub overlap: u64,
+    /// Current size of the rows listed for review: not selected (and selectable), or
+    /// selected while the card's action changes nothing. Never part of `saving`.
+    #[serde(default)]
+    pub to_review: u64,
+    /// Number of rows behind `to_review`.
+    #[serde(default)]
+    pub to_review_count: u64,
     /// Union of the candidates' badges.
     pub badges: Badges,
     pub default_action: Action,
@@ -89,23 +103,33 @@ pub struct Opportunity {
 }
 
 /// Totals for the hero card and status strip.
+///
+/// `total` is what applying every available opportunity with its current selection and
+/// action frees, every file counted once. It equals the sum of the cards' `saving` and
+/// `reversible + opt_in + review_only` (each counted row in the bucket of its class).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SavingsSummary {
     pub total: u64,
     pub reversible: u64,
     pub opt_in: u64,
     pub review_only: u64,
+    /// Available opportunities with at least one selected row (what `total` is "across").
     pub opportunities: u64,
+    /// Sum of the cards' `overlap`: savings listed by several opportunities, counted once.
+    #[serde(default)]
+    pub overlap: u64,
+    /// Available opportunities that list rows for review (`Opportunity::to_review_count`).
+    #[serde(default)]
+    pub review_opportunities: u64,
     /// Bytes freed by runs applied this session (status strip "Reclaimed").
     #[serde(default)]
     pub reclaimed: u64,
 }
 
 impl SavingsSummary {
-    /// Add one opportunity's saving to its bucket.
+    /// Count `saving` bytes of rows of class `safety`: into the total and their bucket.
     pub fn add(&mut self, safety: SafetyClass, saving: u64) {
         self.total += saving;
-        self.opportunities += 1;
         match safety.bucket() {
             SavingsBucket::Reversible => self.reversible += saving,
             SavingsBucket::OptIn => self.opt_in += saving,

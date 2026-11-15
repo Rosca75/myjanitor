@@ -159,14 +159,44 @@ No request → `ScanStatus`. Used at start-up and after a webview reload.
 
 ### `opportunities_list`
 `OpportunitiesRequest` → `OpportunitiesList`. Cards with at least one candidate,
-filtered by tab and sorted. `summary` and `counts` always cover every tab.
+filtered by tab and sorted. `summary` and `counts` always cover every tab
+(`counts.all = clean + optimise + archive + review_only`).
 Tabs: `clean`/`optimise`/`archive` exclude review-only cards, `review_only`
 holds them. Disabled cards (`availability.state = "disabled"`: optimiser tool
 missing, platform-specific, or analysis not available in this build) are
 included even without candidates, sorted after the available ones, and never
-counted in `summary`, so the UI can show them greyed with the reason. `summary`
-buckets each selected row by its own safety class; `summary.reclaimed` is what
-runs applied this session freed.
+counted in `summary`, so the UI can show them greyed with the reason.
+
+**The savings invariant.** `summary.total` is what applying every available
+card with its current selection and action (the plan step's action for a card in
+the plan, else `default_action`) frees, **every file counted once**:
+
+- `summary.total` = the sum of `saving` over the available cards of the `all`
+  tab = `reversible + opt_in + review_only` (each counted row goes to the bucket
+  of its own safety class);
+- a selected row counts `size − size after the action`: a removal (trash,
+  quarantine, permanent delete, move, hard link, reflink, make online-only)
+  counts the whole row, an optimisation, archive or transparent compression its
+  estimate, and an action that leaves the original in place (`none`, copy,
+  light copy, archive keeping its sources, decompress) counts nothing;
+- never counted: rows that are not selected or are locked, online-only rows,
+  groups whose every copy is selected under a removing action (apply keeps one
+  copy and skips the group);
+- when several cards select the same file, the card that frees most for it
+  counts it (the earlier card on a tie); a row inside a folder another row
+  removes or shrinks is counted once, by whichever frees more (the folder, or
+  everything counted inside it); a row another card keeps as the surviving copy
+  of a group (or a folder holding one) is not counted as removed. What a card
+  loses this way is its `overlap`; `summary.overlap` is their sum;
+- rows a card lists but does not count because nothing is selected (or its
+  action is `none`) are reported as `to_review` / `to_review_count`, never
+  added to `saving` or `summary.total`; `summary.review_opportunities` is the
+  number of cards that have some.
+
+`summary.opportunities` is the number of available cards with at least one
+selected row; `summary.reclaimed` is what runs applied this session freed. The
+plan follows the same rules over its own steps (see `Plan`), so with every card
+in the plan the plan total equals `summary.total`.
 
 ```json OpportunitiesRequest
 {"tab":"all","sort":"saving"}
@@ -175,7 +205,9 @@ runs applied this session freed.
 ### `step_detail`
 `OpportunityRequest` → `StepDetail`. B2 header, summary line, sub-group tabs
 (`opportunity.sub_groups`), right panel (`opportunity.presets`, `opportunity.settings`,
-`opportunity.params`) and the diagnostics note.
+`opportunity.params`) and the diagnostics note. The numbers here (`summary`, and
+the `opportunity`'s own `saving`) describe the step on its own, with the card's
+default action: every row for itself, `overlap` always 0.
 
 ```json OpportunityRequest
 {"opportunity_id":"det:exact_duplicates"}
@@ -326,7 +358,11 @@ No request → `Job` (`kind: "dry_run"`). *Spawns.* "Estimate exactly (dry run)"
 every check of a real run without changing anything; optimisations are run
 into the temp folder to measure. Removal figures are the scan's allocated sizes
 (folders: subtree totals) of the items that pass every check, hard-link aware
-(removing one of several links frees nothing). `plan://dry_run` is sent after
+(removing one of several links frees nothing). Every file is measured once: a
+row another step of the plan counts (see `Plan`) is left out of this step's
+measurement and named in the step's `warnings`; steps that leave the original
+in place (copy, light copy, archive keeping its sources) measure a saving of 0.
+`plan://dry_run` is sent after
 the plan (`plan://changed`) carries the measured estimates. The result arrives as `plan://dry_run`; the
 plan's step estimates become `confidence: "exact"` where measured.
 
@@ -525,7 +561,9 @@ No request → `ExternalTool[]`. Detect again (after the user installs a tool or
 edits `settings.tool_paths`).
 
 ### `drives_list`
-No request → `Drive[]`. Hero drive bars: free now and after the plan.
+No request → `Drive[]`. Hero drive bars: free now and after the plan. The
+`plan_saving` of all drives adds up to the plan's estimated saving (each counted
+row on the volume that holds it), so the UI refetches it on `plan://changed`.
 
 ### `disk_usage_tree`
 `DiskUsageRequest` → `DiskNode`. Folder tree by size for the treemap and the
@@ -629,18 +667,24 @@ paths; global exclusions from settings are added by the engine.
 #### Opportunity
 
 `size_before`, `saving`, `count` and `selected` follow the current selection.
+`saving` is the number the card shows: in `opportunities_list` the card's share
+of `summary.total` (see the savings invariant there), `size_before` the current
+size of the rows it counts, and `overlap` what the card would free on top of
+that on its own (the same files are counted by another card). `to_review` /
+`to_review_count` describe the rows listed for review and are never part of
+`saving`. `count` = `selected` = the ticked, actionable rows.
 `rank` orders "Biggest saving first". `availability` disabled = show greyed
 with `reason`. `params` holds the current values of `settings` (keys missing
 from `params` take the spec default).
 
 ```json Opportunity
-{"id":"opt:audio","source":{"optimiser":"audio"},"category":"optimise","title":"Meeting recordings","description":"Speech preset, silences trimmed","safety":"lossy_opt_in","size_before":5153960755,"saving":4509715660,"confidence":"estimated","count":23,"unit":"files","candidates":25,"selected":23,"badges":["duplicate","confidential","synced"],"default_action":{"kind":"optimise","optimiser":"audio","params":{},"output":{"mode":"replace"},"originals":{"policy":"recycle_bin"},"keep_if_not_smaller":true},"available_actions":["optimise"],"presets":[{"id":"speech","label":"Speech","description":"Opus 24 kbps mono · smallest","values":{"codec":"opus","bitrate_kbps":24,"downmix_mono":true},"lossy":true},{"id":"lossless","label":"Lossless","description":"FLAC · no quality loss, ~45 % smaller","values":{"codec":"flac"},"lossy":false}],"settings":[{"key":"downmix_mono","label":"Downmix to mono","kind":{"type":"toggle","default":true}},{"key":"remove_silences","label":"Remove long silences","kind":{"type":"toggle","default":true},"lossy":true},{"key":"max_pause_s","label":"Max pause","kind":{"type":"number","default":2,"min":1,"max":30,"step":1,"unit":"s max"}},{"key":"transcribe","label":"Transcribe on this PC, then archive audio","help":"Keeps a searchable text file next to each meeting","kind":{"type":"toggle","default":false},"advanced":true,"disabled_reason":"Requires a local transcription tool"}],"params":{"downmix_mono":true,"remove_silences":true,"max_pause_s":2},"sub_groups":[{"key":"same_meeting","label":"Same meeting twice","count":6},{"key":"needs_transcript","label":"Need transcript","count":4},{"key":"skipped","label":"Skipped","count":2}],"availability":{"state":"available"},"in_plan":true,"rank":4509715660.0,"feature_ids":["OPT-AUD-01","OPT-AUD-04","OPT-AUD-05","OPT-AUD-06"]}
+{"id":"opt:audio","source":{"optimiser":"audio"},"category":"optimise","title":"Meeting recordings","description":"Speech preset, silences trimmed","safety":"lossy_opt_in","size_before":5153960755,"saving":4509715660,"confidence":"estimated","count":23,"unit":"files","candidates":25,"selected":23,"overlap":123731968,"to_review":220200960,"to_review_count":1,"badges":["duplicate","confidential","synced"],"default_action":{"kind":"optimise","optimiser":"audio","params":{},"output":{"mode":"replace"},"originals":{"policy":"recycle_bin"},"keep_if_not_smaller":true},"available_actions":["optimise"],"presets":[{"id":"speech","label":"Speech","description":"Opus 24 kbps mono · smallest","values":{"codec":"opus","bitrate_kbps":24,"downmix_mono":true},"lossy":true},{"id":"lossless","label":"Lossless","description":"FLAC · no quality loss, ~45 % smaller","values":{"codec":"flac"},"lossy":false}],"settings":[{"key":"downmix_mono","label":"Downmix to mono","kind":{"type":"toggle","default":true}},{"key":"remove_silences","label":"Remove long silences","kind":{"type":"toggle","default":true},"lossy":true},{"key":"max_pause_s","label":"Max pause","kind":{"type":"number","default":2,"min":1,"max":30,"step":1,"unit":"s max"}},{"key":"transcribe","label":"Transcribe on this PC, then archive audio","help":"Keeps a searchable text file next to each meeting","kind":{"type":"toggle","default":false},"advanced":true,"disabled_reason":"Requires a local transcription tool"}],"params":{"downmix_mono":true,"remove_silences":true,"max_pause_s":2},"sub_groups":[{"key":"same_meeting","label":"Same meeting twice","count":6},{"key":"needs_transcript","label":"Need transcript","count":4},{"key":"skipped","label":"Skipped","count":2}],"availability":{"state":"available"},"in_plan":true,"rank":4509715660.0,"feature_ids":["OPT-AUD-01","OPT-AUD-04","OPT-AUD-05","OPT-AUD-06"]}
 ```
 
 #### OpportunitiesList
 
 ```json OpportunitiesList
-{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":18,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
+{"generation":3,"items":[],"summary":{"total":52183474995,"reversible":44238230323,"opt_in":5476083302,"review_only":2469606195,"opportunities":15,"overlap":123731968,"review_opportunities":4,"reclaimed":0},"counts":{"all":18,"clean":11,"optimise":7,"archive":1,"review_only":3},"scanned_at":1794582160000000000,"cached":true}
 ```
 
 #### StepSummary
@@ -652,7 +696,7 @@ from `params` take the spec default).
 #### StepDetail
 
 ```json StepDetail
-{"opportunity":{"id":"det:temp_files","source":{"detector":"temp_files"},"category":"clean","title":"Temporary files","description":"Leftover temporary and partial downloads","safety":"reversible","size_before":1200,"saving":1200,"confidence":"exact","count":2,"unit":"files","candidates":2,"selected":2,"badges":[],"default_action":{"kind":"trash"},"available_actions":["trash","quarantine","permanent_delete"],"presets":[],"settings":[],"params":{},"availability":{"state":"available"},"in_plan":false,"rank":1200.0,"feature_ids":["CLN-DET-10"]},"summary":{"candidates":2,"selected":2,"size_before":1200,"size_after":0,"saving":1200,"confidence":"exact"},"diagnostics":{"unreadable":1,"unreadable_sample":["/home/me/.cache/locked.tmp"],"skipped":{},"notes":[]},"lossy":false,"safety":"reversible"}
+{"opportunity":{"id":"det:temp_files","source":{"detector":"temp_files"},"category":"clean","title":"Temporary files","description":"Leftover temporary and partial downloads","safety":"reversible","size_before":1200,"saving":1200,"confidence":"exact","count":2,"unit":"files","candidates":2,"selected":2,"overlap":0,"to_review":0,"to_review_count":0,"badges":[],"default_action":{"kind":"trash"},"available_actions":["trash","quarantine","permanent_delete"],"presets":[],"settings":[],"params":{},"availability":{"state":"available"},"in_plan":false,"rank":1200.0,"feature_ids":["CLN-DET-10"]},"summary":{"candidates":2,"selected":2,"size_before":1200,"size_after":0,"saving":1200,"confidence":"exact"},"diagnostics":{"unreadable":1,"unreadable_sample":["/home/me/.cache/locked.tmp"],"skipped":{},"notes":[]},"lossy":false,"safety":"reversible"}
 ```
 
 #### Candidate
@@ -746,6 +790,16 @@ keep_if_not_smaller}`, `archive{format, level, dest?, originals, keep_sources}`,
 ```
 
 #### Plan
+
+Step estimates follow the savings invariant of `opportunities_list`, over the
+steps of the plan instead of every card: `estimate.bytes_before − bytes_after`
+is what the step frees with its action, a file several steps act on is counted
+by the step that frees most for it (checklist code `counted_once` says how many
+rows this concerns), and rows apply will skip (`estimate.skipped`: every copy
+of a group selected, the copy another step keeps) count nothing.
+`plan.estimate` is the sum of the steps. A step alone in the plan may therefore
+show more than its card, whose `overlap` is counted by a card that is not in
+the plan.
 
 ```json Plan
 {"id":5,"name":"Your plan","steps":[{"id":12,"opportunity":"det:exact_duplicates","title":"Exact duplicates","summary":"Keep newest · others to Recycle Bin","action":{"kind":"trash"},"params":{"keep_rule":"newest"},"selection":{"include":[],"exclude":[8]},"estimate":{"files":153,"bytes_before":9234179686,"bytes_after":0,"confidence":"exact","skipped":0},"safety":"reversible","lossy":false},{"id":15,"opportunity":"opt:audio","title":"Meeting recordings","summary":"Opus 24 kbps mono · originals to Recycle Bin","action":{"kind":"optimise","optimiser":"audio","params":{"codec":"opus","bitrate_kbps":24},"output":{"mode":"replace"},"originals":{"policy":"recycle_bin"},"keep_if_not_smaller":true},"params":{"codec":"opus","bitrate_kbps":24},"estimate":{"files":23,"bytes_before":5153960755,"bytes_after":644245094,"confidence":"estimated","skipped":0},"safety":"lossy_opt_in","lossy":true}],"estimate":{"files":176,"bytes_before":14388140441,"bytes_after":644245094,"confidence":"estimated","skipped":0},"checklist":[{"level":"ok","code":"undo_window","text":"Every reversible step can be undone from History for 30 days"},{"level":"warning","code":"confirmation_steps","text":"1 step will ask for confirmation"},{"level":"ok","code":"skipped_confidential","text":"14 signed or sensitivity-labelled files are skipped"},{"level":"info","code":"synced_files","text":"Synced OneDrive files are made online-only, never deleted in the cloud"}],"updated":1794582245000000000}

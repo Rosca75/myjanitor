@@ -115,6 +115,9 @@ pub struct Engine {
     pub(crate) tools: Mutex<Vec<ExternalTool>>,
     /// Run metadata the journal does not hold (scope roots, step titles), persisted.
     pub(crate) run_meta: Mutex<std::collections::BTreeMap<u64, crate::history::RunMeta>>,
+    /// The cards' shares of the hero total, with the hash of what they were computed
+    /// from (`Engine::card_shares`): the overview asks for them on every tab change.
+    pub(crate) shares: Mutex<Option<crate::opportunities::SharesCache>>,
     /// Bytes freed by runs applied this session.
     pub(crate) reclaimed: AtomicU64,
     pub(crate) shutting_down: AtomicBool,
@@ -178,6 +181,7 @@ impl Engine {
             schedules: Mutex::new(Vec::new()),
             tools: Mutex::new(Vec::new()),
             run_meta: Mutex::new(Default::default()),
+            shares: Mutex::new(None),
             reclaimed: AtomicU64::new(0),
             shutting_down: AtomicBool::new(false),
             journal_error,

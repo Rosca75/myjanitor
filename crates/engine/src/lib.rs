@@ -25,6 +25,7 @@ mod plan;
 mod presets;
 mod reports;
 mod results;
+mod savings;
 mod scan_ops;
 pub mod schedules;
 mod scope;

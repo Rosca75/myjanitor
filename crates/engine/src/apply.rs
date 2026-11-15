@@ -30,6 +30,7 @@ use crate::api::{
 use crate::jobs::{JobResult, Work};
 use crate::plan::removes;
 use crate::results::{is_selected, skip_badges};
+use crate::savings::{frees, takes_copy_away, Frees};
 use crate::Engine;
 
 /// A step expanded into action items.
@@ -41,6 +42,9 @@ pub(crate) struct StepWork {
     pub warnings: Vec<String>,
     /// Bytes the index says each item occupies, and its (file id, link count).
     pub sizes: Vec<(u64, Option<(mj_core::FileId, u32)>)>,
+    /// `Tally::shared` of the step when a dry run left out the rows another step counts
+    /// (`leave_shared_rows_out`); `(0, 0)` otherwise.
+    pub shared: (u64, u64),
 }
 
 /// The action a step runs with the dialog's originals choice applied.
@@ -142,6 +146,7 @@ impl Engine {
             roots: index.roots.clone(),
             warnings: Vec::new(),
             sizes: Vec::new(),
+            shared: (0, 0),
         };
         work.step.action = action.clone();
         if matches!(action, Action::None) {
@@ -254,6 +259,7 @@ impl Engine {
         }
         let mut works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
         skip_kept_copies(works.iter_mut());
+        self.leave_shared_rows_out(&plan.steps, &mut works);
         let total: u64 = works.iter().map(|w| w.items.len() as u64).sum();
         let job = self.new_job(JobKind::DryRun, None, None, "Dry run", total, plan.estimate.bytes_before);
         let plan_id = plan.id;
@@ -294,7 +300,9 @@ impl Engine {
                         est.bytes_before = before;
                         est.bytes_after = hardlink_not_freed(w, &r.skipped).min(before);
                     }
-                    if matches!(w.step.action, Action::Copy { .. }) {
+                    if frees(&w.step.action) == Frees::Nothing {
+                        // Copies, light copies and archives that keep their sources leave
+                        // the original in place: nothing is freed.
                         est.bytes_after = est.bytes_before;
                     }
                     total = total.add(&est);
@@ -305,7 +313,15 @@ impl Engine {
                         .get(&w.step.opportunity)
                         .map(|x| x.selection.clone())
                         .unwrap_or_default();
-                    lock(&self.plan).measured.insert(w.step.id, (w.step.action.clone(), sel, est));
+                    lock(&self.plan).measured.insert(
+                        w.step.id,
+                        crate::plan::Measured {
+                            action: w.step.action.clone(),
+                            selection: sel,
+                            shared: w.shared,
+                            estimate: est,
+                        },
+                    );
                     steps.push(DryRunStep {
                         step_id: w.step.id,
                         title: w.step.title.clone(),
@@ -330,6 +346,45 @@ impl Engine {
         let _ = self.plan_changed(plan);
         self.emit(Event::DryRun(report));
         JobResult { outcome: None, error, report: false }
+    }
+
+    /// A dry run measures every file once: a row another step of the plan counts (the same
+    /// file where that step frees more, or a file inside a folder it removes) is left out
+    /// of this step's measurement, exactly as it is left out of the step's estimate. Only
+    /// the measurement changes: apply still runs every step on its whole selection.
+    fn leave_shared_rows_out(&self, steps: &[PlanStep], works: &mut [StepWork]) {
+        let skip = skip_badges(&lock(&self.settings));
+        let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+        let tallies = crate::plan::step_tallies(&results, steps, skip);
+        for ((step, t), w) in steps.iter().zip(&tallies).zip(works.iter_mut()) {
+            let (Some(rec), Some(t)) = (results.get(&step.opportunity), t) else { continue };
+            w.shared = t.shared;
+            if t.shared.0 == 0 {
+                continue;
+            }
+            let shared: std::collections::HashSet<&Path> = rec
+                .candidates
+                .iter()
+                .zip(&t.rows)
+                .filter(|(_, r)| r.0 == crate::savings::RowState::Shared)
+                .map(|(c, _)| c.path.as_path())
+                .collect();
+            let before = w.items.len();
+            let (items, sizes): (Vec<_>, Vec<_>) = std::mem::take(&mut w.items)
+                .into_iter()
+                .zip(std::mem::take(&mut w.sizes))
+                .filter(|(i, _)| !shared.contains(i.path.as_path()))
+                .unzip();
+            w.items = items;
+            w.sizes = sizes;
+            let left = before - w.items.len();
+            if left > 0 {
+                w.warnings.push(format!(
+                    "{left} item(s) not measured here: another step of the plan frees more for them, so they are \
+                     counted there"
+                ));
+            }
+        }
     }
 
     /// Content of the confirmation dialog for one step (SAF-10/11).
@@ -611,18 +666,6 @@ pub(crate) fn selection_digest(w: &StepWork) -> String {
         h.update(b"\n");
     }
     h.finish_hex()
-}
-
-/// True when `action`, run on a kept copy (or a folder holding one), could leave no copy of
-/// its group where the user can reach it: removals, moves, archives that take their
-/// sources away, and optimisations or archives that delete the originals (G-03).
-fn takes_copy_away(action: &Action) -> bool {
-    match action {
-        Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete | Action::Move { .. } => true,
-        Action::Archive { keep_sources, originals, .. } => !keep_sources || *originals == OriginalsPolicy::Delete,
-        Action::Optimise { originals, .. } => *originals == OriginalsPolicy::Delete,
-        _ => false,
-    }
 }
 
 /// G-03: "one copy is always kept" across the whole run. Every copy a step keeps (the
