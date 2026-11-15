@@ -297,3 +297,21 @@ Audio now matches the in-house prober: MP3 no longer needs a frame sync at the e
 after the ID3 tag (the prober searches for the first frame, as players do; "ends inside
 its ID3 tag" stays), FLAC accepts an ID3 tag in front of `fLaC`, and WAV accepts `RF64`
 without judging its 32-bit size field.
+
+## D-B22 A non-Unicode name keeps its folder's key as prefix (SCAN-6, RF-5)
+
+`path_key` used the wire codec, which escapes a non-Unicode path as a whole behind a NUL,
+so `/r/a/bad\xff.txt` keyed as `\0/r/a/bad%FF.txt`: outside its own folder for
+`is_within`, `FileIndex::subtree`, `totals`, `tree_stamp`, the protected-path check and
+the action guard, and first in the index order that `FolderTree::build` relies on
+(ancestors above the direct parent lost its bytes). The key is now built from the path's
+encoded bytes: valid UTF-8 runs as they are, each undecodable byte as NUL plus two hex
+digits. NUL cannot occur in a real name, so keys stay distinct; a valid path's key is
+unchanged; a child's key always extends its folder's key with `/`. The wire codec
+(`encode_path`) is unchanged. Scan-cache records whose key starts with NUL (the old form)
+are dropped at load rather than bumping the format version, which would have discarded
+every user's fingerprints; those few files are hashed again once. Sibling fixed:
+`detector::env::decode` dropped the NUL that starts an escaped path in a NUL-joined list;
+an empty piece now marks the next entry as escaped (no entry is ever empty), so the list
+format and the engine side stay as they are. Not added: an engine-level test that acts on a
+non-Unicode temp file; the guard's `root_of` is `is_within`, which the core test covers.

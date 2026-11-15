@@ -349,3 +349,31 @@ fn fast_index_drops_excluded_content_next_to_a_lookalike_sibling() {
     assert!(fast.get(&t.join("photos/skip - Copy/y.jpg")).is_some());
     assert!(fast.get(&t.join("photos/skip.zip")).is_some());
 }
+
+/// SCAN-6: names that are not valid Unicode (Latin-1 from an old backup) are counted in
+/// every ancestor's totals and lie inside their folders' subtrees.
+#[cfg(unix)]
+#[test]
+fn non_utf8_names_count_in_every_ancestor() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let t = TempDir::new("it-latin1").unwrap();
+    t.write("a/b/ok.bin", &[1u8; 10]).unwrap();
+    let bad_file = t.join("a/b").join(OsStr::from_bytes(b"\xff.bin"));
+    std::fs::write(&bad_file, [2u8; 100]).unwrap();
+    let bad_dir = t.join("a").join(OsStr::from_bytes(b"\xfedir"));
+    std::fs::create_dir(&bad_dir).unwrap();
+    std::fs::write(bad_dir.join("c.txt"), [3u8; 1000]).unwrap();
+    let ix = run(&scope(&[t.path()]), &NativePlatform::new()).unwrap();
+    assert_eq!(ix.stats.bytes, 1110);
+    let pos = |p: &Path| ix.position(p).unwrap();
+    let root = pos(t.path());
+    assert_eq!(ix.totals(root).bytes, 1110);
+    let tree = FolderTree::build(&ix);
+    assert_eq!(tree.totals(root).bytes, 1110);
+    assert_eq!(tree.totals(pos(&t.join("a"))).bytes, 1110);
+    assert_eq!(tree.totals(pos(&t.join("a/b"))).bytes, 110);
+    assert_eq!(ix.subtree(pos(&t.join("a"))).count(), 5, "b, ok.bin, the bad file, the bad dir and c.txt");
+    assert!(mj_core::pathutil::is_within(t.path(), &bad_file));
+    assert_eq!(ix.parent(pos(&bad_dir.join("c.txt"))), Some(pos(&bad_dir)));
+}

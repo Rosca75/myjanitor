@@ -182,7 +182,7 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 
 | Aspect | Design |
 |---|---|
-| Store | **One global store** `<cache dir>/scan-cache.bin` (D-106), keyed by `path_key` (lexically normalised, `/` separators, case-folded on Windows). Overlapping roots share entries; no per-root merge logic. |
+| Store | **One global store** `<cache dir>/scan-cache.bin` (D-106), keyed by `path_key` (lexically normalised, `/` separators, case-folded on Windows; an undecodable byte of a non-Unicode name is written as NUL plus two hex digits, so a key always extends its folder's key). Overlapping roots share entries; no per-root merge logic. |
 | Validity | Stamp `{size: u64, mtime_ns: i64}` compared by **exact equality**. An entry whose mtime is within 2 s of the scan start, or in the future, is not trusted (still being written / clock skew). Optional `FileId` (Linux `st_dev`+`st_ino`) carries fingerprints across renames when `(id, size, mtime)` match. |
 | Contents | `mj_core::Fingerprints`: `partial`, `full` (xxh64), `sha256`, `dhash`, `phash`, `width`, `height`, `exif` (`Some` only when really captured), `flags` (`unreadable`, `no_thumbnail`, `from_thumbnail`, `decode_failed`). Every stage is an explicit `Option`; **no zero sentinels** (D-006). Derived scores (quality score) are never cached. |
 | Versions | `format_version` (layout) and `algo_version` = `FINGERPRINT_ALGO_VERSION` (meaning: window layout, seed, grid, downsampler). Any mismatch = empty cache. Bump `algo_version` whenever the meaning of a stored value changes, not only its shape. |
