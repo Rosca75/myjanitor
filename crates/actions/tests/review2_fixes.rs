@@ -154,3 +154,45 @@ fn g07_a_trashed_link_is_restored_as_a_link() {
     assert_eq!(undo.succeeded, 1, "{undo:?}");
     assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
 }
+
+/// G-09: an archiver whose verification window sees the source file being rewritten.
+struct WriteDuringVerify;
+
+impl mj_core::Archiver for WriteDuringVerify {
+    fn formats(&self, _: &[mj_core::ExternalTool]) -> Vec<mj_core::ArchiveFormat> {
+        vec![mj_core::ArchiveFormat::Zip]
+    }
+    fn create(&self, job: &mj_core::ArchiveJob<'_>) -> mj_core::Result<u64> {
+        std::fs::write(job.dst, b"archive bytes").unwrap();
+        Ok(13)
+    }
+    fn verify(&self, _: &Path, sources: &[PathBuf], _: &Path, _: &mj_core::CancelToken) -> mj_core::Result<()> {
+        std::fs::write(&sources[0], b"edited after it was archived").unwrap();
+        Ok(())
+    }
+}
+
+#[test]
+fn g09_an_archived_file_is_rechecked_before_its_source_goes() {
+    let f = Fixture::new("g09");
+    let file = f.write("report.txt", b"the report as archived");
+    let archiver = WriteDuringVerify;
+    let services = mj_actions::Services { optimisers: &[], archiver: Some(&archiver), tools: &[] };
+    for originals in [mj_core::OriginalsPolicy::Delete, mj_core::OriginalsPolicy::Quarantine] {
+        std::fs::write(&file, b"the report as archived").unwrap();
+        let item = f.item(
+            &file,
+            Action::Archive {
+                format: mj_core::ArchiveFormat::Zip,
+                level: 6,
+                dest: None,
+                originals: originals.clone(),
+                keep_sources: false,
+            },
+        );
+        let run = f.new_run(mj_core::RunKind::Apply);
+        let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &confirmed()).unwrap();
+        assert_eq!(out.succeeded, 0, "{originals:?}: {out:?}");
+        assert_eq!(std::fs::read(&file).unwrap(), b"edited after it was archived", "{originals:?}");
+    }
+}

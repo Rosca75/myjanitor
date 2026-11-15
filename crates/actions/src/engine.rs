@@ -593,8 +593,14 @@ fn is_empty_folder_item(item: &ActionItem) -> bool {
 
 /// F-04: right before acting on a folder, its subtree must still be what the scan saw.
 fn recheck_tree(ctx: &ExecContext<'_>, item: &ActionItem) -> Result<()> {
-    if item.target != TargetKind::Folder || matches!(item.action, Action::Copy { .. }) {
+    if matches!(item.action, Action::Copy { .. }) {
         return Ok(());
+    }
+    // G-09: a file item is re-stat'ed against its scan stamp and file id the same way,
+    // so a write between (for example) an archive's verification and the removal of its
+    // source is never lost.
+    if item.target != TargetKind::Folder {
+        return ctx.guard.restat(item, ctx.platform).map(|_| ());
     }
     let walk = ctx.guard.check_tree(&item.path, ctx.platform, item.owned_tree)?;
     if item.expected_tree != Some(walk.stamp()) {
