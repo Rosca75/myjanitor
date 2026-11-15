@@ -209,8 +209,11 @@ impl Engine {
                 )));
             }
             let choices = mj_actions::select::apply_keep_rule(&rec.groups, &rec.candidates, &req.rule);
+            // ACT-7: index rows by id once (was a scan of every row per choice).
+            let at: std::collections::HashMap<mj_core::CandidateId, usize> =
+                rec.candidates.iter().enumerate().map(|(i, c)| (c.id, i)).collect();
             for (id, selected) in choices {
-                if let Some(c) = rec.candidates.iter_mut().find(|c| c.id == id) {
+                if let Some(c) = at.get(&id).map(|&i| &mut rec.candidates[i]) {
                     // The keeper badge follows the rule so the table shows what is kept.
                     if selected {
                         c.badges.remove(Badges::KEEPER);
@@ -222,12 +225,16 @@ impl Engine {
                     rec.selection.set(id, def, selected && !blocked);
                 }
             }
+            // The first keeper row of each group, found in one pass.
+            let mut keepers: std::collections::HashMap<mj_core::GroupId, &std::path::Path> =
+                std::collections::HashMap::new();
+            for c in rec.candidates.iter().filter(|c| c.badges.contains(Badges::KEEPER)) {
+                if let Some(g) = c.group {
+                    keepers.entry(g).or_insert(c.path.as_path());
+                }
+            }
             for g in &mut rec.groups {
-                g.keeper = rec
-                    .candidates
-                    .iter()
-                    .find(|c| c.group == Some(g.id) && c.badges.contains(Badges::KEEPER))
-                    .map(|c| c.path.clone());
+                g.keeper = keepers.get(&g.id).map(|p| p.to_path_buf());
             }
             recompute(rec, skip);
             summary_of(rec)
