@@ -1,0 +1,70 @@
+[
+  {
+    "created": 1794663949559191682,
+    "finished": 1794663949589864959,
+    "id": 15,
+    "kind": "dry_run",
+    "progress": {
+      "bytes_done": 0,
+      "bytes_total": 63856,
+      "done": 1,
+      "saved": 0,
+      "total": 1
+    },
+    "run_id": null,
+    "started": 1794663949559372726,
+    "state": "completed",
+    "step_id": null,
+    "title": "Dry run"
+  },
+  {
+    "created": 1794663949602623661,
+    "finished": 1794663949608367645,
+    "id": 16,
+    "kind": "apply",
+    "outcome": {
+      "bytes_saved": 5000,
+      "errors": [],
+      "failed": 0,
+      "skipped": 0,
+      "succeeded": 1
+    },
+    "progress": {
+      "bytes_done": 5000,
+      "bytes_total": 8192,
+      "done": 1,
+      "saved": 5000,
+      "total": 1
+    },
+    "run_id": 1794663949600,
+    "started": 1794663949602812377,
+    "state": "completed",
+    "step_id": 13,
+    "title": "Temporary files"
+  },
+  {
+    "created": 1794663949602630788,
+    "finished": 1794663949645262315,
+    "id": 17,
+    "kind": "apply",
+    "outcome": {
+      "bytes_saved": 55307,
+      "errors": [],
+      "failed": 0,
+      "skipped": 0,
+      "succeeded": 1
+    },
+    "progress": {
+      "bytes_done": 55307,
+      "bytes_total": 55664,
+      "done": 1,
+      "saved": 55307,
+      "total": 1
+    },
+    "run_id": 1794663949600,
+    "started": 1794663949608385436,
+    "state": "completed",
+    "step_id": 14,
+    "title": "PNG images"
+  }
+]

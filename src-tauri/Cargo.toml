@@ -1,0 +1,25 @@
+[package]
+name = "myjanitor"
+description = "MyJanitor desktop app (Tauri 2 shell over mj-engine)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "myjanitor_lib"
+crate-type = ["rlib"]
+
+[[bin]]
+name = "myjanitor"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-engine.workspace = true
+tauri.workspace = true
+serde.workspace = true
+serde_json.workspace = true

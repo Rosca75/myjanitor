@@ -1,0 +1,7 @@
+{
+  "name": "myjanitor-ui",
+  "private": true,
+  "description": "MyJanitor frontend: plain ES modules, no bundler, no runtime dependencies. Tests: node --test ui/",
+  "type": "module",
+  "main": "test-all.js"
+}

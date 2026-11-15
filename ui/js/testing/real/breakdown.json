@@ -1,0 +1,47 @@
+{
+  "by": "extension",
+  "rows": [
+    {
+      "bytes": 600000,
+      "files": 2,
+      "key": "bin",
+      "label": ".bin"
+    },
+    {
+      "bytes": 55664,
+      "files": 1,
+      "key": "png",
+      "label": ".png"
+    },
+    {
+      "bytes": 40000,
+      "files": 1,
+      "key": "msi",
+      "label": ".msi"
+    },
+    {
+      "bytes": 20000,
+      "files": 1,
+      "key": "js",
+      "label": ".js"
+    },
+    {
+      "bytes": 5000,
+      "files": 1,
+      "key": "tmp",
+      "label": ".tmp"
+    },
+    {
+      "bytes": 4174,
+      "files": 2,
+      "key": "pdf",
+      "label": ".pdf"
+    },
+    {
+      "bytes": 14,
+      "files": 2,
+      "key": "json",
+      "label": ".json"
+    }
+  ]
+}

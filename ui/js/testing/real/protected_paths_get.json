@@ -1,0 +1,40 @@
+{
+  "builtin": [
+    "/bin",
+    "/boot",
+    "/dev",
+    "/etc",
+    "/lib",
+    "/lib32",
+    "/lib64",
+    "/libx32",
+    "/lost+found",
+    "/opt",
+    "/proc",
+    "/root",
+    "/root/.cache/myjanitor",
+    "/root/.config/myjanitor",
+    "/root/.local/share/myjanitor",
+    "/run",
+    "/sbin",
+    "/snap",
+    "/srv",
+    "/sys",
+    "/usr",
+    "/var"
+  ],
+  "builtin_patterns": [
+    "**/.git",
+    "**/.git/**",
+    "**/.ssh/**",
+    "**/.gnupg/**",
+    "**/pagefile.sys",
+    "**/hiberfil.sys",
+    "**/swapfile.sys",
+    "**/System Volume Information/**",
+    "**/$Recycle.Bin/**",
+    "**/.Trash-*/**",
+    "**/.local/share/Trash/**"
+  ],
+  "user": []
+}

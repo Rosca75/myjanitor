@@ -1,0 +1,17 @@
+[package]
+name = "mj-core"
+description = "MyJanitor domain types, error model and shared pure utilities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# In-house temporary-directory helper for tests (no tempfile crate).
+testutil = []

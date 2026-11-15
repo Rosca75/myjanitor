@@ -1,0 +1,157 @@
+/*
+ * MyJanitor design tokens. THE ONLY FILE THAT MAY CONTAIN COLOUR LITERALS.
+ * Owner: Wave 1 (frozen). Changes go through the orchestrator.
+ *
+ * Source palette: docs/research/palette.md (doc-anonymiser, light only: D-004).
+ * Roles follow Option B (docs/design/option-b-spec.md); see D-108..D-111 for
+ * the mapping decisions. Contrast ratios (WCAG 2.x) are noted next to every
+ * text/fill pairing; every text pairing below is >= 4.5:1.
+ *
+ * Rules for every other stylesheet:
+ *  - use var(--...) for every colour, shadow, radius, size and font;
+ *  - never put text in --accent, --warning or --decor colours (use the *-text tokens);
+ *  - one orange hero element per view (the primary action); selection and
+ *    "in plan" use the --select family (blue), not orange.
+ */
+:root {
+  color-scheme: light;
+
+  /* ---- Accent: primary actions, progress, focus (orange, palette --accent) ---- */
+  --accent: #FD5108;            /* fill only; 3.30:1 vs white as a UI boundary */
+  --accent-hover: #FE7C39;      /* black on it 8.16:1 */
+  --accent-soft: #FFF5ED;
+  --accent-edge: #FFCDA8;
+  --on-accent: #000000;         /* on --accent 6.36:1 (white would be 3.30:1: fails) */
+  --accent-text: #A93600;       /* orange for text/links, 6.53:1 on white */
+
+  /* ---- Selection and "in plan" (blue, palette --selected-* / --more-chip-*) ---- */
+  --select: #205FAE;            /* checkbox fill, toggle on, in-plan border, active tab, selected-row bar */
+  --select-soft: #EEF5FF;       /* selected row, in-plan icon tile, IN PLAN badge, selected preset */
+  --select-edge: #CFE0FB;
+  --on-select: #FFFFFF;         /* on --select 6.35:1 */
+  --select-text: #205FAE;       /* on --select-soft 5.78:1, on white 6.35:1 */
+
+  /* ---- Success: reversible, savings ---- */
+  --success: #059669;           /* icons, bar segments; 3.77:1 vs white (non-text) */
+  --success-soft: #F0FBF4;
+  --success-edge: #BFE6CE;
+  --success-text: #0A6B3D;      /* on white 6.60:1, on --success-soft 6.22:1 */
+  --on-success: #FFFFFF;        /* on --success-text 6.60:1 (use --success-text as the fill for text) */
+
+  /* ---- Warning: lossy, irreversible, synced-folder warnings, the lossy acting button ---- */
+  --warning: #E9B01F;           /* fill/border/icon; never text (1.96:1 vs white) */
+  --warning-hover: #F2C649;     /* black on it 12.95:1 */
+  --warning-soft: #FBF6E6;
+  --warning-edge: #F5E3B8;
+  --warning-strong: #6B5310;    /* border of the warning button and callout bar; 7.32:1 vs white */
+  --warning-text: #6B5310;      /* on white 7.32:1, on --warning-soft 6.77:1 */
+  --on-warning: #000000;        /* on --warning 10.69:1 */
+
+  /* ---- Danger: permanent delete, shred, stop ---- */
+  --danger: #DC2626;            /* white on it 4.83:1; it on white 4.83:1 */
+  --danger-hover: #B91C1C;      /* white on it 6.47:1 */
+  --danger-soft: #FBE6E6;
+  --danger-text: #9A2020;       /* on white 8.07:1, on --danger-soft 6.75:1 */
+  --on-danger: #FFFFFF;
+
+  /* ---- Info: informational checklist rows, group/kind badges ---- */
+  --info: #205FAE;
+  --info-soft: #EEF5FF;
+  --info-edge: #CFE0FB;
+  --info-text: #205FAE;         /* on --info-soft 5.78:1 */
+
+  /* ---- Surfaces ---- */
+  --surface: #FFFFFF;           /* page, cards, panels, dialogs, inputs */
+  --surface-raised: #F9FAFB;    /* table headers, plan step rows, dialog stat tiles, center background */
+  --surface-sunken: #F5F7F8;    /* wells, code, chips, nav rail, status strip */
+  --surface-strip: #EBEBEB;     /* card head strips */
+  --surface-hover: #EEEFF1;     /* hover fill, secondary button fill, bar tracks */
+
+  /* ---- Borders ---- */
+  --border: #DFE3E6;            /* hairlines, card borders, row separators */
+  --border-strong: #CBD1D6;     /* control borders (button, input, checkbox, toggle off) */
+
+  /* ---- Text ---- */
+  --text: #000000;              /* 21:1 on white, 17.62:1 on --surface-strip */
+  --text-muted: #54616C;        /* secondary text: 6.36:1 on white, 5.92:1 on --surface-sunken */
+  --text-faint: #66717F;        /* captions, placeholders: 4.96:1 on white, 4.62:1 on --surface-sunken */
+  --decor: #A1A8B3;             /* decorative glyphs only (grip, chevrons, "×", idle dot); never text */
+
+  /* ---- Charts and bars ---- */
+  --bar-track: #EEEFF1;
+  --bar-reversible: #059669;    /* hero bar: Reversible */
+  --bar-opt-in: #E9B01F;        /* hero bar: Lossy, opt-in */
+  --bar-review: #A1A8B3;        /* hero bar: Review only */
+  --bar-used: #B5BCC4;          /* drive bar: used */
+  --bar-freed: #205FAE;         /* drive bar: freed by your plan */
+  --bar-progress: #FD5108;      /* progress fill */
+  --wave: #205FAE;              /* waveform bars */
+  --wave-silence: #FBF6E6;      /* removable silence band */
+
+  /* ---- Focus ---- */
+  --focus-ring: #FD5108;        /* 3.30:1 vs white (>= 3:1 non-text); 2px solid, 1px offset */
+  --focus-width: 2px;
+  --focus-offset: 1px;
+
+  /* ---- Elevation ---- */
+  --shadow-raised: 0 6px 18px rgba(0, 0, 0, 0.12);  /* every floating surface (dialogs, menus, toasts) */
+  --scrim: rgba(0, 0, 0, 0.28);                     /* behind dialogs */
+
+  /* ---- Typography (system fonts only: offline, no font files) ---- */
+  --font-sans: Helvetica, Arial, "Segoe UI", "Liberation Sans", sans-serif;
+  --font-mono: Consolas, "Courier New", "Liberation Mono", monospace;
+  --text-2xs: 10px;             /* badges, section eyebrows (uppercase, 600) */
+  --text-xs: 11px;              /* captions, rail labels, sub lines */
+  --text-sm: 12px;              /* body / UI controls */
+  --text-md: 13px;              /* tabs, card titles, plan rows */
+  --text-lg: 14px;              /* primary button, card title */
+  --text-xl: 15px;              /* step summary */
+  --text-2xl: 17px;             /* panel headings */
+  --text-title: 18px;           /* page title, dialog stat value */
+  --text-dialog: 20px;          /* dialog title */
+  --text-plan-total: 22px;
+  --text-card-size: 24px;
+  --text-hero: 40px;            /* hero number */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+  --line-height: 1.4;
+  --letter-spacing-caps: 0.06em;
+
+  /* ---- Spacing (4 px grid) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+
+  /* ---- Radii (Option B) ---- */
+  --radius-checkbox: 3px;
+  --radius-sm: 6px;             /* buttons, inputs, dropdowns, callouts */
+  --radius-tile: 8px;           /* plan rows, preset tiles, stat tiles, toggles */
+  --radius-card: 10px;          /* opportunity cards, active rail pill */
+  --radius-hero: 12px;
+  --radius-dialog: 14px;
+  --radius-chip: 14px;          /* scope chips */
+  --radius-pill: 999px;         /* badges */
+
+  /* ---- Layout ---- */
+  --rail-width: 84px;
+  --header-height: 64px;
+  --panel-width: 360px;
+  --strip-height: 44px;
+  --dialog-width: 580px;
+  --control-height: 28px;
+  --control-height-lg: 38px;
+  --row-height: 38px;
+  --badge-height: 18px;
+
+  /* ---- Motion ---- */
+  --duration-fast: 120ms;
+  --duration: 200ms;
+  --easing: ease;
+}

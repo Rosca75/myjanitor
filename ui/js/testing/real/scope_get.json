@@ -1,0 +1,16 @@
+{
+  "exclude": [],
+  "include": [],
+  "options": {
+    "collect_owner": false,
+    "include_hidden": true,
+    "max_depth": null,
+    "one_file_system": true,
+    "threads": 0,
+    "use_cache": true,
+    "use_fast_index": true
+  },
+  "roots": [
+    "/fixture/tree"
+  ]
+}

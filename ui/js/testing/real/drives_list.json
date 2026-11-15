@@ -1,0 +1,62 @@
+[
+  {
+    "available": 4849491968,
+    "features": {
+      "btrfs_compression": false,
+      "hardlinks": true,
+      "mft": false,
+      "reflinks": false,
+      "trash": true,
+      "wof": false
+    },
+    "free": 234119131136,
+    "free_after_plan": 234119434240,
+    "fs_type": "ext4",
+    "id": "/",
+    "label": "",
+    "mount": "/",
+    "plan_saving": 303104,
+    "removable": false,
+    "total": 270553174016
+  },
+  {
+    "available": 28098560,
+    "features": {
+      "btrfs_compression": false,
+      "hardlinks": true,
+      "mft": false,
+      "reflinks": false,
+      "trash": false,
+      "wof": false
+    },
+    "free": 36114432,
+    "free_after_plan": 36114432,
+    "fs_type": "ext4",
+    "id": "/opt/claude-code",
+    "label": "",
+    "mount": "/opt/claude-code",
+    "plan_saving": 0,
+    "removable": false,
+    "total": 399814656
+  },
+  {
+    "available": 16416768,
+    "features": {
+      "btrfs_compression": false,
+      "hardlinks": true,
+      "mft": false,
+      "reflinks": false,
+      "trash": false,
+      "wof": false
+    },
+    "free": 17453056,
+    "free_after_plan": 17453056,
+    "fs_type": "ext4",
+    "id": "/opt/env-runner",
+    "label": "",
+    "mount": "/opt/env-runner",
+    "plan_saving": 0,
+    "removable": false,
+    "total": 50839552
+  }
+]

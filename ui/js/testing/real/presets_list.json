@@ -1,0 +1,499 @@
+[
+  {
+    "builtin": true,
+    "description": "Anything in a Downloads folder not modified for 90 days",
+    "id": "downloads_older_90d",
+    "name": "Downloads older than 90 days",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "case_sensitive": false,
+            "field": "path",
+            "mode": "wildcard",
+            "pattern": "**/Downloads/**"
+          }
+        },
+        {
+          "cond": {
+            "cmp": "lt",
+            "field": "date",
+            "value": {
+              "ago": {
+                "amount": 90,
+                "unit": "days"
+              }
+            },
+            "which": "modified"
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Video and audio over 500 MB not modified for 2 years",
+    "id": "large_old_media",
+    "name": "Large media older than 2 years",
+    "rule": {
+      "all": [
+        {
+          "any": [
+            {
+              "cond": {
+                "field": "type_group",
+                "group": "video"
+              }
+            },
+            {
+              "cond": {
+                "field": "type_group",
+                "group": "audio"
+              }
+            }
+          ]
+        },
+        {
+          "cond": {
+            "bytes": 524288000,
+            "cmp": "gt",
+            "field": "size"
+          }
+        },
+        {
+          "cond": {
+            "cmp": "lt",
+            "field": "date",
+            "value": {
+              "ago": {
+                "amount": 2,
+                "unit": "years"
+              }
+            },
+            "which": "modified"
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Office files and PDFs not opened for a year",
+    "id": "consulting_cleanup",
+    "name": "Consulting cleanup",
+    "rule": {
+      "all": [
+        {
+          "any": [
+            {
+              "cond": {
+                "field": "type_group",
+                "group": "office"
+              }
+            },
+            {
+              "cond": {
+                "field": "type_group",
+                "group": "pdf"
+              }
+            }
+          ]
+        },
+        {
+          "cond": {
+            "cmp": "lt",
+            "field": "date",
+            "value": {
+              "ago": {
+                "amount": 1,
+                "unit": "years"
+              }
+            },
+            "which": "accessed"
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Rebuildable developer folders (node_modules, caches) and compiled leftovers; reports the topmost folder",
+    "id": "dev_junk",
+    "name": "Dev junk",
+    "rule": {
+      "any": [
+        {
+          "all": [
+            {
+              "cond": {
+                "field": "kind",
+                "kind": "dir"
+              }
+            },
+            {
+              "any": [
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": "node_modules"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": "__pycache__"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": ".pytest_cache"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": ".mypy_cache"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": ".tox"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": ".gradle"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": ".parcel-cache"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "exact",
+                    "pattern": ".next"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "all": [
+            {
+              "cond": {
+                "field": "kind",
+                "kind": "file"
+              }
+            },
+            {
+              "any": [
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "wildcard",
+                    "pattern": "*.pyc"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "wildcard",
+                    "pattern": "*.pyo"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "wildcard",
+                    "pattern": "*.class"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "wildcard",
+                    "pattern": "*.o"
+                  }
+                },
+                {
+                  "cond": {
+                    "case_sensitive": false,
+                    "field": "name",
+                    "mode": "wildcard",
+                    "pattern": "*.obj"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "topmost_only": true
+  },
+  {
+    "builtin": true,
+    "description": "Video files over 1 GB, biggest first in the results",
+    "id": "large_videos",
+    "name": "Large videos",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "field": "type_group",
+            "group": "video"
+          }
+        },
+        {
+          "cond": {
+            "bytes": 1073741824,
+            "cmp": "gt",
+            "field": "size"
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Installers and disk images not modified for 6 months",
+    "id": "old_installers",
+    "name": "Old installers",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "field": "type_group",
+            "group": "installers"
+          }
+        },
+        {
+          "cond": {
+            "field": "kind",
+            "kind": "file"
+          }
+        },
+        {
+          "cond": {
+            "cmp": "lt",
+            "field": "date",
+            "value": {
+              "ago": {
+                "amount": 6,
+                "unit": "months"
+              }
+            },
+            "which": "modified"
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "*.tmp, *.bak, *.old, Office lock files (~$*) and similar",
+    "id": "temp_and_backup_files",
+    "name": "Temporary and backup files",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "field": "kind",
+            "kind": "file"
+          }
+        },
+        {
+          "any": [
+            {
+              "cond": {
+                "case_sensitive": false,
+                "field": "name",
+                "mode": "wildcard",
+                "pattern": "*.tmp"
+              }
+            },
+            {
+              "cond": {
+                "case_sensitive": false,
+                "field": "name",
+                "mode": "wildcard",
+                "pattern": "*.temp"
+              }
+            },
+            {
+              "cond": {
+                "case_sensitive": false,
+                "field": "name",
+                "mode": "wildcard",
+                "pattern": "*.bak"
+              }
+            },
+            {
+              "cond": {
+                "case_sensitive": false,
+                "field": "name",
+                "mode": "wildcard",
+                "pattern": "*.old"
+              }
+            },
+            {
+              "cond": {
+                "case_sensitive": false,
+                "field": "name",
+                "mode": "wildcard",
+                "pattern": "~$*"
+              }
+            },
+            {
+              "cond": {
+                "case_sensitive": false,
+                "field": "name",
+                "mode": "wildcard",
+                "pattern": "*~"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Empty files",
+    "id": "zero_byte_files",
+    "name": "Zero-byte files",
+    "rule": {
+      "cond": {
+        "field": "zero_byte"
+      }
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Reads each file's header: a .jpg that is really a PNG or an HTML page. Slower than name filters",
+    "id": "extension_mismatch",
+    "name": "Files whose content does not match their extension",
+    "rule": {
+      "cond": {
+        "field": "extension_mismatch"
+      }
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Reserved names (CON, NUL...), trailing dots or spaces and characters < > : \" | ? *",
+    "id": "invalid_windows_names",
+    "name": "Names Windows cannot handle",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "field": "invalid_name"
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Full paths over 240 characters, which break many Windows tools",
+    "id": "long_paths",
+    "name": "Very long paths",
+    "rule": {
+      "cond": {
+        "cmp": "gt",
+        "field": "path_length",
+        "value": 240
+      }
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "The hundred biggest files in the scan",
+    "id": "largest_100_files",
+    "name": "100 largest files",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "field": "kind",
+            "kind": "file"
+          }
+        },
+        {
+          "cond": {
+            "field": "largest_n",
+            "n": 100
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  },
+  {
+    "builtin": true,
+    "description": "Files with both the hidden and the system attribute",
+    "id": "hidden_system_files",
+    "name": "Hidden system files",
+    "rule": {
+      "all": [
+        {
+          "cond": {
+            "attr": [
+              "hidden"
+            ],
+            "field": "attribute",
+            "set": true
+          }
+        },
+        {
+          "cond": {
+            "attr": [
+              "system"
+            ],
+            "field": "attribute",
+            "set": true
+          }
+        }
+      ]
+    },
+    "topmost_only": false
+  }
+]

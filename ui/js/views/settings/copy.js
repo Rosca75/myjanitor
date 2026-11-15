@@ -1,0 +1,167 @@
+// @ts-check
+/**
+ * All English of the Settings drawer. `ui/js/copy.js` belongs to the shell, so the
+ * drawer keeps its own copy here (same rule: views carry no sentence literals,
+ * no em dash). Functions take already-formatted values.
+ */
+const plural = (n, one, many = `${one}s`) => (n === 1 ? one : many);
+const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+const two = (n) => String(n).padStart(2, '0');
+
+export const sc = {
+  title: 'Settings',
+  intro: 'Changes are saved as you make them. Every setting is checked before it is stored.',
+  loading: 'Loading',
+  saveFailed: 'The setting was not saved.',
+  advanced: 'Advanced',
+  locked: 'Locked',
+  unavailable: 'Not available',
+  add: 'Add',
+  remove: 'Remove',
+  cancel: 'Cancel',
+  more: 'Show more',
+  less: 'Show less',
+
+  general: {
+    title: 'General',
+    offline: 'MyJanitor works fully offline. It sends no telemetry and uploads nothing.',
+    portable: 'Portable mode: everything is stored beside the program.',
+    installed: 'Installed mode: settings are stored in your user profile.',
+    dataFolder: 'Data folder',
+    version: (v, p) => `Version ${v} on ${p}`,
+    journalWarning: 'The undo journal is not persistent in this build: History will not survive a restart.',
+  },
+  scan: {
+    title: 'Scanning',
+    fastIndex: 'Fast indexing',
+    fastIndexHelp: 'Reads the NTFS file table directly when it can. Falls back to a normal walk otherwise.',
+    cache: 'Scan cache',
+    cacheHelp: 'Remembers file fingerprints so a second scan is much faster.',
+    cacheLine: (n, size) => `${n} cached, ${size}`,
+    clearCache: 'Clear cache',
+    includeHidden: 'Include hidden files',
+    oneFileSystem: 'Stay on one drive per location',
+  },
+  protectedPaths: {
+    title: 'Protected paths',
+    intro: 'MyJanitor never touches anything in these places. The built-in list cannot be changed.',
+    builtin: 'Built-in',
+    builtinCount: (n, p) => `${n} ${plural(n, 'folder')} and ${p} ${plural(p, 'pattern')}`,
+    yours: 'Your protected folders',
+    none: 'You have not added any.',
+    addFolder: 'Add a folder',
+  },
+  exclusions: {
+    title: 'Exclusions',
+    intro: 'Paths and patterns that are never scanned, for example **/node_modules or D:\\Backups.',
+    none: 'No exclusions.',
+    placeholder: 'Path or pattern',
+    label: 'New exclusion',
+    empty: 'Type a path or pattern first.',
+  },
+  safety: {
+    title: 'Safety',
+    originals: 'When a file is replaced by a smaller one, its original goes to',
+    recycle_bin: 'Recycle Bin or Trash',
+    recycle_binSub: 'The default. Restorable with the system tools and from History.',
+    quarantine: 'MyJanitor quarantine',
+    quarantineSub: 'Kept in a MyJanitor folder and removed automatically after the retention time.',
+    backup_folder: 'A backup folder',
+    backupSub: (p) => (p ? `Originals are moved under ${p}.` : 'Choose where originals are moved.'),
+    chooseBackup: 'Choose folder',
+    deleteNote: 'Deleting originals is set to "delete permanently". It is only offered per step, in the confirmation dialog.',
+    retention: 'Quarantine retention',
+    undoWindow: 'Undo window',
+    daysValue: (n) => `${n} ${n === 1 ? 'day' : 'days'}`,
+    preserveTimestamps: 'Keep original dates on optimised files',
+    keepIfNotSmaller: 'Keep the original when the result is not smaller',
+    keepIfNotSmallerHelp: 'Always on. This protects you from "optimisations" that make files bigger.',
+    skipSigned: 'Skip digitally signed files',
+    skipLabelled: 'Skip files with a sensitivity label',
+    skipEncrypted: 'Skip encrypted files',
+    syncedWarning: 'Warn before removing files in synced folders',
+  },
+  perf: {
+    title: 'Performance',
+    threads: 'Worker threads',
+    threadsHelp: '0 uses every processor.',
+    lowMemory: 'Low-memory mode',
+    lowMemoryHelp: 'Uses less memory on very large drives, at the cost of speed.',
+    tempDir: 'Temporary folder',
+    tempDefault: 'System default',
+    chooseTemp: 'Choose folder',
+    resetTemp: 'Use default',
+    tempHelp: 'Work files are written here. A fast SSD or a RAM disk speeds up optimising.',
+    parallelJobs: 'Optimisations at once',
+    parallelJobsHelp: '0 chooses automatically.',
+    cpu: 'Background priority',
+    cpuNormal: 'Normal',
+    cpuLow: 'Low',
+  },
+  engines: {
+    title: 'Engines',
+    intro: 'Optional programs that unlock more optimisations. They are never downloaded: install them yourself.',
+    found: 'Found',
+    missing: 'Not found',
+    missingReason: (id) => `${id} was not found on your PATH. Install it, or enter its full path below.`,
+    override: (id) => `Full path of ${id}`,
+    overridePlaceholder: 'Full path to the program',
+    save: 'Save path',
+    clear: 'Clear',
+    refresh: 'Detect again',
+    usedFor: (list) => `Used for ${list}`,
+    watcher: 'Recompress after updates',
+    watcherHelp: 'Watches chosen folders and recompresses files that Windows updates. Windows only.',
+    watcherReason: 'Not available yet. Your choice is kept for when it is.',
+  },
+  auto: {
+    title: 'Automation',
+    schedules: 'Scheduled profiles',
+    noSchedules: 'No schedules yet. Build a plan on Overview and choose "Save as weekly schedule".',
+    next: (t) => `Next run ${t}`,
+    disabled: 'Paused',
+    never: 'Not run yet',
+    last: (t) => `Last run ${t}`,
+    enable: (n) => `Run ${n} on schedule`,
+    runNow: 'Run now',
+    delete: 'Delete',
+    confirmDelete: 'Delete for good',
+    steps: (n) => `${n} ${plural(n, 'step')}`,
+    os: 'Run it from the OS scheduler',
+    osHelp: 'Registering is an explicit step: run these in a terminal. Nothing is registered for you.',
+    osInstall: 'Register',
+    osUninstall: 'Remove registration',
+    cadence: {
+      daily: (h, m) => `Every day at ${two(h)}:${two(m)}`,
+      weekly: (d, h, m) => `Every ${WEEKDAYS[(d - 1) % 7] ?? 'week'} at ${two(h)}:${two(m)}`,
+      monthly: (d, h, m) => `Day ${d} of every month at ${two(h)}:${two(m)}`,
+    },
+    contextMenu: 'File manager menu',
+    contextMenuHelp: 'Adds "Optimise with MyJanitor" and "Find duplicates here" to the right-click menu. Per user, no administrator rights.',
+    contextMenuWindows: 'Adds entries to the Windows Explorer menu for your account only.',
+    contextMenuLinux: 'Adds entries for your account. Nautilus gets scripts when its scripts folder exists.',
+    contextMenuPortable: 'Not available in portable mode, which never registers with the system.',
+  },
+  picker: {
+    title: 'Choose a folder',
+    places: 'Places',
+    up: 'Up',
+    choose: 'Choose this folder',
+    empty: 'No folders here.',
+    loading: 'Loading',
+    current: 'Current folder',
+  },
+};
+
+/** "Weekly on Monday at 08:47" and friends. @param {any} c Cadence */
+export function cadenceText(c) {
+  if (c.every === 'daily') return sc.auto.cadence.daily(c.hour, c.minute);
+  if (c.every === 'weekly') return sc.auto.cadence.weekly(c.weekday, c.hour, c.minute);
+  return sc.auto.cadence.monthly(c.day, c.hour, c.minute);
+}
+
+export const errors = {
+  range: (a, b) => `Enter a whole number from ${a} to ${b}.`,
+  absolute: 'Enter a full path, such as C:\\Tools\\ffmpeg.exe or /usr/bin/ffmpeg.',
+  exclusionEmpty: sc.exclusions.empty,
+};

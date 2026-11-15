@@ -1,0 +1,14 @@
+[package]
+name = "mj-scan"
+description = "Directory walker, file index and scan cache"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+mj-platform.workspace = true
+
+[dev-dependencies]
+mj-core = { workspace = true, features = ["testutil"] }

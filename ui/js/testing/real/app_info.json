@@ -1,0 +1,19 @@
+{
+  "bundle_id": "com.myjanitor.app",
+  "cache_dir": "/fixture/app/cache",
+  "capabilities": [
+    "freedesktop_trash",
+    "btrfs_compression",
+    "reflinks",
+    "hardlinks",
+    "context_menu",
+    "os_schedules"
+  ],
+  "data_dir": "/fixture/app/data",
+  "elevated": true,
+  "journal_persistent": true,
+  "name": "MyJanitor",
+  "platform": "linux",
+  "portable": false,
+  "version": "0.1.0"
+}

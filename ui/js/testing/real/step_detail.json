@@ -1,0 +1,114 @@
+{
+  "diagnostics": {
+    "notes": [],
+    "skipped": {},
+    "unreadable": 0,
+    "unreadable_sample": []
+  },
+  "lossy": false,
+  "opportunity": {
+    "availability": {
+      "state": "available"
+    },
+    "available_actions": [
+      "trash",
+      "quarantine",
+      "permanent_delete",
+      "move",
+      "hardlink",
+      "reflink"
+    ],
+    "badges": [
+      "duplicate",
+      "keeper",
+      "signed"
+    ],
+    "candidates": 4,
+    "category": "clean",
+    "confidence": "exact",
+    "count": 1,
+    "default_action": {
+      "kind": "trash"
+    },
+    "description": "Files with identical content",
+    "feature_ids": [
+      "CLN-DET-01",
+      "CLN-ACT-01",
+      "CLN-ACT-06"
+    ],
+    "id": "det:exact_duplicates",
+    "in_plan": true,
+    "params": {
+      "keep_rule": "oldest",
+      "preferred_folder": ""
+    },
+    "presets": [],
+    "rank": 303104.0,
+    "safety": "reversible",
+    "saving": 303104,
+    "selected": 1,
+    "settings": [
+      {
+        "advanced": false,
+        "help": "Exactly one file of every group is always kept",
+        "key": "keep_rule",
+        "kind": {
+          "default": "oldest",
+          "options": [
+            {
+              "label": "Keep newest",
+              "value": "newest"
+            },
+            {
+              "label": "Keep oldest",
+              "value": "oldest"
+            },
+            {
+              "label": "Keep shortest path",
+              "value": "shortest_path"
+            },
+            {
+              "label": "Keep highest resolution",
+              "value": "highest_resolution"
+            },
+            {
+              "label": "Keep the copy in a preferred folder",
+              "value": "preferred_folder"
+            }
+          ],
+          "type": "choice"
+        },
+        "label": "Copy to keep",
+        "lossy": false
+      },
+      {
+        "advanced": true,
+        "help": "Used by \"preferred folder\"; falls back to the newest copy",
+        "key": "preferred_folder",
+        "kind": {
+          "default": "",
+          "type": "folder"
+        },
+        "label": "Preferred folder",
+        "lossy": false
+      }
+    ],
+    "size_before": 303104,
+    "source": {
+      "detector": "exact_duplicates"
+    },
+    "sub_groups": [],
+    "title": "Exact duplicates",
+    "unit": "files"
+  },
+  "safety": "reversible",
+  "step_id": 18,
+  "summary": {
+    "candidates": 4,
+    "confidence": "exact",
+    "saving": 303104,
+    "selected": 1,
+    "size_after": 0,
+    "size_before": 303104
+  }
+}

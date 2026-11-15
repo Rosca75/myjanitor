@@ -1,0 +1,15 @@
+[package]
+name = "mj-formats"
+description = "In-house container and metadata parsers: ZIP, XML, OOXML, PDF, PNG/JPEG, EXIF, media tags"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mj-core.workspace = true
+miniz_oxide.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+mj-core = { workspace = true, features = ["testutil"] }
