@@ -663,3 +663,33 @@ nothing changed for it. Every other finding was reproduced by a failing test fir
   with a message instead of saving a schedule that reports "nothing to do" forever.
   Storing the rule in `ScheduledStep` would change the core type and the schedules file
   format; left as an open item.
+
+## Smaller IPC, CLI and diagnostics findings (IPC-4, IPC-5, IPC-8, IPC-10, IPC-11, IPC-12, XC-3)
+
+- **IPC-4:** `scan://progress` after the walk now emits the corrected event (the file count of
+  the walk), not the zero it stored a corrected copy of. `dirs` is left 0 (not claimed anywhere
+  in the UI).
+- **IPC-5:** `loadSettings` also refetches `app_info`, so the trash route label follows
+  "Use the Windows Recycle Bin" without a restart. The mock already derived the route.
+- **IPC-8:** the strip's "Last report" button is enabled from the history list already
+  fetched (a non-undo run with items); the report is fetched on click only. The engine-side
+  clone in `history_run` is left as an open item (needs a journal iteration helper in the
+  actions/core lane).
+- **IPC-10:** `plan://dry_run` with `error` shows a cancelled notice or an error toast, never
+  the success toast; `job://done` of a dry run clears the busy flag even when the body
+  panicked and sent no event.
+- **IPC-11:** the Nautilus script makes the name absolute and passes `--duplicates=<abs path>`,
+  so a folder named like a launch option is a path. `launch.rs` already parsed the inline form.
+- **IPC-12:** `undo` prints the run the waited job really started and no "Undo with" hint
+  (undo runs are not undoable). A run whose items were only skipped exits 0 and says how many
+  were skipped on stderr: exit 3 is documented as "some failed items", and skipped items are
+  the safety checks working (a scheduler must not record them as failures). Only failed items
+  exit 3.
+- **XC-3:** one std-only log, `myjanitor.log` in the data folder, 256 KiB with one rotated copy.
+  Written by a process-wide panic hook (installed by `Engine::new` so the GUI, CLI and
+  scheduled runs all get it) and by the engine's catch sites (job, scan, detector), which also
+  put the payload into the message the UI shows. No dependency, no file contents, paths only
+  as the failing operation's message carries them. Not done: surfacing the log path in
+  `app_info` and an "Open log folder" action (an IPC contract change), a log line for cache
+  resets and journal replay, and the payload text at the `parallel_map` and thread pool sites
+  (the hook already records every panic there).

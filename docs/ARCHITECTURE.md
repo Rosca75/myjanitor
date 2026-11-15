@@ -175,6 +175,12 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
 - One enum, `mj_core::Error`, with stable `code()`s and actionable `hint()`s;
   `Result<T>` alias everywhere. `Error::io(path, err)` maps `NotFound` and
   `PermissionDenied` to their own variants.
+- Diagnostics (XC-3): `mj_core::diag` keeps `myjanitor.log` (cap 256 KiB, one rotated copy
+  `myjanitor.log.1`, std only) in the data folder. `Engine::new` points it there and installs
+  a panic hook (thread, source location, payload; the previous hook still runs). Engine
+  catch sites (job bodies, the scan, each detector) log one line with the payload and put it
+  in the message the UI shows. It holds no file contents and no path detail beyond the
+  journal's.
 - On the wire: `ErrorInfo {code, message, hint, path?}` (IPC.md §1.1). Command
   failures reject the promise with it; per-item failures live in
   `ItemOutcome.error`, journal entries and reports, so one bad file never
