@@ -214,3 +214,12 @@ Checked against the code when this index was refreshed. The code is right in eac
 - **Choice:** (b). PR 2 carries the review-2 fixes (G-01 to G-14 and the five partly closed review-1 items), the T1 gap closure (`docs/decisions/W5-FIX.md`, Part B) and this documentation refresh.
 - **Why:** PR 1 had to land first so an interruption could not leave `main` empty, and a separate PR keeps the fixes reviewable on their own.
 - **Verification:** the review-2 fixes were verified by their regression tests (825 Rust and 214 UI tests) and by the Linux and Windows-target clippy gates, not by a third adversarial review. The new tests that are not Unix-gated will run on `windows-latest` for the first time in the CI run of PR 2.
+
+## D-015 A pinned trash route is explicit
+- **Context:** Windows CI showed that with the `windows_recycle_bin` setting on, the engine switched to the real Recycle Bin even when the caller had fixed the route to the quarantine: on Windows the quarantine is also the OS default, so "fixed by the caller" could not be told apart from "default".
+- **Choice:** `EngineConfig.trash_route` is `Option<TrashRoute>`: `None` follows the OS default and the setting; `Some(route)` pins it and no setting can change it. Tests pin the quarantine.
+- **Why:** user data safety: a caller (or test) that pins a route must never have removals redirected to another place.
+
+## D-016 Long text in PDF exports is cut in the middle
+- **Context:** exported PDF tables cut long paths at the end, dropping the file name (seen on Windows, where temp paths are long).
+- **Choice:** cut in the middle (`head...tail`), keeping the end of the path.

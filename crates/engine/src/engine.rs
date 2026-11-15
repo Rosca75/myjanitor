@@ -36,9 +36,11 @@ pub struct EngineConfig {
     pub quarantine_dir: PathBuf,
     /// Scratch folder for dry-run optimiser outputs (default `<cache>/tmp`).
     pub temp_dir: PathBuf,
-    /// Where "to Recycle Bin / Trash" goes (default: the OS rule, D-2E01). Tests use the
-    /// quarantine so nothing ever reaches the user's real Trash.
-    pub trash_route: TrashRoute,
+    /// Where "to Recycle Bin / Trash" goes. `None` (default) follows the OS rule (D-2E01)
+    /// and, on Windows, the `windows_recycle_bin` setting. `Some(route)` pins the route:
+    /// no setting can change it. Tests pin the quarantine so nothing ever reaches the
+    /// user's real Trash or Recycle Bin.
+    pub trash_route: Option<TrashRoute>,
     pub portable: bool,
     pub events: Arc<dyn EventSink>,
     pub platform: Arc<dyn Platform>,
@@ -62,7 +64,7 @@ impl EngineConfig {
             temp_dir: cache_dir.join("tmp"),
             data_dir,
             cache_dir,
-            trash_route: TrashRoute::default_for_os(),
+            trash_route: None,
             portable: false,
             events: Arc::new(crate::api::NullSink),
             platform: Arc::new(NativePlatform::new()),

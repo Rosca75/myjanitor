@@ -26,4 +26,4 @@ State: todo / in progress / done / blocked.
 | 4 | W4-3 | CI | Sonnet | done (first run unproven) |
 | 4 | W4-4 | Docs | Sonnet | in progress |
 | 5 | W5-1 | Review-2 fixes + T1 gap closure | Opus | done |
-| 5 | W5-2 | Docs refresh (Windows verification level, review status, feature status) | Sonnet | in progress |
+| 5 | W5-2 | Docs refresh (Windows verification level, review status, feature status) | Sonnet | done |

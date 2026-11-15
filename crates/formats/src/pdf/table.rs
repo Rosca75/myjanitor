@@ -68,14 +68,16 @@ pub fn winansi(c: char) -> Option<u8> {
     HIGH.iter().find(|(h, _)| *h == c).map(|(_, b)| *b)
 }
 
-/// `text` as WinAnsi bytes, at most `max_chars` characters (cut with `...`), escaped for a
-/// literal string; `replaced` counts characters that could not be encoded.
+/// `text` as WinAnsi bytes, at most `max_chars` characters, escaped for a literal string;
+/// `replaced` counts characters that could not be encoded. Text that is too long is cut in
+/// the middle (`head...tail`), so the end of a path (the file name) always stays readable.
 fn encode(text: &str, max_chars: usize, replaced: &mut u64) -> Vec<u8> {
     let chars: Vec<char> = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
     let cut = chars.len() > max_chars;
-    let keep = if cut { max_chars.saturating_sub(3) } else { chars.len() };
-    let mut out = Vec::with_capacity(keep + 3);
-    for &c in &chars[..keep] {
+    let room = max_chars.saturating_sub(3);
+    let (head, tail) = if cut { (room / 3, room - room / 3) } else { (chars.len(), 0) };
+    let mut out = Vec::with_capacity(max_chars.min(chars.len()) + 3);
+    let mut push = |out: &mut Vec<u8>, c: char| {
         let b = winansi(c).unwrap_or_else(|| {
             *replaced += 1;
             b'?'
@@ -84,9 +86,15 @@ fn encode(text: &str, max_chars: usize, replaced: &mut u64) -> Vec<u8> {
             out.push(b'\\');
         }
         out.push(b);
+    };
+    for &c in &chars[..head] {
+        push(&mut out, c);
     }
     if cut {
         out.extend_from_slice(b"...");
+        for &c in &chars[chars.len() - tail..] {
+            push(&mut out, c);
+        }
     }
     out
 }
@@ -245,5 +253,19 @@ mod tests {
         assert_eq!(winansi('€'), Some(0x80));
         assert_eq!(winansi('日'), None);
         assert_eq!(winansi('\u{0081}'), None);
+    }
+
+    #[test]
+    fn long_text_is_cut_in_the_middle_and_keeps_its_end() {
+        let mut replaced = 0;
+        let long = format!("C:\\Users\\{}\\a\\x (1).bin", "d".repeat(200));
+        let out = encode(&long, 40, &mut replaced);
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("C:"), "{text}");
+        assert!(text.contains("..."), "{text}");
+        assert!(text.ends_with("x \\(1\\).bin"), "{text}");
+        let short = encode("a/b.txt", 40, &mut replaced);
+        assert_eq!(short, b"a/b.txt");
+        assert_eq!(replaced, 0);
     }
 }

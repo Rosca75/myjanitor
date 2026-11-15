@@ -107,7 +107,7 @@ fn fixture(lossy: bool, swap_detector: bool, files: &[(&str, usize)]) -> Fx {
     let app = TempDir::new("engine-faults-app").unwrap();
     let mut cfg = EngineConfig::with_dirs(app.join("data"), app.join("cache"), app.join("journal"), app.join("q"));
     cfg.temp_dir = app.join("tmp");
-    cfg.trash_route = mj_actions::TrashRoute::Quarantine;
+    cfg.trash_route = Some(mj_actions::TrashRoute::Quarantine);
     let mut engine = Engine::new(cfg).unwrap();
     {
         let e = Arc::get_mut(&mut engine).expect("sole owner right after construction");
@@ -286,7 +286,7 @@ fn stopping_a_scan_in_the_detector_phase_keeps_the_previous_results() {
         .unwrap();
     let app = TempDir::new("engine-slowdet-app").unwrap();
     let mut cfg = EngineConfig::with_dirs(app.join("data"), app.join("cache"), app.join("journal"), app.join("q"));
-    cfg.trash_route = mj_actions::TrashRoute::Quarantine;
+    cfg.trash_route = Some(mj_actions::TrashRoute::Quarantine);
     let mut engine = Engine::new(cfg).unwrap();
     {
         let e = Arc::get_mut(&mut engine).unwrap();

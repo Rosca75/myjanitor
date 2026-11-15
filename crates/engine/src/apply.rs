@@ -103,21 +103,19 @@ impl Engine {
         ExecOptions { confirmed, trash_route: self.trash_route(), ..ExecOptions::default() }
     }
 
-    /// CLN-ACT-02: the route "Recycle Bin / Trash" removals take. The configured route,
-    /// except on Windows where the `windows_recycle_bin` setting switches the OS default
-    /// (MyJanitor's quarantine) to the real Recycle Bin. A route a test or caller fixed to
-    /// something else than the OS default is never changed by the setting.
+    /// CLN-ACT-02: the route "Recycle Bin / Trash" removals take. A route pinned in the
+    /// config is always used as is. Otherwise the OS default applies, except on Windows
+    /// where the `windows_recycle_bin` setting switches the default (MyJanitor's
+    /// quarantine) to the real Recycle Bin.
     pub(crate) fn trash_route(&self) -> mj_actions::TrashRoute {
-        let base = self.cfg.trash_route;
-        if cfg!(windows)
-            && base == mj_actions::TrashRoute::default_for_os()
-            && base == mj_actions::TrashRoute::Quarantine
-            && self.cfg.persist
-            && lock(&self.settings).general.windows_recycle_bin
-        {
+        if let Some(pinned) = self.cfg.trash_route {
+            return pinned;
+        }
+        let default = mj_actions::TrashRoute::default_for_os();
+        if cfg!(windows) && self.cfg.persist && lock(&self.settings).general.windows_recycle_bin {
             mj_actions::TrashRoute::Platform
         } else {
-            base
+            default
         }
     }
 
