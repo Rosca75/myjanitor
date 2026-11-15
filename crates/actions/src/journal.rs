@@ -321,6 +321,19 @@ impl Journal {
         lock(&self.entries).values().cloned().collect()
     }
 
+    /// Latest state of the entries `keep` accepts, in id order. Only those are cloned, so a
+    /// query over a long history (XC-4) does not copy every entry ever recorded. `keep` runs
+    /// under the journal lock and must not call back into the journal.
+    pub fn entries_where(&self, keep: impl Fn(&JournalEntry) -> bool) -> Vec<JournalEntry> {
+        lock(&self.entries).values().filter(|e| keep(e)).cloned().collect()
+    }
+
+    /// Visit the latest state of every entry in id order without cloning any. `visit` runs
+    /// under the journal lock and must not call back into the journal.
+    pub fn for_each_entry(&self, mut visit: impl FnMut(&JournalEntry)) {
+        lock(&self.entries).values().for_each(&mut visit);
+    }
+
     /// Entries whose latest record is `intent` (left by an interrupted run).
     pub fn pending_intents(&self) -> Vec<JournalEntry> {
         lock(&self.entries).values().filter(|e| e.state == JournalState::Intent).cloned().collect()
@@ -473,6 +486,13 @@ mod tests {
         assert_eq!(j.replay_stats().ignored, 0);
         let run = es[0].run_id;
         assert_eq!(j.entries_of(run).len(), 2);
+        // XC-4: the filtered and visiting accessors agree with all_entries().
+        let done = j.entries_where(|e| e.state == JournalState::Done);
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].id, es[0].id);
+        let mut seen = Vec::new();
+        j.for_each_entry(|e| seen.push(e.id));
+        assert_eq!(seen, es.iter().map(|e| e.id).collect::<Vec<_>>());
         assert!(j.next_run_id(nov).0 > run.0);
         // Reservations continue after the replayed ids.
         assert_eq!(j.reserve_entry_ids(run, 1).unwrap().0, es[1].id.0 + 1);

@@ -632,12 +632,17 @@ fn same_file(ctx: &ExecContext<'_>, a: &Path, b: &Path) -> bool {
 /// The entry an undo-run entry reverses: same original, action and retained locations.
 fn find_undo_source(ctx: &ExecContext<'_>, u: &JournalEntry) -> Option<JournalEntry> {
     ctx.journal
-        .all_entries()
+        .entries_where(|s| {
+            s.id < u.id
+                && s.run_id != u.run_id
+                && matches!(s.state, JournalState::Done | JournalState::UndoFailed)
+                && s.original == u.original
+                && s.action == u.action
+                && s.retained_at == u.retained_at
+                && s.trash == u.trash
+                && s.link_source == u.link_source
+        })
         .into_iter()
-        .filter(|s| s.id < u.id && s.run_id != u.run_id)
-        .filter(|s| matches!(s.state, JournalState::Done | JournalState::UndoFailed))
-        .filter(|s| s.original == u.original && s.action == u.action)
-        .filter(|s| s.retained_at == u.retained_at && s.trash == u.trash && s.link_source == u.link_source)
         .max_by_key(|s| s.id)
 }
 

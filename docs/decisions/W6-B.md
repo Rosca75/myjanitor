@@ -650,3 +650,14 @@ quick-search autocomplete test pins the same count). Not changed: the "Owner: W3
 headers (they sit in files lane-a owns and are history, not a claim about behaviour) and
 `bundle.targets` in tauri.conf.json (src-tauri is lane-a's; CI always passes `--bundles`
 explicitly and the README documents the Windows installer command).
+
+## D-B49 Quarantine queries do not clone the journal (XC-4)
+
+`quarantine::held()` cloned every entry ever recorded (`all_entries()`) before filtering, and
+ran after every applied step, at start-up and on every History refresh. `Journal` gained
+`entries_where` (clones only what a predicate accepts) and `for_each_entry` (visits under the
+lock, clones nothing). `held()` and `purge` use the first, `summary()` the second, and the
+undo-source lookup in `undo.rs` the first. Behaviour is unchanged (same predicate, now
+`is_held`). Not done, by design: journal compaction and retention (rewriting month files,
+loading only run headers of expired runs, an incremental held-index and counters) is a
+larger change touching replay and the on-disk format; it is listed as an open item.
