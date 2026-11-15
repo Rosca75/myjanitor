@@ -800,3 +800,19 @@ one side wholesale.
 - **Status record:** the W6-B SCAN-7 open item (disk view rebuilds totals per request,
   unused `FolderTree` in `breakdown`, W6-B D-B6) was missing from the wave-6 entry of
   docs/STATUS.md; added.
+
+## D-6A44 The shell grants `overwrite` only for the path the Save dialog returned (review finding)
+
+- **Finding:** `report_export` / `results_export` honoured `overwrite: true` for any absolute
+  path the webview sent, so "only the file the user confirmed in the OS dialog is replaced"
+  held only because the UI behaved.
+- **Decision:** `dialog_save_file` records the path it returns in managed state
+  (`SavedDestination`; a cancel clears it). The Tauri wrappers of the two export commands pass
+  `overwrite` on only when `dest` equals that path (path comparison), which consumes the
+  record; otherwise they force it to `false` and the engine writes a free sibling name or
+  refuses, as before. The decision is the pure `grant_overwrite` in `src-tauri/src/dialogs.rs`.
+  The engine API and the CLI are unchanged.
+- **Consequence:** a retry of a failed export to the same path writes a sibling name unless
+  the user picks the path again in the dialog (the record is consumed when granted).
+- **Test:** `dialogs::tests::overwrite_is_granted_only_for_the_path_the_dialog_returned`,
+  `the_state_records_and_forgets`.

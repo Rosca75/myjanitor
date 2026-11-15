@@ -14,9 +14,10 @@
 //! while the dialog is open.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 use mj_core::ErrorInfo;
 use mj_engine::api::{DialogFileFilter, DialogPath, DialogPickFolderRequest, DialogSaveFileRequest};
@@ -57,6 +58,36 @@ impl Drop for OpenDialog<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
     }
+}
+
+/// Managed state: the path the last "Save as" dialog returned and no export has
+/// used yet. The export commands honour `overwrite: true` only for exactly this
+/// path (see [`grant_overwrite`]), so "only the file the user confirmed in the OS
+/// dialog is replaced" is enforced here and not left to the webview.
+#[derive(Default)]
+pub struct SavedDestination(Mutex<Option<PathBuf>>);
+
+impl SavedDestination {
+    /// Remember `path` (or forget the last one after a cancelled dialog).
+    fn record(&self, path: Option<PathBuf>) {
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner) = path;
+    }
+
+    /// The `overwrite` flag an export to `dest` may run with.
+    pub fn overwrite_for(&self, dest: &Path, requested: bool) -> bool {
+        grant_overwrite(&mut self.0.lock().unwrap_or_else(PoisonError::into_inner), dest, requested)
+    }
+}
+
+/// The decision: a requested overwrite is granted only when `dest` is the recorded
+/// dialog path, and granting consumes the record (one confirmation, one replace).
+/// Anything else is refused, and the export then writes a free sibling name.
+fn grant_overwrite(recorded: &mut Option<PathBuf>, dest: &Path, requested: bool) -> bool {
+    if requested && recorded.as_deref() == Some(dest) {
+        *recorded = None;
+        return true;
+    }
+    false
 }
 
 /// Which dialog to show.
@@ -217,10 +248,13 @@ pub async fn dialog_pick_folder(
 pub async fn dialog_save_file(
     window: WebviewWindow,
     gate: State<'_, DialogGate>,
+    saved: State<'_, SavedDestination>,
     req: DialogSaveFileRequest,
 ) -> Result<DialogPath, ErrorInfo> {
     let _open = gate.inner().enter()?;
-    show(window, Spec::save(req)).await
+    let answer = show(window, Spec::save(req)).await?;
+    saved.record(answer.0.clone());
+    Ok(answer)
 }
 
 #[cfg(test)]
@@ -229,6 +263,34 @@ mod tests {
 
     fn filter(name: &str, extensions: &[&str]) -> DialogFileFilter {
         DialogFileFilter { name: name.into(), extensions: extensions.iter().map(|e| e.to_string()).collect() }
+    }
+
+    #[test]
+    fn overwrite_is_granted_only_for_the_path_the_dialog_returned() {
+        let dest = Path::new("/home/me/out.csv");
+        let mut rec = Some(dest.to_path_buf());
+        assert!(!grant_overwrite(&mut rec, dest, false), "not asked for: not granted");
+        assert!(rec.is_some(), "and the confirmation is kept");
+        assert!(!grant_overwrite(&mut rec, Path::new("/home/me/other.csv"), true), "another path");
+        assert!(!grant_overwrite(&mut rec, Path::new("out.csv"), true), "a relative spelling");
+        assert!(rec.is_some(), "a refusal keeps the confirmation");
+        assert!(grant_overwrite(&mut rec, dest, true));
+        assert!(rec.is_none(), "granting consumes the record");
+        assert!(!grant_overwrite(&mut rec, dest, true), "one confirmation replaces once");
+        assert!(!grant_overwrite(&mut None, dest, true), "no dialog, no overwrite");
+    }
+
+    #[test]
+    fn the_state_records_and_forgets() {
+        let s = SavedDestination::default();
+        let dest = Path::new("/a/b.csv");
+        assert!(!s.overwrite_for(dest, true));
+        s.record(Some(dest.to_path_buf()));
+        assert!(s.overwrite_for(dest, true));
+        assert!(!s.overwrite_for(dest, true));
+        s.record(Some(dest.to_path_buf()));
+        s.record(None);
+        assert!(!s.overwrite_for(dest, true), "a cancelled dialog forgets the last path");
     }
 
     #[test]

@@ -47,6 +47,7 @@ pub fn run() {
             let slot = Arc::new(startup::EngineSlot::default());
             app.manage(commands::AppState { engine: Arc::clone(&slot) });
             app.manage(dialogs::DialogGate::default());
+            app.manage(dialogs::SavedDestination::default());
             let handle = app.handle().clone();
             // IPC-2: the engine (journal, scan cache, tool probe) is built off the main
             // thread; commands wait for it on the blocking pool.

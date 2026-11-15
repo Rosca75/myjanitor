@@ -352,13 +352,23 @@ pub async fn report_last(state: State<'_, AppState>) -> Result<Option<Report>, E
 
 /// Write a report (CSV/HTML) or the audit log (CSV, SAF-12).
 #[tauri::command]
-pub async fn report_export(state: State<'_, AppState>, req: ReportExportRequest) -> Result<ExportResult, ErrorInfo> {
+pub async fn report_export(
+    state: State<'_, AppState>,
+    saved: State<'_, crate::dialogs::SavedDestination>,
+    mut req: ReportExportRequest,
+) -> Result<ExportResult, ErrorInfo> {
+    req.overwrite = saved.overwrite_for(&req.dest, req.overwrite);
     run(state, move |e| e.report_export(req)).await
 }
 
 /// Export candidates (CSV/HTML, CLN-ACT-11).
 #[tauri::command]
-pub async fn results_export(state: State<'_, AppState>, req: ResultsExportRequest) -> Result<ExportResult, ErrorInfo> {
+pub async fn results_export(
+    state: State<'_, AppState>,
+    saved: State<'_, crate::dialogs::SavedDestination>,
+    mut req: ResultsExportRequest,
+) -> Result<ExportResult, ErrorInfo> {
+    req.overwrite = saved.overwrite_for(&req.dest, req.overwrite);
     run(state, move |e| e.results_export(req)).await
 }
 

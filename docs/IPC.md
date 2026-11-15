@@ -565,7 +565,11 @@ GUI sends when `dest` came from `dialog_save_file`: the OS dialog has already
 asked the user before an existing file was chosen, so that file is replaced
 (written to a temporary sibling first and renamed over it when complete; a
 failed export leaves the old file untouched; a folder or a link at `dest` is
-never replaced). `overwrite` defaults to `false`; the CLI never sets it.
+never replaced). `overwrite` defaults to `false`; the CLI never sets it. The desktop shell enforces the
+premise: it honours `overwrite: true` only when `dest` equals the path the last
+`dialog_save_file` returned (consumed by that export, so one confirmation replaces once);
+otherwise it sends `overwrite: false` to the engine and the export is written beside the
+existing file. The same holds for `results_export`.
 Columns (CSV, UTF-8 with BOM): report — `step, path, status, bytes_before,
 bytes_after, saved, error`; audit — `time, run_id, entry_id, action, state,
 path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
@@ -716,7 +720,8 @@ suggested name (a name, not a path; one with a path separator or a character
 Windows does not allow is ignored), `filters` the file types offered; on
 Windows the first extension of the first filter is appended when the user types
 a name without one. The dialog asks before an existing file is chosen, which is
-why the UI may then send `overwrite: true` to the export command.
+why the UI may then send `overwrite: true` to the export command. The shell remembers the
+returned path (`null` on cancel forgets it) and grants that one replace; see `report_export`.
 
 ```json DialogSaveFileRequest
 {"title":"Save the results","file_name":"myjanitor-results.csv","filters":[{"name":"CSV file","extensions":["csv"]}]}
