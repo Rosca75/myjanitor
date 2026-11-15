@@ -88,7 +88,11 @@ mode, elevation, and whether the undo journal is persistent (if `false`, show a
 warning that History will not survive a restart). `capabilities` lists the platform
 features this build can use here (`recycle_bin`, `freedesktop_trash`,
 `wof_compression`, `btrfs_compression`, `cloud_dehydrate`, `reflinks`, `hardlinks`,
-`context_menu`, `os_schedules`); the UI labels "Windows only" from it. `launch`
+`context_menu`, `os_schedules`); the UI labels "Windows only" from it.
+`trash_route` names where "Recycle Bin / Trash" removals actually go: `quarantine`
+(MyJanitor quarantine, the Windows default), `recycle_bin` (Windows with the
+`general.windows_recycle_bin` setting on; restore is best effort) or `trash` (Linux
+freedesktop Trash); the UI words every such label from it. `launch`
 (absent normally) is `{"mode":"optimise"|"duplicates","path":…}` when the GUI was
 started from a context-menu entry (`--optimise <path>` / `--duplicates <path>`): the
 scope is already that path and the UI opens the Optimise or Clean view; nothing is
@@ -332,13 +336,20 @@ shows (SAF-11): tiles, originals options with the default (Recycle Bin), the
 synced-folder warning with the online-only alternative (SAF-10, CLN-ACT-07),
 the acknowledgement text and the acting-button label. The UI renders the
 acting button in the warning colour (`permanent: false`) or the danger colour
-(`permanent: true`), disabled until the checkbox is ticked.
+(`permanent: true`), disabled until the checkbox is ticked. `selection_digest`
+identifies exactly what the dialog describes (the step's action and its items
+with their scan stamps); the UI sends it back in `StepConfirmation`.
 
 ### `plan_apply`
 `PlanApplyRequest` → `ApplyStarted`. *Spawns.* Needs one `StepConfirmation`
 with `acknowledged: true` for every step whose safety class requires
-confirmation (`lossy_opt_in`, `permanent`); otherwise fails with
-`confirmation_required` and nothing runs. Creates a run (`RunId`), queues one
+confirmation (`lossy_opt_in`, `permanent`), carrying the `selection_digest` of
+the `ConfirmationInfo` it answers; otherwise (missing, unticked, or a digest that
+no longer matches the step because a rescan or a selection change altered what
+it would act on) fails with `confirmation_required` and nothing runs. After a
+rescan, a row the previous results had keeps the selection the user saw (by
+path; a checked row stays checked only while its scan stamp is unchanged); only
+new rows take the detector's default. Creates a run (`RunId`), queues one
 job per step in plan order; progress via `job://*`, then `history://changed`
 and `plan://changed` (applied steps leave the plan) and `opportunities://changed`
 (applied items leave their cards). Fails with `conflict` while another plan is
@@ -432,7 +443,10 @@ No request → `Report` or `null`. "Last report" in the status strip.
 
 ### `report_export`
 `ReportExportRequest` → `ExportResult`. `kind: "report"` writes one run's
-report as CSV or HTML; `kind: "audit"` writes the audit CSV (SAF-12) of one run
+report as CSV, HTML or PDF (`format: "pdf"`, CLN-ACT-11: a text-only, paginated
+table of path, size, action and status in the standard Helvetica font;
+characters it cannot show are replaced by `?` and the count is noted on the last
+page); `kind: "audit"` writes the audit CSV (SAF-12) of one run
 or, without `run_id`, of the whole journal. Never overwrites: `name (1).csv`.
 Columns (CSV, UTF-8 with BOM): report — `step, path, status, bytes_before,
 bytes_after, saved, error`; audit — `time, run_id, entry_id, action, state,
@@ -444,7 +458,7 @@ path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
 
 ### `results_export`
 `ResultsExportRequest` → `ExportResult`. CLN-ACT-11: candidates of one or all
-opportunities. Columns: `opportunity, path, size, size_after, saving, reason,
+opportunities, as CSV, HTML or PDF (path, size, opportunity, selected). Columns: `opportunity, path, size, size_after, saving, reason,
 badges, selected, group, modified`.
 
 ```json ResultsExportRequest
@@ -575,7 +589,7 @@ Every example below is checked against the Rust types. Field order is free.
 #### AppInfo
 
 ```json AppInfo
-{"name":"MyJanitor","version":"0.1.0","platform":"windows","bundle_id":"com.myjanitor.app","portable":false,"data_dir":"C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor","cache_dir":"C:\\Users\\Michel\\AppData\\Local\\MyJanitor\\cache","elevated":false,"journal_persistent":true,"capabilities":["recycle_bin","wof_compression","cloud_dehydrate","hardlinks","context_menu","os_schedules"]}
+{"name":"MyJanitor","version":"0.1.0","platform":"windows","bundle_id":"com.myjanitor.app","portable":false,"data_dir":"C:\\Users\\Michel\\AppData\\Roaming\\MyJanitor","cache_dir":"C:\\Users\\Michel\\AppData\\Local\\MyJanitor\\cache","elevated":false,"journal_persistent":true,"capabilities":["recycle_bin","wof_compression","cloud_dehydrate","hardlinks","context_menu","os_schedules"],"trash_route":"quarantine"}
 ```
 
 #### ScanScope
@@ -770,13 +784,13 @@ keep_if_not_smaller}`, `archive{format, level, dest?, originals, keep_sources}`,
 #### ConfirmationInfo
 
 ```json ConfirmationInfo
-{"step_id":15,"title":"Compress 23 recordings?","body":"This is lossy. The new files sound fine for speech but cannot be turned back into the originals.","files":23,"bytes_now":5153960755,"bytes_after":644245094,"saving":4509715661,"confidence":"estimated","originals_options":[{"policy":{"policy":"recycle_bin"},"label":"Move to Recycle Bin (default)","reversible":true},{"policy":{"policy":"quarantine"},"label":"Keep in quarantine for 30 days","reversible":true},{"policy":{"policy":"delete"},"label":"Delete permanently","reversible":false}],"default_originals":{"policy":"recycle_bin"},"synced":{"count":6,"provider":"OneDrive – Acme","can_online_only":true},"acknowledge_text":"I understand the new files are lower quality than the originals","undo_text":"Every change is logged; History → Restore brings the originals back for 30 days.","action_label":"Compress 23 files","permanent":false}
+{"step_id":15,"title":"Compress 23 recordings?","body":"This is lossy. The new files sound fine for speech but cannot be turned back into the originals.","files":23,"bytes_now":5153960755,"bytes_after":644245094,"saving":4509715661,"confidence":"estimated","originals_options":[{"policy":{"policy":"recycle_bin"},"label":"Move to Recycle Bin (default)","reversible":true},{"policy":{"policy":"quarantine"},"label":"Keep in quarantine for 30 days","reversible":true},{"policy":{"policy":"delete"},"label":"Delete permanently","reversible":false}],"default_originals":{"policy":"recycle_bin"},"synced":{"count":6,"provider":"OneDrive – Acme","can_online_only":true},"acknowledge_text":"I understand the new files are lower quality than the originals","undo_text":"Every change is logged; History → Restore brings the originals back for 30 days.","action_label":"Compress 23 files","permanent":false,"selection_digest":"9f2c4e0b7d1a5c3e8f6b2d4a0c9e7f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c3e"}
 ```
 
 #### StepConfirmation
 
 ```json StepConfirmation
-{"step_id":15,"acknowledged":true,"originals":{"policy":"quarantine"}}
+{"step_id":15,"acknowledged":true,"originals":{"policy":"quarantine"},"selection_digest":"9f2c4e0b7d1a5c3e8f6b2d4a0c9e7f1b3d5a7c9e1f3b5d7a9c1e3f5b7d9a1c3e"}
 ```
 
 #### ApplyStarted
@@ -802,7 +816,9 @@ it undoable) and, in undo runs, `undo_of` (the entry id this record reverses). O
 `output_sha256`: SHA-256 of the output an optimisation or archive wrote; undo discards that
 output only while it still has this content (otherwise `conflict`, nothing changed). Optional
 `retention_days`: how long a quarantined item is held before the automatic purge (the
-step's `purge_after_days`).
+step's `purge_after_days`). Optional `original_link` (`true` only): the original was a link
+removed as itself; a restore then puts back only a link, and a file entry only a regular
+file with the recorded content.
 
 ```json JournalEntry
 {"id":1794582245123000001,"run_id":1794582245123,"job_id":31,"step_id":12,"at":1794582246000000000,"state":"done","action":"trash","target":"file","original":"/home/me/Downloads/IMG_0001.JPG","original_stamp":{"size":4194304,"mtime":1690000000000000000},"original_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","bytes_before":4194304,"bytes_after":0,"trash":{"location":"/home/me/.local/share/Trash/files/IMG_0001.JPG","info":"/home/me/.local/share/Trash/info/IMG_0001.JPG.trashinfo","trashed_at":1794582246000000000},"reversible":true,"undo_deadline":1797174246000000000}
@@ -838,7 +854,7 @@ Every field is optional on input (defaults shown here); unknown fields are
 ignored. `type_groups` are the editable file-type groups (CLN-FLT-02).
 
 ```json Settings
-{"version":1,"general":{"undo_days":30,"quarantine_days":30,"default_originals":{"policy":"recycle_bin"},"light_copy_suffix":"_light","kept_languages":["en","fr"]},"scan":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false},"safety":{"protected_paths":[],"exclusions":[],"skip_signed":true,"skip_labelled":true,"skip_encrypted":true,"synced_folder_warning":true},"optimise":{"lossless_only":true,"keep_if_not_smaller":true,"preserve_timestamps":true,"preserve_permissions":true,"preserve_ads":true},"performance":{"threads":0,"parallel_jobs":0,"low_memory":false,"cpu_priority":"normal"},"tool_paths":{},"integration":{"context_menu":false,"fs_compression_watcher":false,"watched_folders":[]},"type_groups":{"installers":["msi","exe","iso"]}}
+{"version":1,"general":{"undo_days":30,"quarantine_days":30,"default_originals":{"policy":"recycle_bin"},"light_copy_suffix":"_light","kept_languages":["en","fr"],"windows_recycle_bin":false},"scan":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false},"safety":{"protected_paths":[],"exclusions":[],"skip_signed":true,"skip_labelled":true,"skip_encrypted":true,"synced_folder_warning":true},"optimise":{"lossless_only":true,"keep_if_not_smaller":true,"preserve_timestamps":true,"preserve_permissions":true,"preserve_ads":true},"performance":{"threads":0,"parallel_jobs":0,"low_memory":false,"cpu_priority":"normal"},"tool_paths":{},"integration":{"context_menu":false,"fs_compression_watcher":false,"watched_folders":[]},"type_groups":{"installers":["msi","exe","iso"]}}
 ```
 
 ```json SettingsSetRequest

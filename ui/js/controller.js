@@ -138,7 +138,7 @@ function coreActions(c) {
      * Open the in-app folder browser. Modes: scope (add a location), move, keep
      * (preferred folder of a keep rule) and export (choose where to save; also
      * carries the file name and what to export).
-     * @param {{ mode?: 'scope'|'move'|'keep'|'export', exportJob?: any, filename?: string }} [opts]
+     * @param {{ mode?: 'scope'|'move'|'copy'|'keep'|'export', exportJob?: any, filename?: string }} [opts]
      */
     async openBrowser(opts = {}) {
       const mode = opts.mode ?? 'scope';
@@ -166,9 +166,9 @@ function coreActions(c) {
     chooseFolder: guard(async () => {
       const b = get().browser;
       if (!b?.path) return;
-      if (b.mode === 'move') {
+      if (b.mode === 'move' || b.mode === 'copy') {
         set({ browser: null });
-        await c.actions.setStepAction('move', b.path);
+        await c.actions.setStepAction(b.mode, b.path);
         return;
       }
       if (b.mode === 'keep') {

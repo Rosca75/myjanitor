@@ -287,7 +287,10 @@ impl Leaf {
             Leaf::Attr { attr, set } => {
                 Tri::from(if *set { e.attrs.contains(*attr) } else { !e.attrs.intersects(*attr) })
             }
-            Leaf::Owner(o) => Tri::from(e.owner.as_ref().is_some_and(|x| x.to_lowercase() == *o)),
+            // CLN-FLT-06: `owner:alice` also matches `uid:N` when the passwd file names N alice.
+            Leaf::Owner(o) => Tri::from(e.owner.as_ref().is_some_and(|x| {
+                x.to_lowercase() == *o || mj_core::users::name_of_owner(x).is_some_and(|n| n.to_lowercase() == *o)
+            })),
             Leaf::Depth(cmp, v) => Tri::from(cmp.test(e.depth, *v)),
             Leaf::PathLen(cmp, v) => {
                 let n = e.path.to_string_lossy().encode_utf16().count();

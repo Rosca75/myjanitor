@@ -142,7 +142,7 @@ impl Detector for RawJpegPairs {
             category: Category::Clean,
             safety: SafetyClass::ReviewOnly,
             default_action: ActionKind::None,
-            available_actions: vec![ActionKind::None, ActionKind::Trash, ActionKind::Move],
+            available_actions: vec![ActionKind::None, ActionKind::Trash, ActionKind::Move, ActionKind::Copy],
             settings: vec![SettingSpec {
                 key: "keep".into(),
                 label: "Keep".into(),

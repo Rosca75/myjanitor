@@ -5,9 +5,10 @@
 //!   (BOM or the NUL-interleaving heuristic) and 8-bit legacy text. At most
 //!   [`ContentConfig::max_bytes`] of a file are read; binary files are skipped.
 //! * PDF, Word, Excel, PowerPoint and OpenDocument text is reached through
-//!   the [`TextExtractor`] extension point. Nobody registers extractors by
-//!   default, so those files are reported as *unavailable* (never as "no
-//!   match"): see [`ContentOutcome::Unavailable`] and
+//!   the [`TextExtractor`] extension point. The engine registers PDF, Word,
+//!   Excel and PowerPoint extractors (CLN-CNT-01); a format with no extractor
+//!   (legacy `.doc`/`.xls`/`.ppt`, OpenDocument) is reported as *unavailable*
+//!   (never as "no match"): see [`ContentOutcome::Unavailable`] and
 //!   `FilterDiagnostics::content_unavailable`.
 //! * The mismatch check reads a bounded header and asks `mj_formats::sniff`.
 

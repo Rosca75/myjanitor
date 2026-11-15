@@ -62,6 +62,7 @@ export function renderReport(s, actions) {
     h('div', { class: 'modal__foot' },
       exp(copy.report.exportCsv, { type: 'report', format: 'csv' }, 'report-csv'),
       exp(copy.report.exportHtml, { type: 'report', format: 'html' }, 'report-html'),
+      exp(copy.report.exportPdf, { type: 'report', format: 'pdf' }, 'report-pdf'),
       exp(copy.report.exportAudit, { type: 'audit', format: 'csv' }, 'report-audit'),
       h('span', { class: 'modal__spacer' }), button({ label: copy.report.close, variant: 'secondary', fk: 'report-close', onClick: () => actions.closeReport() })),
   ];

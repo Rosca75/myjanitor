@@ -92,6 +92,12 @@ export function createModel(opts) {
         return 'Deleted for good · cannot be undone';
       case 'move':
         return 'Moved to the folder you chose';
+      case 'copy':
+        return 'Copied to the folder you chose';
+      case 'hardlink':
+        return 'Replace with hard links';
+      case 'reflink':
+        return 'Replace with reflinks';
       default:
         return o.description;
     }
@@ -111,7 +117,7 @@ export function createModel(opts) {
     const params = { ...(base?.params ?? o.params), ...(prev?.params ?? {}), ...(o.params.preset ? { preset: o.params.preset } : {}) };
     const permanent = action.kind === 'permanent_delete';
     const lossy = !permanent && !!m.lossy.get(o.id);
-    const removal = ['trash', 'quarantine', 'permanent_delete', 'move'].includes(action.kind);
+    const removal = ['trash', 'quarantine', 'permanent_delete', 'move', 'hardlink', 'reflink'].includes(action.kind);
     return {
       id: prev?.id ?? m.nextStepId++,
       opportunity: o.id,
@@ -121,7 +127,7 @@ export function createModel(opts) {
       params,
       selection: { include: [], exclude: [] },
       estimate: { files: s.selected, bytes_before: before, bytes_after: removal ? 0 : Math.round(before * afterRatio), confidence: m.exact ? 'exact' : o.confidence, skipped: 0 },
-      safety: permanent ? 'permanent' : lossy ? 'lossy_opt_in' : o.safety === 'lossy_opt_in' ? 'reversible' : o.safety,
+      safety: permanent ? 'permanent' : (lossy || action.kind === 'hardlink') ? 'lossy_opt_in' : o.safety === 'lossy_opt_in' ? 'reversible' : o.safety,
       lossy,
     };
   };

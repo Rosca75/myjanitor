@@ -480,7 +480,7 @@ pub fn optimise_one(
         Err(e) => {
             // Not when the optimiser failed because `dst` appeared meanwhile (its
             // `create_new` lost a race): that file is not ours.
-            if !matches!(&e, Error::Io { kind: "already_exists", .. } | Error::Conflict(_)) {
+            if !e.is_destination_taken(dst) {
                 let _ = std::fs::remove_file(dst);
             }
             Err(e)

@@ -268,6 +268,10 @@ impl Engine {
         let mut s = req.settings;
         normalise(&mut s);
         validate(&s)?;
+        if let Some(t) = &s.performance.temp_dir {
+            // AUT-07: scratch files must never land inside what is scanned or protected.
+            self.check_temp_dir(t, &s)?;
+        }
         s.version = mj_core::settings::SETTINGS_VERSION;
         let old = lock(&self.settings).clone();
         self.apply_side_effects(&old, &s)?;
@@ -281,6 +285,40 @@ impl Engine {
         let dirs = crate::paths::AppDirs::under(&self.cfg.data_dir);
         let fallback = crate::paths::AppDirs { temp: self.cfg.cache_dir.join("tmp"), ..dirs };
         crate::paths::effective_temp_dir(lock(&self.settings).performance.temp_dir.as_deref(), &fallback)
+    }
+
+    /// AUT-07: where every scratch folder of an apply, a dry run or a preview is made: the
+    /// `performance.temp_dir` setting while it is valid now (absolute, never inside a scan
+    /// root of the current scope or a protected folder), else the engine's own folder.
+    pub(crate) fn scratch_dir(&self) -> PathBuf {
+        let s = lock(&self.settings).clone();
+        match &s.performance.temp_dir {
+            Some(t) if self.check_temp_dir(t, &s).is_ok() => t.clone(),
+            _ => self.cfg.temp_dir.clone(),
+        }
+    }
+
+    /// The temp folder may not lie inside a scanned location (scratch files would be scanned
+    /// and could be acted on) or a protected folder (MyJanitor's own folders excepted: the
+    /// default scratch folder is one of them).
+    fn check_temp_dir(&self, t: &std::path::Path, s: &Settings) -> Result<()> {
+        let bad = |why: &str| Err(Error::InvalidInput(format!("performance.temp_dir {}: {why}", t.display())));
+        let canon = mj_actions::protected::canonical_spelling(t).unwrap_or_else(|| t.to_path_buf());
+        let roots = lock(&self.scope).roots.clone();
+        for r in &roots {
+            let rc = mj_actions::protected::canonical_spelling(r).unwrap_or_else(|| r.clone());
+            if mj_core::pathutil::is_within(r, t) || mj_core::pathutil::is_within(&rc, &canon) {
+                return bad("is inside a scanned location; choose a folder outside every scanned location");
+            }
+        }
+        let protected = mj_actions::ProtectedPaths::new(&s.safety.protected_paths);
+        if protected.is_protected(t) || protected.is_protected(&canon) {
+            let ours = self.cfg.app_dirs().iter().any(|d| mj_core::pathutil::is_within(d, t));
+            if !ours {
+                return bad("is a protected location; choose another folder");
+            }
+        }
+        Ok(())
     }
 
     /// Built-in and user protected paths.

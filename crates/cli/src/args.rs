@@ -89,7 +89,21 @@ pub const COMMANDS: &[CmdSpec] = &[
         Some(0),
         &[val("category", Some('c'), "CATEGORY", "clean, optimise, archive or review"), JSON]
     ),
-    c!("show", None, "Show the files behind one opportunity", "<OPPORTUNITY-ID>", 1, Some(1), &[LIMIT, JSON]),
+    c!(
+        "show",
+        None,
+        "Show the files behind one opportunity, or export them with --format and --out",
+        "<OPPORTUNITY-ID>",
+        1,
+        Some(1),
+        &[
+            LIMIT,
+            val("format", Some('f'), "FORMAT", "Export as csv, html or pdf instead of printing"),
+            val("out", Some('o'), "FILE", "Export file (never overwritten: a free name is chosen)"),
+            flag("selected", None, "Export only the selected rows"),
+            JSON
+        ]
+    ),
     c!(
         "search",
         None,
@@ -113,7 +127,13 @@ pub const COMMANDS: &[CmdSpec] = &[
                 "ACTION",
                 "trash, quarantine, hardlink, reflink, move or copy (default: the opportunity's own)"
             ),
-            val("dest", None, "DIR", "Target folder for move and copy")
+            val("to", None, "DIR", "Destination folder for move and copy"),
+            val("dest", None, "DIR", "Same as --to"),
+            flag(
+                "flat",
+                None,
+                "Move or copy every item straight into the destination (default: keep the folder structure)"
+            )
         ]
     ),
     c!("plan", Some("remove"), "Remove an opportunity from the plan", "<OPPORTUNITY-ID>", 1, Some(1), &[]),
@@ -169,8 +189,8 @@ pub const COMMANDS: &[CmdSpec] = &[
         &[
             flag("last", None, "The newest run (default)"),
             val("run", None, "ID", "A specific run"),
-            val("format", Some('f'), "FORMAT", "text (default), csv or html"),
-            val("out", Some('o'), "FILE", "Write csv/html to FILE"),
+            val("format", Some('f'), "FORMAT", "text (default), csv, html or pdf"),
+            val("out", Some('o'), "FILE", "Write csv/html/pdf to FILE"),
             JSON
         ]
     ),
@@ -239,6 +259,33 @@ pub const COMMANDS: &[CmdSpec] = &[
         &[]
     ),
     c!("settings", Some("set"), "Change one setting; VALUE is JSON or plain text", "<KEY> <VALUE>", 2, Some(2), &[]),
+    c!(
+        "quarantine",
+        Some("list"),
+        "List the items held in MyJanitor's quarantine and when each expires",
+        "",
+        0,
+        Some(0),
+        &[JSON]
+    ),
+    c!(
+        "quarantine",
+        Some("purge"),
+        "Delete quarantined items for good: the expired ones, or those older than --older-than DAYS",
+        "",
+        0,
+        Some(0),
+        &[
+            val(
+                "older-than",
+                None,
+                "DAYS",
+                "Every item older than DAYS (0 = everything); default: each item's own retention"
+            ),
+            YES,
+            JSON
+        ]
+    ),
     c!("cache", Some("info"), "Show the scan cache size", "", 0, Some(0), &[JSON]),
     c!("cache", Some("clear"), "Clear the scan cache", "", 0, Some(0), &[JSON]),
     c!("info", None, "Version, platform and folders (JSON)", "", 0, Some(0), &[]),
@@ -246,7 +293,7 @@ pub const COMMANDS: &[CmdSpec] = &[
 ];
 
 /// Commands that take a subcommand.
-const GROUPS: &[&str] = &["plan", "schedule", "context-menu", "settings", "cache"];
+const GROUPS: &[&str] = &["plan", "schedule", "context-menu", "settings", "cache", "quarantine"];
 
 /// A command line the user got wrong (exit code 2).
 #[derive(Debug, Clone, PartialEq, Eq)]

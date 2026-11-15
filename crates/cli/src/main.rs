@@ -40,6 +40,7 @@ fn dispatch(a: &Parsed) -> Res {
         ("tools", _) => cmd_admin::tools(a),
         ("settings", _) => cmd_admin::settings(a),
         ("cache", _) => cmd_admin::cache(a),
+        ("quarantine", _) => cmd_admin::quarantine(a),
         ("info", _) => cmd_admin::info(a),
         ("commands", _) => cmd_admin::commands(a),
         (other, _) => Err(Fail::Usage(format!("`{other}` is not implemented"))),

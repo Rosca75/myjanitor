@@ -157,6 +157,13 @@ test('report: totals, errors and skipped items with reasons, filters, exports', 
   assert.deepEqual(Object.keys(last(env, 'report_export')).sort(), ['dest', 'format', 'kind', 'run_id']);
   assert.equal(last(env, 'report_export').kind, 'report');
   assert.match(last(env, 'report_export').dest, /myjanitor-report-\d+\.html$/);
+  // CLN-ACT-11: PDF export of the same report.
+  await env.click(env.$(`[data-fk="report-${runId}"]`));
+  await env.click(env.$('[data-fk="report-pdf"]'));
+  assert.equal(env.state().browser.exportJob.format, 'pdf');
+  await env.click(env.$('[data-fk="browser-choose"]'));
+  assert.equal(last(env, 'report_export').format, 'pdf');
+  assert.match(last(env, 'report_export').dest, /myjanitor-report-\d+\.pdf$/);
 });
 
 test('report: a hostile path and a bad file name are text only / refused', async () => {

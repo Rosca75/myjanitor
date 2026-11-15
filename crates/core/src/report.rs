@@ -11,6 +11,8 @@ use crate::time::Timestamp;
 pub enum ExportFormat {
     Csv,
     Html,
+    /// CLN-ACT-11: a text-only PDF table (Helvetica, WinAnsi).
+    Pdf,
 }
 
 /// Totals of a report.

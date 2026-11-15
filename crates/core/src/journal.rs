@@ -111,6 +111,9 @@ pub struct JournalEntry {
     /// `purge_after_days`; `None`: the global `quarantine_days`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention_days: Option<u32>,
+    /// G-07: the original was a link (removed as itself); a restore puts back only a link.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub original_link: bool,
     /// In an undo run: the entry this record reverses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_of: Option<EntryId>,

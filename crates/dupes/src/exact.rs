@@ -38,6 +38,7 @@ impl Detector for ExactDuplicates {
                 ActionKind::Quarantine,
                 ActionKind::PermanentDelete,
                 ActionKind::Move,
+                ActionKind::Copy,
                 ActionKind::Hardlink,
                 ActionKind::Reflink,
             ],

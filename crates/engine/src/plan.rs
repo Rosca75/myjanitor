@@ -319,6 +319,35 @@ impl Engine {
         let _ = self.plan_changed(plan);
     }
 
+    /// CLN-ACT-05: a Move or Copy destination is checked when the step is set, so a bad
+    /// choice is reported at once (the guard checks it again, per item, before acting):
+    /// absolute, not protected (also in its canonical spelling), not one of MyJanitor's
+    /// folders, and not inside a scanned location.
+    pub(crate) fn check_action_destination(&self, action: &Action) -> Result<()> {
+        let (Action::Move { dest, .. } | Action::Copy { dest, .. }) = action else { return Ok(()) };
+        if !dest.is_absolute() {
+            return Err(Error::InvalidInput(format!("the destination must be an absolute folder: {}", dest.display())));
+        }
+        let settings = lock(&self.settings).clone();
+        let protected =
+            mj_actions::ProtectedPaths::new(&settings.safety.protected_paths).with_app_dirs(&self.cfg.app_dirs());
+        let canon = mj_actions::protected::canonical_spelling(dest);
+        if protected.is_protected(dest) || canon.as_deref().is_some_and(|c| protected.is_protected(c)) {
+            return Err(Error::Protected(dest.clone()));
+        }
+        for r in &lock(&self.scope).roots {
+            if mj_core::pathutil::is_within(r, dest) {
+                return Err(Error::InvalidInput(format!(
+                    "{} is inside the scanned location {}: choose a folder outside it, or it would be scanned \
+                     and acted on again",
+                    dest.display(),
+                    r.display()
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// The plan.
     pub fn plan_get(&self) -> Result<Plan> {
         Ok(lock(&self.plan).plan.clone())
@@ -337,6 +366,7 @@ impl Engine {
         if !matches!(action, Action::None) && !o.available_actions.contains(&action.kind()) {
             return Err(Error::InvalidInput(format!("{title} cannot use the action `{:?}`", action.kind())));
         }
+        self.check_action_destination(&action)?;
         // One source of truth for an optimiser's parameters: the step's. Values given inside
         // the action win over the card's, then the request's `params` win over both; the
         // action carries the merged set so the optimiser really runs with what the user chose.
@@ -391,6 +421,9 @@ impl Engine {
             if !matches!(a, Action::None) && !rec.opportunity.available_actions.contains(&a.kind()) {
                 return Err(Error::InvalidInput(format!("this step cannot use the action `{:?}`", a.kind())));
             }
+        }
+        if let Some(a) = &req.action {
+            self.check_action_destination(a)?;
         }
         {
             let mut st = lock(&self.plan);

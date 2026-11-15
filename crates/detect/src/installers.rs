@@ -49,6 +49,7 @@ impl Detector for OldInstallers {
                 ActionKind::Trash,
                 ActionKind::Quarantine,
                 ActionKind::Move,
+                ActionKind::Copy,
                 ActionKind::PermanentDelete,
             ],
             settings: vec![

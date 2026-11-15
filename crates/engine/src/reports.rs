@@ -55,6 +55,9 @@ impl Engine {
                     match req.format {
                         ExportFormat::Csv => mj_actions::report::report_csv(&report, out)?,
                         ExportFormat::Html => mj_actions::report::report_html(&report, out)?,
+                        ExportFormat::Pdf => {
+                            mj_actions::report::report_pdf(&report, out)?;
+                        }
                     }
                     Ok(rows)
                 })?;
@@ -119,6 +122,9 @@ impl Engine {
             match req.format {
                 ExportFormat::Csv => mj_actions::report::candidates_csv(&rows, out)?,
                 ExportFormat::Html => mj_actions::report::candidates_html(&title, &rows, out)?,
+                ExportFormat::Pdf => {
+                    mj_actions::report::candidates_pdf(&title, &rows, out)?;
+                }
             }
             Ok(n)
         })?;

@@ -28,6 +28,7 @@ export function safety(s, ctl) {
     rows(
       row(ctl, 'quarantine_days', sc.safety.retention, num('quarantine_days', g.quarantine_days, 1, 3650, (n, v) => { n.general.quarantine_days = v; }, sc.safety.retention), { help: sc.safety.daysValue(g.quarantine_days) }),
       row(ctl, 'undo_days', sc.safety.undoWindow, num('undo_days', g.undo_days, 1, 3650, (n, v) => { n.general.undo_days = v; }, sc.safety.undoWindow), { help: sc.safety.daysValue(g.undo_days) }),
+      s.info?.platform === 'windows' && flag('general', 'windows_recycle_bin', sc.safety.windowsRecycleBin, sc.safety.windowsRecycleBinHelp),
       flag('optimise', 'preserve_timestamps', sc.safety.preserveTimestamps),
       row(ctl, 'keep_if_not_smaller', sc.safety.keepIfNotSmaller, toggle({ label: sc.safety.keepIfNotSmaller, checked: true, disabled: true, onChange: () => {}, fk: 'set-keep-smaller' }), { help: sc.safety.keepIfNotSmallerHelp })),
     advanced(ctl, 'safety',
@@ -45,10 +46,11 @@ export function performance(s, ctl) {
     p.temp_dir && button({ label: sc.perf.resetTemp, variant: 'quiet', size: 'sm', fk: 'reset-temp', onClick: () => ctl.commit('temp', (n) => { n.performance.temp_dir = null; }) }));
   return section('performance', sc.perf.title, rows(
     row(ctl, 'threads', sc.perf.threads, count('threads', p.threads, 256, sc.perf.threads), { help: sc.perf.threadsHelp }),
-    row(ctl, 'low_memory', sc.perf.lowMemory, toggle({ label: sc.perf.lowMemory, checked: p.low_memory, onChange: (on) => ctl.commit('low_memory', (n) => { n.performance.low_memory = on; }), fk: 'set-low-memory' }), { help: sc.perf.lowMemoryHelp }),
+    // Stored but not used by this build: shown off and disabled with the reason, never as active.
+    row(ctl, 'low_memory', sc.perf.lowMemory, toggle({ label: sc.perf.lowMemory, checked: false, disabled: true, onChange: () => {}, fk: 'set-low-memory' }), { help: sc.perf.lowMemoryInactive }),
     row(ctl, 'temp', sc.perf.tempDir, temp, { help: sc.perf.tempHelp })),
     ctl.st.picker?.purpose === 'temp' && renderPicker(ctl),
     advanced(ctl, 'perf',
-      row(ctl, 'parallel_jobs', sc.perf.parallelJobs, count('parallel_jobs', p.parallel_jobs, 64, sc.perf.parallelJobs), { help: sc.perf.parallelJobsHelp }),
-      row(ctl, 'cpu_priority', sc.perf.cpu, select({ label: sc.perf.cpu, value: p.cpu_priority, options: [{ value: 'normal', label: sc.perf.cpuNormal }, { value: 'low', label: sc.perf.cpuLow }], fk: 'set-cpu', onChange: (v) => ctl.commit('cpu_priority', (n) => { n.performance.cpu_priority = v; }) }))));
+      row(ctl, 'parallel_jobs', sc.perf.parallelJobs, numberInput({ value: 1, min: 1, max: 1, label: sc.perf.parallelJobs, disabled: true, fk: 'set-parallel_jobs', onChange: () => {} }), { help: sc.perf.parallelJobsInactive }),
+      row(ctl, 'cpu_priority', sc.perf.cpu, select({ label: sc.perf.cpu, value: 'normal', disabled: true, options: [{ value: 'normal', label: sc.perf.cpuNormal }, { value: 'low', label: sc.perf.cpuLow }], fk: 'set-cpu', onChange: () => {} }), { help: sc.perf.cpuInactive })));
 }

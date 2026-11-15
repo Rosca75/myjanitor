@@ -420,3 +420,28 @@ fn corpus_outcomes() {
         }
     }
 }
+
+#[test]
+fn g10_hybrid_file_whose_table_and_stream_disagree_is_refused() {
+    let mut b = Builder::simple_page(CONTENT);
+    b.objects.retain(|o| o.num != 5);
+    let mut file = b.classic("/Root 1 0 R");
+    let off_a = file.len();
+    file.extend_from_slice(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Times-Roman >>\nendobj\n");
+    let off_b = file.len();
+    file.extend_from_slice(b"5 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n");
+    let xs = file.len();
+    let mut rows = vec![1u8];
+    rows.extend_from_slice(&(off_a as u32).to_be_bytes());
+    rows.extend_from_slice(&[0, 0]);
+    let body = stream_body("/Type /XRef /Size 6 /Index [5 1] /W [1 4 2]", &rows);
+    file.extend_from_slice(b"7 0 obj\n");
+    file.extend_from_slice(&body);
+    file.extend_from_slice(b"\nendobj\n");
+    let prev = super::fixture::last_startxref(&file[..off_a]);
+    let xref = file.len();
+    // The table says object 5 is in use at the second copy; the stream says the first.
+    file.extend_from_slice(format!("xref\n5 1\n{off_b:010} 00000 n \ntrailer\n<< /Size 8 /Root 1 0 R /Prev {prev} /XRefStm {xs} >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    let e = Document::load(&file).unwrap_err();
+    assert!(e.to_string().contains("disagree"), "{e}");
+}

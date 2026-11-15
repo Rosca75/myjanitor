@@ -77,7 +77,7 @@ function th(label, key, st, ops, cls = '') {
 /**
  * @param {any} st the step state
  * @param {any} ops table operations (toggleRow, selectAll, setSubGroup, setPage, setStepSort, setFilter, previewSample, focusRow)
- * @param {{ exports?: (format: 'csv'|'html') => void, filterId?: string }} [o]
+ * @param {{ exports?: (format: 'csv'|'html'|'pdf') => void, filterId?: string }} [o]
  */
 export function renderTable(st, ops, o = {}) {
   const opp = st.detail.opportunity;
@@ -109,7 +109,8 @@ export function renderTable(st, ops, o = {}) {
         h('input', { type: 'search', class: 'input', value: st.filter ?? '', placeholder: copy.search.filterPlaceholder, 'aria-describedby': `${o.filterId ?? 'filter'}-help`, 'data-fk': `${o.filterId ?? 'filter'}-input`, on: { input: (e) => ops.setFilter(e.target.value) } })),
       o.exports && h('span', { class: 'table-tools__export' },
         button({ label: copy.step2.exportCsv, size: 'sm', fk: 'export-results-csv', onClick: () => o.exports('csv') }),
-        button({ label: copy.step2.exportHtml, size: 'sm', fk: 'export-results-html', onClick: () => o.exports('html') })),
+        button({ label: copy.step2.exportHtml, size: 'sm', fk: 'export-results-html', onClick: () => o.exports('html') }),
+        button({ label: copy.step2.exportPdf, size: 'sm', fk: 'export-results-pdf', onClick: () => o.exports('pdf') })),
       h('p', { class: 'note filter__help', id: `${o.filterId ?? 'filter'}-help` }, copy.search.filterHelp, ' ', copy.step2.keyboard)),
     opp.sub_groups.length > 0 && tabs({ items: groupTabs, active: st.subGroup, onSelect: (k) => ops.setSubGroup(k), label: 'Groups', fk: 'sub' }),
     h('table', { class: 'table', on: { keydown: (e) => onTableKey(e, st, ops, total) } },

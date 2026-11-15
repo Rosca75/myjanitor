@@ -264,6 +264,7 @@ fn lossy_step_is_refused_without_confirmation_and_runs_with_it() {
         acknowledged: true,
         originals: Default::default(),
         synced_online_only: false,
+        selection_digest: Some(e.plan_confirmation_info(StepRequest { step_id: step.id }).unwrap().selection_digest),
     };
     let started = e.plan_apply(PlanApplyRequest { confirmations: vec![conf] }).unwrap();
     let jobs = wait_jobs(e);
