@@ -35,6 +35,9 @@ pub struct TestPlatform {
     pub fake_reflink: bool,
     /// Simulate a sync provider that accepts "free up space" but frees nothing.
     pub ignore_dehydrate: bool,
+    /// Simulate a trash of a folder that fails part-way: one file below the folder is
+    /// deleted, then the call fails (ACT-1).
+    pub partial_trash: bool,
 }
 
 impl TestPlatform {
@@ -48,6 +51,7 @@ impl TestPlatform {
             compressed: Mutex::new(BTreeSet::new()),
             fake_reflink: true,
             ignore_dehydrate: false,
+            partial_trash: false,
         }
     }
 }
@@ -82,6 +86,11 @@ impl ActionPlatform for TestPlatform {
         let n = self.trash_calls.fetch_add(1, Ordering::SeqCst) + 1;
         if self.fail_trash_at == Some(n) {
             return Err(Error::Io { path: Some(path.into()), kind: "other", message: "injected failure".into() });
+        }
+        if self.partial_trash && path.is_dir() {
+            let first = std::fs::read_dir(path).unwrap().flatten().find(|e| e.path().is_file()).unwrap();
+            std::fs::remove_file(first.path()).unwrap();
+            return Err(Error::Io { path: Some(path.into()), kind: "other", message: "in use".into() });
         }
         #[cfg(unix)]
         return trash_with(path, &self.trash_cfg, Timestamp::now());

@@ -1172,8 +1172,18 @@ fn archive(
         e.output_sha256 = fsops::hash_file(&dst).ok().map(|h| h.sha256);
         if let Some(p) = &plan {
             if let Err(err) = retain::retain(ctx.platform, ctx.quarantine_dir, e, &item.path, p, Timestamp::now()) {
-                let _ = std::fs::remove_file(&dst);
-                return Err(err);
+                // ACT-1: removing a folder is not atomic (a permanent delete or a platform
+                // trash can stop part-way). The archive is removed only while the sources are
+                // provably whole; otherwise it is the only complete copy of what is gone.
+                if recheck_tree(ctx, item).is_ok() {
+                    let _ = std::fs::remove_file(&dst);
+                    return Err(err);
+                }
+                return Err(Error::Conflict(format!(
+                    "{err}; part of {} was already removed, so the complete verified archive was kept at {}",
+                    item.path.display(),
+                    dst.display()
+                )));
             }
         } else {
             e.bytes_after = e.bytes_before.saturating_add(size);
