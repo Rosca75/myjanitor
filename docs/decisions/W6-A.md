@@ -297,3 +297,18 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
   run and needs a journal migration); BigInt in the UI (no arithmetic is ever needed).
 - **Fixture:** only `ui/js/testing/real/history_run_detail.json` was regenerated; the other
   fixtures carry time-dependent values that would churn without changing what they test.
+
+## D-6A18 A parameter change keeps the user's own ticks and unticks (ENG-2)
+
+- **Context:** `step_params_set` re-runs the analysis and replaced the record wholesale with
+  fresh defaults: rows the user had unchecked (photos that must stay untouched, a copy to
+  keep) came back checked and were then applied. G-04 had fixed this for rescans only.
+- **Choice:** `steps::carry_user_choices` carries the user's *explicit* choices (the
+  selection overrides) to the new record by path; every other row takes the new run's
+  default. This differs on purpose from the rescan carry (`results::carry_selections`, which
+  carries the effective state): the files did not change, only the parameters, so a row
+  the new parameters no longer pick by default must not stay ticked because the old default
+  ticked it. The swap happens under the results write lock, after `recompute`, and is
+  refused with `conflict` when a scan finished during the re-run (the record was built from
+  the older index and must not overwrite newer results). `search_run` under an existing
+  title carries the same way.

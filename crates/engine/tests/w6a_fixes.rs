@@ -73,3 +73,122 @@ fn restore_of_one_entry_survives_the_webview_number_round_trip() {
         }
     }
 }
+
+fn oid(s: &str) -> OpportunityId {
+    OpportunityId(s.into())
+}
+
+fn page_req(id: &str) -> CandidatesPageRequest {
+    CandidatesPageRequest {
+        opportunity_id: oid(id),
+        sub_group: None,
+        offset: 0,
+        limit: 500,
+        sort: CandidateSortKey::Path,
+        descending: false,
+        filter: None,
+        min_size: None,
+        keep_groups: false,
+    }
+}
+
+/// (file name, selected) of every row of a step, by path.
+fn rows(e: &mj_engine::Engine, id: &str) -> Vec<(String, bool, mj_core::CandidateId)> {
+    e.candidates_page(page_req(id))
+        .unwrap()
+        .rows
+        .into_iter()
+        .map(|r| (r.candidate.path.file_name().unwrap().to_string_lossy().into_owned(), r.selected, r.candidate.id))
+        .collect()
+}
+
+fn installers_tree() -> TempDir {
+    let t = TempDir::new("w6a-installers").unwrap();
+    for (i, days) in [(0, 400u64), (1, 400), (2, 400), (3, 400), (4, 250)] {
+        let p = format!("downloads/setup-{i}.msi");
+        t.write(&p, &bytes(10 + i as u64, 4000)).unwrap();
+        mj_core::testutil::set_mtime(
+            &t.join(&p),
+            std::time::SystemTime::now() - std::time::Duration::from_secs(86_400 * days),
+        )
+        .unwrap();
+    }
+    t
+}
+
+/// ENG-2: changing a step parameter keeps the rows the user unchecked unchecked.
+#[test]
+fn a_parameter_change_keeps_the_rows_the_user_unchecked() {
+    let f = engine_for(installers_tree());
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    let before = rows(e, "det:old_installers");
+    assert_eq!(before.len(), 5, "{before:?}");
+    assert!(before.iter().all(|r| r.1));
+    let off: Vec<_> = before.iter().filter(|r| r.0 == "setup-0.msi" || r.0 == "setup-1.msi").map(|r| r.2).collect();
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: oid("det:old_installers"),
+        ids: Some(off),
+        sub_group: None,
+        selected: false,
+    })
+    .unwrap();
+    let r = e
+        .step_params_set(StepParamsRequest {
+            opportunity_id: oid("det:old_installers"),
+            params: mj_core::ParamValues::new().with("min_age_days", mj_core::ParamValue::Number(200.0)),
+            preset_id: None,
+        })
+        .unwrap();
+    assert_eq!(r.summary.candidates, 5);
+    assert_eq!(r.summary.selected, 3, "the two unchecked rows stay unchecked");
+    for (name, sel, _) in rows(e, "det:old_installers") {
+        assert_eq!(sel, name != "setup-0.msi" && name != "setup-1.msi", "{name}");
+    }
+    // A narrower parameter drops a row; the other choices stay.
+    let r = e
+        .step_params_set(StepParamsRequest {
+            opportunity_id: oid("det:old_installers"),
+            params: mj_core::ParamValues::new().with("min_age_days", mj_core::ParamValue::Number(300.0)),
+            preset_id: None,
+        })
+        .unwrap();
+    assert_eq!((r.summary.candidates, r.summary.selected), (4, 2));
+    assert_eq!(
+        e.step_detail(OpportunityRequest { opportunity_id: oid("det:old_installers") }).unwrap().summary.selected,
+        2
+    );
+}
+
+/// ENG-2 (search): running the same search again keeps the rows the user unchecked.
+#[test]
+fn running_the_same_search_again_keeps_unchecked_rows() {
+    let f = engine_for(old_tmp_tree(4));
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    let run = |e: &std::sync::Arc<mj_engine::Engine>| {
+        e.search_run(SearchRunRequest {
+            rule: mj_filters::parse("ext:tmp").unwrap(),
+            title: Some("Leftovers".into()),
+            topmost_only: false,
+            action: None,
+        })
+        .unwrap()
+    };
+    let o = run(e);
+    let id = o.id.0.clone();
+    let all = rows(e, &id);
+    assert_eq!(all.len(), 4);
+    let first = all.iter().find(|r| r.0 == "f00.tmp").unwrap().2;
+    e.selection_set(SelectionSetRequest {
+        opportunity_id: o.id.clone(),
+        ids: Some(vec![first]),
+        sub_group: None,
+        selected: false,
+    })
+    .unwrap();
+    let again = run(e);
+    assert_eq!(again.id, o.id);
+    assert_eq!(again.selected, all.iter().filter(|r| r.1).count() as u64 - 1);
+    assert!(!rows(e, &id).iter().find(|r| r.0 == "f00.tmp").unwrap().1);
+}

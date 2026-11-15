@@ -46,6 +46,35 @@ pub(crate) fn params_lossy(rec: &OpportunityRecord, params: &mj_core::ParamValue
     setting || preset
 }
 
+/// ENG-2: after the analysis of a step ran again (new parameters), every row the user
+/// ticked or unticked themselves keeps that choice, matched by path; every other row takes
+/// the new run's default. Unlike a rescan (`results::carry_selections`), the files did not
+/// change, so a row the new parameters no longer pick by default is not kept ticked just
+/// because the old default ticked it.
+pub(crate) fn carry_user_choices(old: &OpportunityRecord, new: &mut OpportunityRecord) {
+    use mj_core::pathutil::path_key;
+    let chosen: std::collections::HashMap<String, bool> = old
+        .candidates
+        .iter()
+        .filter_map(|c| {
+            if old.selection.include.contains(&c.id) {
+                Some((path_key(&c.path), true))
+            } else if old.selection.exclude.contains(&c.id) {
+                Some((path_key(&c.path), false))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let mut sel = mj_core::SelectionOverrides::default();
+    for c in &new.candidates {
+        if let Some(&on) = chosen.get(&path_key(&c.path)) {
+            sel.set(c.id, c.default_selected, on);
+        }
+    }
+    new.selection = sel;
+}
+
 fn none(reason: &str) -> Preview {
     Preview { kind: "none".into(), mime: None, data: None, text: None, waveform: None, reason: Some(reason.into()) }
 }
@@ -272,6 +301,7 @@ impl Engine {
             return Err(Error::InvalidInput(format!("unknown parameter `{k}`")));
         }
         params = params.merged(&req.params);
+        let generation = self.results.read().unwrap_or_else(|e| e.into_inner()).generation;
         let mut rec = self.rerun_analysis(&req.opportunity_id, params.clone())?;
         let lossy = params_lossy(&rec, &params);
         let safety = if lossy && !matches!(rec.opportunity.safety, SafetyClass::ReviewOnly) {
@@ -280,13 +310,22 @@ impl Engine {
             rec.opportunity.safety
         };
         rec.opportunity.params = params.clone();
-        let summary = summary_of(&rec);
-        {
+        let summary = {
+            let skip = skip_badges(&lock(&self.settings));
             let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
-            if let Some(slot) = results.get_mut(&req.opportunity_id) {
-                *slot = rec;
+            // The re-run read the index of `generation`: a scan that finished meanwhile
+            // replaced the results, and this record must not overwrite them.
+            if results.generation != generation {
+                return Err(Error::Conflict("a new scan finished while the step was re-estimated; try again".into()));
             }
-        }
+            let slot = results.get_mut(&req.opportunity_id).ok_or_else(|| unknown(&req.opportunity_id))?;
+            // ENG-2: the rows the user ticked or unticked keep their choice.
+            carry_user_choices(slot, &mut rec);
+            recompute(&mut rec, skip);
+            let summary = summary_of(&rec);
+            *slot = rec;
+            summary
+        };
         if self.in_plan(&req.opportunity_id).is_some() {
             {
                 let mut st = lock(&self.plan);

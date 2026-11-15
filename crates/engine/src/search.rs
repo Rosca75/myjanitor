@@ -171,14 +171,27 @@ impl Engine {
             badges.get(&c.path).copied().unwrap_or_default()
         });
         rec.opportunity.default_action = action;
-        let opp = rec.opportunity.clone();
-        let generation = {
+        let skip = crate::results::skip_badges(&lock(&self.settings));
+        let (opp, generation) = {
             let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
-            match r.get_mut(&opp.id) {
-                Some(slot) => *slot = rec,
-                None => r.opportunities.push(rec),
-            }
-            r.generation
+            let id = rec.opportunity.id.clone();
+            let opp = match r.get_mut(&id) {
+                Some(slot) => {
+                    // ENG-2: running the same search again keeps the rows the user ticked or
+                    // unticked in it.
+                    crate::steps::carry_user_choices(slot, &mut rec);
+                    crate::opportunities::recompute(&mut rec, skip);
+                    let opp = rec.opportunity.clone();
+                    *slot = rec;
+                    opp
+                }
+                None => {
+                    let opp = rec.opportunity.clone();
+                    r.opportunities.push(rec);
+                    opp
+                }
+            };
+            (opp, r.generation)
         };
         if self.in_plan(&opp.id).is_some() {
             let plan = self.refresh_plan();
