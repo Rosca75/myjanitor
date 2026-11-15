@@ -603,7 +603,7 @@ impl Engine {
     }
 
     /// Applied items leave their cards (and the index); the applied step leaves the plan.
-    fn after_apply_step(&self, run_id: RunId, w: &StepWork) -> Vec<PathBuf> {
+    fn after_apply_step(&self, run_id: RunId, w: &StepWork) -> std::collections::HashSet<PathBuf> {
         let done: Vec<PathBuf> = self
             .journal
             .entries_of(run_id)
@@ -612,10 +612,12 @@ impl Engine {
             .map(|e| e.original)
             .collect();
         let skip = skip_badges(&lock(&self.settings));
+        // ENG-5: keyed once, before the write lock is taken.
+        let done_set = DoneSet::new(&done);
         let generation = {
             let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
-            if !done.is_empty() {
-                let gone = |p: &Path| done.iter().any(|d| mj_core::pathutil::is_within(d, p));
+            if !done_set.is_empty() {
+                let gone = |p: &Path| done_set.covers(p);
                 for rec in &mut results.opportunities {
                     let before = rec.candidates.len();
                     rec.candidates.retain(|c| !gone(&c.path));
@@ -637,7 +639,7 @@ impl Engine {
         let plan = self.refresh_plan();
         let _ = self.plan_changed(plan);
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
-        done
+        done.into_iter().collect()
     }
 }
 
@@ -786,4 +788,89 @@ fn hardlink_not_freed(w: &StepWork, skipped: &[mj_core::ItemOutcome]) -> u64 {
         .values()
         .map(|(links, n, size)| if n < links { size * u64::from(*n) } else { size * u64::from(n.saturating_sub(1)) })
         .sum()
+}
+
+/// ENG-5 / IPC-3 / ACT-6: the paths a step removed, for the "is this candidate gone?"
+/// test run on every candidate of every card under the results write lock. Same rule as
+/// `is_within` (the path itself or anything below it, by component, case-insensitive on
+/// Windows), in O(depth) per candidate instead of a scan of every removed path.
+pub(crate) struct DoneSet {
+    /// `path_key` of every removed path.
+    keys: std::collections::HashSet<String>,
+}
+
+impl DoneSet {
+    pub(crate) fn new(done: &[PathBuf]) -> DoneSet {
+        DoneSet { keys: done.iter().map(|d| mj_core::pathutil::path_key(d)).collect() }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// True when `p` is a removed path or lies below one: its key or the key of one of its
+    /// ancestors is in the set (a root's key keeps its separator: `/`, `c:/`).
+    pub(crate) fn covers(&self, p: &Path) -> bool {
+        if self.keys.is_empty() {
+            return false;
+        }
+        let key = mj_core::pathutil::path_key(p);
+        let mut s = key.as_str();
+        loop {
+            if self.keys.contains(s) {
+                return true;
+            }
+            let Some(i) = s.rfind('/') else { return false };
+            if self.keys.contains(&s[..=i]) {
+                return true;
+            }
+            if i == 0 {
+                return false;
+            }
+            s = &s[..i];
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn done_set_follows_is_within() {
+        let done = DoneSet::new(&[PathBuf::from("/a/b"), PathBuf::from("/x/y/"), PathBuf::from("/m/n/../o")]);
+        assert!(done.covers(Path::new("/a/b")));
+        assert!(done.covers(Path::new("/a/b/c/d.txt")));
+        assert!(!done.covers(Path::new("/a/bc")), "a sibling sharing a prefix");
+        assert!(!done.covers(Path::new("/a")));
+        assert!(done.covers(Path::new("/x/y/z")));
+        assert!(done.covers(Path::new("/m/o/p")));
+        assert!(!done.covers(Path::new("/m/n/p")));
+        assert!(DoneSet::new(&[PathBuf::from("/")]).covers(Path::new("/q")));
+        assert!(!DoneSet::new(&[]).covers(Path::new("/q")));
+        #[cfg(windows)]
+        {
+            let done = DoneSet::new(&[PathBuf::from(r"C:\Users\Me\Old"), PathBuf::from(r"D:\")]);
+            assert!(done.covers(Path::new(r"c:\users\me\old\a.txt")));
+            assert!(!done.covers(Path::new(r"C:\Users\Me\Older")));
+            assert!(done.covers(Path::new(r"D:\x")));
+        }
+    }
+
+    /// The lookup stays fast at the sizes the app is built for (200 000 candidates, 50 000
+    /// removed paths): the old any-of-done scan needed about 1e10 path comparisons here.
+    #[test]
+    fn done_set_is_fast_on_large_steps() {
+        let done: Vec<PathBuf> = (0..50_000).map(|i| PathBuf::from(format!("/data/d{}/f{i}.bin", i % 97))).collect();
+        let set = DoneSet::new(&done);
+        let started = std::time::Instant::now();
+        let mut hits = 0;
+        for i in 0..200_000 {
+            if set.covers(Path::new(&format!("/data/d{}/f{i}.bin", i % 97))) {
+                hits += 1;
+            }
+        }
+        assert_eq!(hits, 50_000);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+    }
 }
