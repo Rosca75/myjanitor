@@ -201,3 +201,9 @@ Checked against the code at the commit that carries this index. The code is righ
 - **Accepted:** F-12 (Low): check-then-act by path without directory-handle anchoring; a parent directory swapped between the last re-check and the act is not caught.
 - **Why accepted:** closing it needs handle-relative operations (`openat`/`NtCreateFile` with a root handle) throughout the action engine, a rewrite too large for this pass. Mitigations in place: the guard check is repeated immediately before acting, links are never followed, file identity and folder stamps are compared, and the window is a few system calls wide. Exploiting it requires another process on the same machine racing the user's own action inside the user's own folders.
 - **Also partly accepted:** F-09: cross-volume copies on Windows do not carry alternate data streams or ACLs (documented in README limitations).
+
+## D-013 Land a green checkpoint on main before the second fix pass
+- **Context:** the owner requires the MVP to land on `main`. Usage limits interrupted the session five times, each for several hours. CI is green on both platforms. Review 2 left open findings: G-01 and G-02 (High), G-03 to G-05 (Medium), nine Lows, and five partly closed review-1 items.
+- **Options:** (a) merge only after the second fix pass; (b) merge the green checkpoint now and follow with a second PR.
+- **Choice:** (b).
+- **Why:** an interruption during the fix pass would otherwise leave nothing on `main`. The open findings are documented in `docs/review/adversarial-review-2.md` and tracked in the follow-up; both High findings need unusual conditions (a symlinked scan root or a protected folder registered under a different path spelling; files modified during a cross-volume move).
