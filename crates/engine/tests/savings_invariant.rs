@@ -351,3 +351,42 @@ fn a_safety_setting_change_moves_the_hero_and_the_cards_together() {
     assert_eq!(l.summary.total, with.summary.total - signed.candidate.saving());
     assert_eq!(l.summary.total, available(&l).iter().map(|o| o.saving).sum::<u64>(), "hero vs cards");
 }
+
+/// RF-8: the temp-folder rule of the app caches and the temporary-files detector both list
+/// an old `.tmp` in `AppData/Local/Temp`. It is counted once, and applying a plan that holds
+/// both cards removes it once: the step that does not count it leaves it alone instead of
+/// failing on a file the other step already removed.
+#[test]
+fn a_file_two_steps_list_is_counted_and_removed_once() {
+    let t = standard_tree();
+    old(&t, "u/AppData/Local/Temp/setup.tmp", &bytes(30, 70_000), 5);
+    let f = engine_for(t);
+    let e = &f.engine;
+    scan(e);
+    let l = list(e);
+    let tmp = f.tree.join("u/AppData/Local/Temp/setup.tmp");
+    let by_path = selected_by_path(e, &l);
+    let listed: Vec<String> = by_path[&tmp].iter().map(|(id, _)| id.clone()).collect();
+    assert_eq!(listed.len(), 2, "both detectors list the file: {listed:?}");
+    assert_eq!(l.summary.total, available(&l).iter().map(|o| o.saving).sum::<u64>());
+    let standalone: u64 = by_path.values().flatten().map(|(_, s)| s).sum();
+    assert_eq!(l.summary.total, standalone - by_path[&tmp][0].1, "the file counts once");
+    for id in &listed {
+        add(e, id, None);
+    }
+    let plan = e.plan_get().unwrap();
+    let counted: u64 = plan.steps.iter().map(|s| s.estimate.saving()).sum();
+    assert_eq!(counted, plan.estimate.saving());
+    assert_eq!(
+        plan.steps.iter().filter(|s| s.estimate.files > 0).count(),
+        1,
+        "only one step counts the file: {:?}",
+        plan.steps
+    );
+    let started = e.plan_apply(PlanApplyRequest::default()).unwrap();
+    let jobs = wait_jobs(e);
+    for j in jobs.iter().filter(|j| j.run_id == Some(started.run_id)) {
+        assert_eq!(j.state, mj_core::JobState::Completed, "{j:?}");
+    }
+    assert!(!exists(&tmp));
+}

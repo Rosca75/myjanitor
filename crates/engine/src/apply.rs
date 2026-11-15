@@ -259,6 +259,7 @@ impl Engine {
         }
         let mut works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
         skip_kept_copies(works.iter_mut());
+        skip_items_other_steps_remove(works.iter_mut());
         self.leave_shared_rows_out(&plan.steps, &mut works);
         let total: u64 = works.iter().map(|w| w.items.len() as u64).sum();
         let job = self.new_job(JobKind::DryRun, None, None, "Dry run", total, plan.estimate.bytes_before);
@@ -539,6 +540,8 @@ impl Engine {
         }
         // G-03: the copy one step keeps is kept by every other step of the run too.
         skip_kept_copies(works.iter_mut().map(|(w, _)| w));
+        // RF-8: a file two steps list is acted on once.
+        skip_items_other_steps_remove(works.iter_mut().map(|(w, _)| w));
         let now = Timestamp::now();
         let run_id = self.journal.next_run_id(now);
         let titles: Vec<String> = plan.steps.iter().map(|s| s.title.clone()).collect();
@@ -711,6 +714,52 @@ pub(crate) fn skip_kept_copies<'a>(works: impl Iterator<Item = &'a mut StepWork>
         if skipped > 0 {
             w.warnings.push(format!(
                 "{skipped} item(s) skipped: they are, or hold, the copy another step keeps, so one copy is always kept"
+            ));
+        }
+    }
+}
+
+/// RF-8: a file is acted on once per run. Detectors overlap (a `.tmp` in the temp folder
+/// is a temporary file and an app-cache row; a `node_modules` may sit inside a cache folder
+/// another card removes), so an item is dropped from its step when another step removes
+/// the same path (the first removing step in plan order keeps it), or when any step
+/// removes a folder holding it. Without this the later step fails on a file that is already
+/// gone, or optimises a file that is then removed. This matches the savings account
+/// (`savings::tally`), where the removal of a path or of the folder holding it frees at
+/// least as much as anything else done to it. Runs after [`skip_kept_copies`], so a folder
+/// that step refused is not counted as removed.
+pub(crate) fn skip_items_other_steps_remove<'a>(works: impl Iterator<Item = &'a mut StepWork>) {
+    use mj_core::pathutil::path_key;
+    let mut works: Vec<&mut StepWork> = works.collect();
+    // The key of every removed path, with the first step that removes it.
+    let mut removed: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (si, w) in works.iter().enumerate() {
+        for i in w.items.iter().filter(|i| removes(&i.action)) {
+            removed.entry(path_key(&i.path)).or_insert(si);
+        }
+    }
+    if removed.is_empty() {
+        return;
+    }
+    for (si, w) in works.iter_mut().enumerate() {
+        let mut skipped = 0u64;
+        let mut items = Vec::with_capacity(w.items.len());
+        let mut sizes = Vec::with_capacity(w.sizes.len());
+        for (item, size) in w.items.drain(..).zip(w.sizes.drain(..)) {
+            let same = removed.get(&path_key(&item.path)).is_some_and(|&owner| owner != si);
+            let inside = item.path.ancestors().skip(1).any(|a| removed.contains_key(&path_key(a)));
+            if same || inside {
+                skipped += 1;
+            } else {
+                items.push(item);
+                sizes.push(size);
+            }
+        }
+        w.items = items;
+        w.sizes = sizes;
+        if skipped > 0 {
+            w.warnings.push(format!(
+                "{skipped} item(s) left to another step of the plan, which removes them or the folder holding them"
             ));
         }
     }
