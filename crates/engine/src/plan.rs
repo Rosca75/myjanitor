@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use mj_core::{
     lock, Action, Badges, ChecklistItem, ChecklistLevel, Confidence, Error, Estimate, OpportunityId, Plan, PlanStep,
-    Result, SafetyClass, SelectionOverrides, StepId, Timestamp,
+    Result, SafetyClass, StepId, Timestamp,
 };
 
 use crate::api::{Event, PlanAddStepRequest, PlanReorderRequest, PlanUpdateStepRequest, StepRequest};
@@ -21,8 +21,9 @@ use crate::Engine;
 pub struct PlanState {
     pub plan: Plan,
     /// Exact estimates measured by the last dry run, valid while the step's action and
-    /// selection are unchanged.
-    pub measured: BTreeMap<StepId, (Action, SelectionOverrides, Estimate)>,
+    /// the identity of its items (`measure_key` of the items the dry run built) are
+    /// unchanged.
+    pub measured: BTreeMap<StepId, (Action, u64, Estimate)>,
 }
 
 /// One-line summary of an action.
@@ -62,6 +63,25 @@ fn originals_label(p: &mj_core::OriginalsPolicy) -> String {
 /// True for actions that remove the item from its place.
 pub(crate) fn removes(a: &Action) -> bool {
     matches!(a, Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete | Action::Move { .. })
+}
+
+/// ENG-4: identity of the items a step of `rec` acts on: the candidate set (ids are fresh
+/// at every analysis; sizes, groups and kept copies), the groups' keepers, the selection
+/// and the badges the settings skip. A dry-run measurement stands for the step only while
+/// this key equals the key of the items the dry run measured: a re-analysis, a repeated
+/// search, rows removed by another step or a selection change during the dry run all
+/// change it. In-memory only (never persisted), so the std hasher is fine.
+pub(crate) fn measure_key(rec: &OpportunityRecord, skip: Badges) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    crate::review_order::fingerprint(&rec.candidates).hash(&mut h);
+    for g in &rec.groups {
+        (g.id, &g.keeper).hash(&mut h);
+    }
+    rec.selection.include.hash(&mut h);
+    rec.selection.exclude.hash(&mut h);
+    skip.bits().hash(&mut h);
+    h.finish()
 }
 
 /// Estimate of a step from its record's selection.
@@ -143,7 +163,7 @@ impl Engine {
                 Some(rec) => {
                     step.selection = rec.selection.clone();
                     step.estimate = match measured.get(&step.id) {
-                        Some((a, sel, est)) if *a == step.action && *sel == rec.selection => *est,
+                        Some((a, key, est)) if *a == step.action && *key == measure_key(rec, skip) => *est,
                         _ => step_estimate(rec, skip, &step.action),
                     };
                     if !removes(&step.action) && !matches!(step.action, Action::None) {

@@ -261,3 +261,61 @@ fn select_all_in_grouped_mode_acts_on_the_shown_groups_only() {
         assert_eq!(r.selected, name == "one.bin" && !keeper, "{}", r.candidate.path.display());
     }
 }
+
+fn dry_run(f: &Fixture) {
+    let job = f.engine.plan_dry_run().unwrap();
+    wait("dry run", || {
+        f.events.events().into_iter().find_map(|ev| match ev {
+            Event::DryRun(r) if r.job_id == job.id => Some(()),
+            _ => None,
+        })
+    });
+}
+
+/// ENG-4: a dry-run measurement never stands for a different set of items. Running the
+/// same search again with a wider rule replaces the rows; the plan and the confirmation
+/// dialog must count the new items, which are the ones the digest binds and apply deletes.
+#[test]
+fn a_measured_estimate_does_not_survive_a_replaced_record() {
+    let f = engine_for(old_tmp_tree(5));
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    let search = |rule: &str| {
+        e.search_run(SearchRunRequest {
+            rule: mj_filters::parse(rule).unwrap(),
+            title: Some("Custom search".into()),
+            topmost_only: false,
+            action: None,
+        })
+        .unwrap()
+    };
+    let o = search("name:f00.tmp");
+    assert_eq!(o.candidates, 1);
+    let plan = e
+        .plan_add_step(PlanAddStepRequest {
+            opportunity_id: o.id.clone(),
+            action: Some(mj_core::Action::PermanentDelete),
+            params: None,
+        })
+        .unwrap();
+    let step = plan.steps[0].id;
+    dry_run(&f);
+    assert_eq!(e.plan_get().unwrap().steps[0].estimate.files, 1);
+    assert_eq!(e.plan_get().unwrap().steps[0].estimate.confidence, mj_core::Confidence::Exact);
+    let again = search("ext:tmp");
+    assert_eq!((again.id.clone(), again.candidates, again.selected), (o.id.clone(), 5, 5));
+    assert_eq!(e.plan_get().unwrap().steps[0].estimate.files, 5, "the plan counts the live rows");
+    let info = e.plan_confirmation_info(StepRequest { step_id: step }).unwrap();
+    assert_eq!(info.files, 5);
+    assert!(info.title.contains('5'), "{}", info.title);
+    let conf = mj_core::StepConfirmation {
+        step_id: step,
+        acknowledged: true,
+        originals: Default::default(),
+        synced_online_only: false,
+        selection_digest: Some(info.selection_digest),
+    };
+    e.plan_apply(PlanApplyRequest { confirmations: vec![conf] }).unwrap();
+    let jobs = wait_jobs(e);
+    assert_eq!(jobs.iter().map(|j| j.outcome.as_ref().map_or(0, |o| o.succeeded)).sum::<u64>(), 5);
+}

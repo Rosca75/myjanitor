@@ -41,6 +41,8 @@ pub(crate) struct StepWork {
     pub warnings: Vec<String>,
     /// Bytes the index says each item occupies, and its (file id, link count).
     pub sizes: Vec<(u64, Option<(mj_core::FileId, u32)>)>,
+    /// `plan::measure_key` of the record the items were built from (same lock).
+    pub key: u64,
 }
 
 /// The action a step runs with the dialog's originals choice applied.
@@ -142,6 +144,7 @@ impl Engine {
             roots: index.roots.clone(),
             warnings: Vec::new(),
             sizes: Vec::new(),
+            key: crate::plan::measure_key(rec, skip),
         };
         work.step.action = action.clone();
         if matches!(action, Action::None) {
@@ -298,14 +301,9 @@ impl Engine {
                         est.bytes_after = est.bytes_before;
                     }
                     total = total.add(&est);
-                    let sel = self
-                        .results
-                        .read()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .get(&w.step.opportunity)
-                        .map(|x| x.selection.clone())
-                        .unwrap_or_default();
-                    lock(&self.plan).measured.insert(w.step.id, (w.step.action.clone(), sel, est));
+                    // ENG-4: the measurement stands for the items built above, not for
+                    // whatever the selection is when the dry run ends.
+                    lock(&self.plan).measured.insert(w.step.id, (w.step.action.clone(), w.key, est));
                     steps.push(DryRunStep {
                         step_id: w.step.id,
                         title: w.step.title.clone(),
@@ -343,8 +341,29 @@ impl Engine {
             .ok_or_else(|| crate::plan::unknown_step(req.step_id))?;
         let settings = lock(&self.settings).clone();
         let work = self.build_step(&step, None)?;
-        let e = step.estimate;
-        let files = e.files;
+        // ENG-4: every figure of the dialog describes the items its digest binds: the count
+        // is the number of items, the bytes come from the same record state (a matching
+        // dry-run measurement, else the live estimate), never from a cached plan figure.
+        let e = {
+            let skip = skip_badges(&settings);
+            let results = self.results.read().unwrap_or_else(|e| e.into_inner());
+            let rec = results.get(&step.opportunity).ok_or_else(|| crate::results::unknown(&step.opportunity))?;
+            if crate::plan::measure_key(rec, skip) != work.key {
+                return Err(Error::Conflict("the step changed while the confirmation was prepared; try again".into()));
+            }
+            let measured = lock(&self.plan).measured.get(&step.id).cloned();
+            match measured {
+                Some((a, key, est)) if a == step.action && key == work.key => est,
+                _ => {
+                    let mut est = crate::plan::step_estimate(rec, skip, &step.action);
+                    if matches!(step.action, Action::Copy { .. }) {
+                        est.bytes_after = est.bytes_before;
+                    }
+                    est
+                }
+            }
+        };
+        let files = work.items.len() as u64;
         let permanent = step.safety == SafetyClass::Permanent
             || matches!(step.action, Action::PermanentDelete)
             || (!step.lossy && !matches!(step.action, Action::Hardlink) && !step.action.safety(false).is_undoable());

@@ -340,3 +340,26 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
   is the only rule, used by `plan_add_step`, `plan_update_step` and `step_params_set`
   (step flag and response). Lossy-by-nature steps always ask; asking once too often for a
   lossless FLAC choice is the safe side, and it is what the two other paths already did.
+
+## D-6A21 The confirmation describes the items its digest binds (ENG-4)
+
+- **Context:** the dialog took its count and sizes from the plan's cached estimate while its
+  digest bound the live items. The cache could be a dry-run measurement of other items:
+  it was keyed by the selection overrides (id sets: two empty sets match across entirely
+  different candidate sets), recorded with the selection read when the dry run *ended*,
+  and kept when a search under the same title replaced the record or another step removed
+  rows. Shown failure: "Delete 1 file permanently?" confirmed the deletion of 5.
+- **Choice:** (1) a dry-run measurement is keyed by `plan::measure_key`, a hash of the
+  record's candidates (fresh ids at every analysis, sizes, groups, keepers), the groups'
+  keepers, the selection and the skipped badges, computed by `build_step` under the same
+  lock as the items it measures; `refresh_plan` reuses it only while the live record has
+  the same key. Every replacement or change of the rows invalidates it without each
+  mutation having to remember to (the reviewer's per-record revision counter would have
+  needed a bump in every mutating path, in files the other lane owns). (2)
+  `plan_confirmation_info` counts the items it digests (`files` = items built) and takes
+  the bytes from the same record state (the measurement when its key matches, else the
+  live estimate); if the record changed between building the items and reading the
+  estimate it answers `conflict` (retry) rather than mixing two states.
+- **Not covered by a dedicated test:** the in-flight race (selection changed while a dry run
+  runs) is closed by construction (the key is taken with the items at queue time); the
+  tests cover the search replacement end to end, including the apply count.
