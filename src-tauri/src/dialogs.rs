@@ -8,10 +8,16 @@
 //! cancel). A dialog chooses a path and nothing else; whatever is done with the
 //! path goes through an engine command with its own checks.
 //!
-//! Threading: the dialog is built on the main thread (GTK requires it, and the
-//! window handle is read there), which returns at once; the command then awaits
-//! the dialog's future. Neither the main thread nor the async runtime is blocked
-//! while the dialog is open.
+//! Threading: the command hops to the main thread only to read the owner window's
+//! handle and to start rfd's async dialog, which returns a future at once; the
+//! command then awaits it, so neither the main thread nor the async runtime is
+//! blocked while the dialog is open. On Windows rfd shows the dialog from the thread
+//! that polls it. On Linux (rfd 0.17.2, `gtk3` feature) rfd does not use the calling
+//! thread for GTK: it spawns its own thread that calls `gtk_init_check` and loops on
+//! `gtk_main_iteration`, and the dialog is built and shown from an idle source on the
+//! default GLib main context. Tauri's (tao's) main thread iterates that same context,
+//! so whichever thread is iterating when the source is ready runs it; under Tauri that
+//! is normally the main thread, but rfd does not guarantee it. See the decision record.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

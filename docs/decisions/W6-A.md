@@ -816,3 +816,22 @@ one side wholesale.
   the user picks the path again in the dialog (the record is consumed when granted).
 - **Test:** `dialogs::tests::overwrite_is_granted_only_for_the_path_the_dialog_returned`,
   `the_state_records_and_forgets`.
+
+## D-6A45 Which thread runs the GTK dialog (review question)
+
+- **Facts (rfd 0.17.2, `gtk3` backend, read in the registry source):** the async dialog is
+  built and shown by `GtkGlobalThread`: a thread rfd spawns once, that runs `gtk_init_check`
+  and loops on `gtk_main_iteration`. The dialog is queued with `g_idle_add_full` on the
+  default GLib main context and built inside that idle callback. rfd's gtk3 backend ignores
+  the parent window. Tao's event loop (0.37.1) runs `gtk::main_iteration_do` on the main
+  thread against the same default context.
+- **Consequence:** the old comment ("GTK requires the main thread, the dialog is built
+  there") was wrong. The `run_on_main_thread` hop only reads the window handle and queues the
+  dialog. Both threads iterate the default context, so the idle callback runs on whichever
+  gets the context first; with Tauri running that is usually the main thread, but it is not
+  guaranteed, and a GTK call from the rfd thread would be outside GTK's single-thread rule.
+- **Verdict:** our code is correct as written (it only awaits a future, never blocks), and the
+  comment is fixed. Whether the race ever lands the dialog on the rfd thread was not observed
+  (no display in this environment). The smallest fix if it shows up is to build rfd with the
+  default `xdg-portal` backend (no GTK in rfd) or to show the GTK dialog directly on the main
+  thread with gtk-rs; not done.
