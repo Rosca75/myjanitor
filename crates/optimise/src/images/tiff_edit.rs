@@ -14,6 +14,8 @@ use mj_core::{Error, Result};
 const TAG_GPS_POINTER: u16 = 0x8825;
 const TAG_THUMB_OFFSET: u16 = 0x0201;
 const TAG_THUMB_LENGTH: u16 = 0x0202;
+const TAG_EXIF_POINTER: u16 = 0x8769;
+const TAG_INTEROP_POINTER: u16 = 0xA005;
 
 struct Order(bool);
 
@@ -119,6 +121,75 @@ fn erase(t: &mut Vec<u8>, mut regions: Vec<Range<usize>>) {
     }
 }
 
+/// The table and out-of-line values of the IFD at `at`, plus the pointer entries it holds
+/// (tag, target offset).
+fn ifd_regions(o: &Order, t: &[u8], at: usize, out: &mut Vec<Range<usize>>) -> Result<Vec<(u16, usize)>> {
+    let ifd = ifd_at(o, t, at)?;
+    out.push(ifd.span());
+    let mut ptrs = Vec::new();
+    for i in 0..ifd.count {
+        let e = ifd.entries() + 12 * i;
+        if let Some(r) = value_range(o, t, e) {
+            out.push(r);
+        }
+        match o.u16(t, e) {
+            Some(tag @ (TAG_EXIF_POINTER | TAG_GPS_POINTER | TAG_INTEROP_POINTER)) => {
+                if let Some(v) = o.u32(t, e + 8).filter(|v| *v != 0) {
+                    ptrs.push((tag, v as usize));
+                }
+            }
+            Some(TAG_THUMB_OFFSET) => {
+                // The thumbnail bytes are IFD1's own data.
+                let len = (0..ifd.count)
+                    .map(|j| ifd.entries() + 12 * j)
+                    .find(|&f| o.u16(t, f) == Some(TAG_THUMB_LENGTH))
+                    .and_then(|f| o.u32(t, f + 8));
+                if let (Some(off), Some(len)) = (o.u32(t, e + 8), len) {
+                    let (off, len) = (off as usize, len as usize);
+                    if let Some(end) = off.checked_add(len).filter(|&x| x <= t.len() && len > 0) {
+                        out.push(off..end);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(ptrs)
+}
+
+/// G-12: every region of the TIFF that the edit must leave alone: the header, IFD0 (table
+/// and values), the Exif IFD (its values include the MakerNote) and its Interop IFD, the
+/// GPS IFD unless it is the one removed, and IFD1 with its thumbnail unless it is the one
+/// removed. A sub-IFD that cannot be read fails the edit (what is not seen cannot be
+/// vouched for), and the caller keeps the segment.
+fn kept_regions(
+    o: &Order,
+    t: &[u8],
+    off0: usize,
+    removing_gps: bool,
+    removing_ifd1: bool,
+) -> Result<Vec<Range<usize>>> {
+    let mut out = vec![0..8];
+    let mut todo: Vec<(u16, usize)> = ifd_regions(o, t, off0, &mut out)?;
+    let mut seen = std::collections::HashSet::new();
+    while let Some((tag, at)) = todo.pop() {
+        if (tag == TAG_GPS_POINTER && removing_gps) || !seen.insert(at) || seen.len() > 16 {
+            continue;
+        }
+        let more = ifd_regions(o, t, at, &mut out)?;
+        if tag == TAG_EXIF_POINTER {
+            todo.extend(more.into_iter().filter(|(k, _)| *k == TAG_INTEROP_POINTER));
+        }
+    }
+    if !removing_ifd1 {
+        let ifd0 = ifd_at(o, t, off0)?;
+        if let Some(next) = o.u32(t, ifd0.next_at()).filter(|v| *v != 0) {
+            ifd_regions(o, t, next as usize, &mut out)?;
+        }
+    }
+    Ok(out)
+}
+
 fn check_clear(regions: &[Range<usize>], protected: &[Range<usize>]) -> Result<()> {
     for r in regions {
         if r.start < 8 || protected.iter().any(|p| overlaps(r, p)) {
@@ -146,7 +217,7 @@ pub fn strip_gps(t: &mut Vec<u8>) -> Result<bool> {
                 regions.push(r);
             }
         }
-        check_clear(&regions, &[0..8, ifd0.span()])?;
+        check_clear(&regions, &kept_regions(&o, t, off0, true, false)?)?;
     }
     // Unlink: shift the later entries and the next pointer up by one entry.
     let tail_start = entry + 12;
@@ -186,7 +257,7 @@ pub fn strip_ifd1(t: &mut Vec<u8>) -> Result<bool> {
             regions.push(off..end);
         }
     }
-    check_clear(&regions, &[0..8, ifd0.span()])?;
+    check_clear(&regions, &kept_regions(&o, t, off0, false, true)?)?;
     let at = ifd0.next_at();
     t[at..at + 4].copy_from_slice(&o.put_u32(0));
     erase(t, regions);
@@ -209,6 +280,63 @@ pub fn orientation_only(orientation: u16) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    fn le16(v: &mut Vec<u8>, x: u16) {
+        v.extend_from_slice(&x.to_le_bytes());
+    }
+    fn le32(v: &mut Vec<u8>, x: u32) {
+        v.extend_from_slice(&x.to_le_bytes());
+    }
+    fn entry(v: &mut Vec<u8>, tag: u16, typ: u16, count: u32, val: u32) {
+        le16(v, tag);
+        le16(v, typ);
+        le32(v, count);
+        le32(v, val);
+    }
+
+    #[test]
+    fn g12_strip_ifd1_never_zeroes_a_value_shared_with_ifd0_or_the_exif_ifd() {
+        // IFD0@8 (XResolution -> 38), rational@38, IFD1@46 (XResolution -> 38, thumb 88+4).
+        let mut t = b"II*\0".to_vec();
+        le32(&mut t, 8);
+        le16(&mut t, 1);
+        entry(&mut t, 0x011A, 5, 1, 38);
+        le32(&mut t, 46);
+        t.resize(38, 0);
+        le32(&mut t, 72);
+        le32(&mut t, 1);
+        le16(&mut t, 3);
+        entry(&mut t, 0x011A, 5, 1, 38);
+        entry(&mut t, 0x0201, 4, 1, 88);
+        entry(&mut t, 0x0202, 4, 1, 4);
+        le32(&mut t, 0);
+        t.resize(88, 0);
+        t.extend_from_slice(b"THMB");
+        t.extend_from_slice(&[7u8; 8]);
+        let before = t.clone();
+        assert!(super::strip_ifd1(&mut t).is_err(), "a shared value refuses the edit");
+        assert_eq!(t, before, "nothing changed");
+
+        // The thumbnail lies inside a MakerNote of the Exif IFD: refused too.
+        let mut t = b"II*\0".to_vec();
+        le32(&mut t, 8);
+        le16(&mut t, 1);
+        entry(&mut t, 0x8769, 4, 1, 26); // Exif IFD @26
+        le32(&mut t, 60); // IFD1 @60
+                          // Exif IFD @26: MakerNote (UNDEFINED, 16 bytes @ 44)
+        le16(&mut t, 1);
+        entry(&mut t, 0x927C, 7, 16, 44);
+        le32(&mut t, 0);
+        t.resize(44, 0);
+        t.extend_from_slice(&[9u8; 16]); // 44..60
+        le16(&mut t, 2);
+        entry(&mut t, 0x0201, 4, 1, 48); // thumbnail points into the maker note
+        entry(&mut t, 0x0202, 4, 1, 4);
+        le32(&mut t, 0);
+        let before = t.clone();
+        assert!(super::strip_ifd1(&mut t).is_err());
+        assert_eq!(t, before);
+    }
+
     use super::*;
     use mj_formats::exif::build::{tiff, Value};
 
