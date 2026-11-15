@@ -88,11 +88,20 @@ test('numbers are validated before they are sent, and valid ones are sent exactl
 
 test('an engine rejection shows inline under the control that caused it', async () => {
   const t = await setup({ settingsError: { code: 'invalid_input', message: 'performance.threads must be between 0 and 256', hint: '' } });
-  t.$('[data-fk="set-low-memory"]').setChecked(true);
+  t.$('[data-fk="set-preserve_timestamps"]').setChecked(false);
   await tick();
-  const err = t.$('[data-error="low_memory"]');
+  const err = t.$('[data-error="preserve_timestamps"]');
   assert.match(err.textContent, /performance\.threads must be between/);
   assert.equal(err.getAttribute('role'), 'alert');
+});
+
+test('settings this version does not use are shown disabled with the reason, never as active', async () => {
+  const t = await setup();
+  const el = t.$('[data-fk="set-low-memory"]');
+  assert.ok(el);
+  assert.equal(el.disabled, true);
+  assert.equal(el.checked, false);
+  assert.match(t.root.textContent, /Not available in this version: scans always keep their file list in memory/);
 });
 
 test('exclusions: add (trimmed, Enter or button) and remove', async () => {

@@ -52,9 +52,9 @@ export function select(o) {
     o.options.map((opt) => h('option', { value: opt.value, selected: opt.value === o.value }, opt.label)));
 }
 
-/** Number input with a suffix. @param {{ value: number, min?: number, max?: number, step?: number, label: string, unit?: string, onChange: (n: number) => void, fk?: string }} o */
+/** Number input with a suffix. @param {{ value: number, min?: number, max?: number, step?: number, label: string, unit?: string, onChange: (n: number) => void, fk?: string, disabled?: boolean }} o */
 export function numberInput(o) {
-  const input = h('input', { type: 'number', class: 'number', min: o.min, max: o.max, step: o.step, value: String(o.value), 'aria-label': o.label, 'data-fk': o.fk, on: { change: (e) => { const n = Number(e.target.value); if (Number.isFinite(n)) o.onChange(n); } } });
+  const input = h('input', { type: 'number', class: 'number', min: o.min, max: o.max, step: o.step, value: String(o.value), 'aria-label': o.label, 'data-fk': o.fk, disabled: o.disabled, on: { change: (e) => { const n = Number(e.target.value); if (Number.isFinite(n)) o.onChange(n); } } });
   input.value = String(o.value);
   return h('span', { class: 'number-wrap' }, input, o.unit && h('span', { class: 'number-unit' }, o.unit));
 }

@@ -79,7 +79,9 @@ impl Engine {
         let protected = ProtectedPaths::new(&settings.safety.protected_paths).with_app_dirs(&self.cfg.app_dirs());
         let guard = Guard::new(roots, protected);
         let tools = lock(&self.tools).clone();
-        let _ = std::fs::create_dir_all(&self.cfg.temp_dir);
+        // AUT-07: the user's temp folder when valid, else the engine's own.
+        let scratch = self.scratch_dir();
+        let _ = std::fs::create_dir_all(&scratch);
         let ctx = ExecContext {
             platform: self.platform(),
             guard: &guard,
@@ -87,7 +89,7 @@ impl Engine {
             services: Services { optimisers: &self.optimisers, archiver: Some(self.archiver.as_ref()), tools: &tools },
             settings: &settings,
             quarantine_dir: &self.cfg.quarantine_dir,
-            temp_dir: &self.cfg.temp_dir,
+            temp_dir: &scratch,
             run_id,
             job_id,
             step_id,

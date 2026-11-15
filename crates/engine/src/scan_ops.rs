@@ -219,9 +219,15 @@ impl Engine {
         lock(&self.scan).status.generation == generation
     }
 
-    fn run_scan(&self, generation: u64, scope: ScanScope, cancel: CancelToken) {
+    fn run_scan(&self, generation: u64, mut scope: ScanScope, cancel: CancelToken) {
         let started = Instant::now();
         let settings = lock(&self.settings).clone();
+        // AUT-05: the walk and hashing workers follow the settings when the scope does not
+        // ask for a number itself (scan.threads, else performance.threads; 0 = every CPU).
+        if scope.options.threads == 0 {
+            scope.options.threads =
+                if settings.scan.threads != 0 { settings.scan.threads } else { settings.performance.threads };
+        }
         let emit_progress = |p: &Progress| {
             let walking = p.phase == Phase::Walking;
             let ev = ScanProgressEvent {
