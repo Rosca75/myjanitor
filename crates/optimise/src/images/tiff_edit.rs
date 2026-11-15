@@ -169,7 +169,7 @@ fn kept_regions(
     removing_gps: bool,
     removing_ifd1: bool,
 ) -> Result<Vec<Range<usize>>> {
-    let mut out = vec![0..8];
+    let mut out: Vec<Range<usize>> = std::iter::once(0..8).collect();
     let mut todo: Vec<(u16, usize)> = ifd_regions(o, t, off0, &mut out)?;
     let mut seen = std::collections::HashSet::new();
     while let Some((tag, at)) = todo.pop() {

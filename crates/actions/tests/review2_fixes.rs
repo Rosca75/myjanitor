@@ -8,6 +8,7 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::*;
+#[cfg(unix)]
 use mj_actions::{Guard, ProtectedPaths};
 use mj_core::Action;
 
