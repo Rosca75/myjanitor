@@ -1,10 +1,12 @@
 //! MyJanitor GUI shell (Tauri 2). Owner: W3-D.
 //!
 //! The frontend is the plain `ui/` folder (no bundler, `withGlobalTauri`); all
-//! file I/O happens in Rust. This crate only wires commands and events to
-//! `mj-engine`.
+//! file I/O happens in Rust. This crate wires commands and events to `mj-engine`
+//! and answers the two shell commands that need the window: the native file
+//! dialogs (`dialogs.rs`).
 
 pub mod commands;
+pub mod dialogs;
 pub mod events;
 pub mod launch;
 
@@ -44,6 +46,7 @@ pub fn run() {
                 std::process::exit(1);
             }
             app.manage(commands::AppState { engine });
+            app.manage(dialogs::DialogGate::default());
             Ok(())
         })
         .invoke_handler(mj_handlers!())
@@ -63,8 +66,24 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn every_engine_command_is_registered() {
-        let engine: Vec<&str> = mj_engine::api::COMMANDS.iter().map(|c| c.name).collect();
-        assert_eq!(super::commands::REGISTERED, engine.as_slice());
+    fn every_command_is_registered() {
+        let api = mj_engine::api::COMMANDS.iter().map(|c| c.name);
+        let shell = mj_engine::api::SHELL_COMMANDS.iter().map(|c| c.name);
+        let expected: Vec<&str> = api.chain(shell).collect();
+        assert_eq!(super::commands::REGISTERED, expected.as_slice());
+    }
+
+    /// `REGISTERED` is a hand-kept list; this ties it to what `mj_handlers!` really
+    /// registers, so a command cannot be listed without a handler or the reverse.
+    #[test]
+    fn the_handler_list_matches_the_registered_names() {
+        let src = include_str!("commands.rs");
+        let body = src.split("tauri::generate_handler![").nth(1).expect("handler list").split(']').next().unwrap();
+        let handlers: Vec<&str> = body
+            .lines()
+            .filter_map(|l| l.trim().trim_end_matches(',').rsplit("::").next())
+            .filter(|n| !n.is_empty())
+            .collect();
+        assert_eq!(handlers, super::commands::REGISTERED);
     }
 }

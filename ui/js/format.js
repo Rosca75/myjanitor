@@ -136,18 +136,6 @@ export function formatPercent(fraction) {
   return `${p < 10 && p > 0 ? p.toFixed(1) : Math.round(p)} %`;
 }
 
-/**
- * Join a folder and a new file name for display or for an export target. The
- * separator follows the platform; only used for names the user typed, never
- * for paths the engine handed out.
- * @param {string} dir @param {string} name @param {string} [platform]
- */
-export function joinPath(dir, name, platform = 'windows') {
-  const sep = platform === 'windows' || /^[A-Za-z]:/.test(dir) ? '\\' : '/';
-  const base = String(dir).replace(/[\\/]+$/, '');
-  return base === '' ? `${sep}${name}` : /^[A-Za-z]:$/.test(base) ? `${base}${sep}${name}` : `${base}${sep}${name}`;
-}
-
 /** Compression saved by the file system: 0..1, or null when nothing is compressed. @param {number} size @param {number} allocated */
 export function compressionRate(size, allocated) {
   if (!size || !allocated || allocated >= size) return null;

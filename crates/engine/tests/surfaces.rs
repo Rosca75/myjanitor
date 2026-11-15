@@ -327,25 +327,6 @@ fn search_params_preview_and_disk() {
     assert!(e.breakdown(BreakdownRequest { by: BreakdownBy::Type, path: None }).is_ok());
     let tree = e.disk_usage_tree(DiskUsageRequest { path: None, depth: 2, min_fraction: Some(0.0) }).unwrap();
     assert_eq!(tree.children.len(), 1);
-
-    // Folder browser: folders only, nothing hidden silently, links never entered.
-    let l = e
-        .fs_list_dir(FsListDirRequest { path: Some(f.tree.join("photos")), show_hidden: false, include_files: false })
-        .unwrap();
-    assert!(l.entries.is_empty());
-    // The fixture link exists only where the standard tree could create it (Unix).
-    let links = u64::from(std::fs::symlink_metadata(f.tree.join("photos/link-to-a")).is_ok());
-    assert_eq!(l.omitted, 1 + links, "a.bin and the link are counted");
-    let l = e
-        .fs_list_dir(FsListDirRequest { path: Some(f.tree.join("photos")), show_hidden: false, include_files: true })
-        .unwrap();
-    assert!(l.entries.iter().any(|x| !x.is_dir), "files are listed when asked for");
-    #[cfg(unix)]
-    assert!(l.entries.iter().any(|x| x.is_link && !x.is_dir));
-    assert_eq!(
-        e.fs_list_dir(FsListDirRequest { path: Some("relative".into()), ..Default::default() }).unwrap_err().code(),
-        "invalid_input"
-    );
 }
 
 #[test]
@@ -361,6 +342,7 @@ fn exports_history_restore_and_quarantine() {
             selected_only: true,
             format: mj_core::ExportFormat::Csv,
             dest: dest.clone(),
+            overwrite: false,
         })
         .unwrap();
     assert_eq!(r.path, dest);
@@ -375,11 +357,51 @@ fn exports_history_restore_and_quarantine() {
             selected_only: false,
             format: mj_core::ExportFormat::Html,
             dest: dest.clone(),
+            overwrite: false,
         })
         .unwrap();
     assert_ne!(r2.path, dest, "never overwrites");
     assert!(r2.path.to_string_lossy().contains("(1)"));
     assert_eq!(r2.rows, 1);
+    // W6-A D-6A4: with `overwrite` (the user confirmed in the OS save dialog) the file at
+    // `dest` is replaced, and only then. A request without the field keeps it.
+    let before = std::fs::read(&dest).unwrap();
+    let r3 = e
+        .results_export(ResultsExportRequest {
+            opportunity_id: Some(oid("det:temp_files")),
+            selected_only: false,
+            format: mj_core::ExportFormat::Csv,
+            dest: dest.clone(),
+            overwrite: true,
+        })
+        .unwrap();
+    assert_eq!(r3.path, dest, "replaced in place");
+    assert_eq!(r3.rows, 1);
+    let after = std::fs::read(&dest).unwrap();
+    assert_ne!(after, before);
+    assert_eq!(after.len() as u64, r3.bytes);
+    let json = serde_json::json!({ "format": "csv", "dest": dest });
+    let parsed: ResultsExportRequest = serde_json::from_value(json).unwrap();
+    assert!(!parsed.overwrite, "never overwriting is the default");
+    let json = serde_json::json!({ "kind": "audit", "format": "csv", "dest": dest });
+    assert!(!serde_json::from_value::<ReportExportRequest>(json).unwrap().overwrite);
+    let r4 = e
+        .report_export(ReportExportRequest {
+            run_id: None,
+            kind: ReportExportKind::Audit,
+            format: mj_core::ExportFormat::Csv,
+            dest: dest.clone(),
+            overwrite: true,
+        })
+        .unwrap();
+    assert_eq!(r4.path, dest, "report exports replace too");
+    assert!(std::fs::read_to_string(&dest).unwrap().contains("entry_id"), "the audit header replaced the results");
+    let leftovers: Vec<_> = std::fs::read_dir(dest.parent().unwrap())
+        .unwrap()
+        .map(|x| x.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".mjtmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "{leftovers:?}");
 
     for id in ["det:temp_files", "det:old_installers"] {
         e.plan_add_step(PlanAddStepRequest {
@@ -402,7 +424,13 @@ fn exports_history_restore_and_quarantine() {
         (ReportExportKind::Audit, mj_core::ExportFormat::Csv, "audit.csv"),
     ] {
         let r = e
-            .report_export(ReportExportRequest { run_id: Some(started.run_id), kind, format, dest: out.join(name) })
+            .report_export(ReportExportRequest {
+                run_id: Some(started.run_id),
+                kind,
+                format,
+                dest: out.join(name),
+                overwrite: false,
+            })
             .unwrap();
         assert_eq!(r.rows, 2, "{name}");
         assert!(r.bytes > 0);
@@ -415,6 +443,7 @@ fn exports_history_restore_and_quarantine() {
             kind: ReportExportKind::Audit,
             format: mj_core::ExportFormat::Csv,
             dest: out.join("all.csv"),
+            overwrite: false,
         })
         .unwrap();
     assert!(all.rows >= 2);
@@ -423,7 +452,8 @@ fn exports_history_restore_and_quarantine() {
             run_id: None,
             kind: ReportExportKind::Audit,
             format: mj_core::ExportFormat::Html,
-            dest: out.join("x.html")
+            dest: out.join("x.html"),
+            overwrite: false,
         })
         .is_err());
 

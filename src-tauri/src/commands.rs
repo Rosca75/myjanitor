@@ -1,6 +1,9 @@
 //! Thin `#[tauri::command]` wrappers: one per entry of `mj_engine::api::COMMANDS`,
 //! same name, same request (`req` argument) and response. **Owner: W3-D.**
 //!
+//! The shell commands (`mj_engine::api::SHELL_COMMANDS`, the native file dialogs)
+//! are implemented in `dialogs.rs` and registered here with the engine commands.
+//!
 //! Every wrapper is `async` and runs the engine method on Tauri's blocking pool,
 //! so no command ever runs on the main (UI) thread. Errors are `ErrorInfo`
 //! (`{code, message, hint, path?}`); the JS promise rejects with that object.
@@ -57,12 +60,6 @@ pub async fn scope_add_root(state: State<'_, AppState>, req: ScopePathRequest) -
 #[tauri::command]
 pub async fn scope_remove_root(state: State<'_, AppState>, req: ScopePathRequest) -> Result<ScanScope, ErrorInfo> {
     run(state, move |e| e.scope_remove_root(req)).await
-}
-
-/// In-app folder browser (D-104): list a folder, or the places when `path` is omitted.
-#[tauri::command]
-pub async fn fs_list_dir(state: State<'_, AppState>, req: FsListDirRequest) -> Result<FsListDirResponse, ErrorInfo> {
-    run(state, move |e| e.fs_list_dir(req)).await
 }
 
 /// Start a scan of the scope; progress via `scan://progress`, `scan://detector`, end via `scan://done`.
@@ -455,14 +452,14 @@ pub async fn breakdown(state: State<'_, AppState>, req: BreakdownRequest) -> Res
     run(state, move |e| e.breakdown(req)).await
 }
 
-/// Names registered in `lib.rs` (kept equal to `mj_engine::api::COMMANDS` by a test).
+/// Names registered in `lib.rs`: the engine commands, then the shell commands (kept
+/// equal to `mj_engine::api::COMMANDS` followed by `SHELL_COMMANDS` by a test).
 pub const REGISTERED: &[&str] = &[
     "app_info",
     "scope_get",
     "scope_set",
     "scope_add_root",
     "scope_remove_root",
-    "fs_list_dir",
     "scan_start",
     "scan_pause",
     "scan_resume",
@@ -523,6 +520,8 @@ pub const REGISTERED: &[&str] = &[
     "drives_list",
     "disk_usage_tree",
     "breakdown",
+    "dialog_pick_folder",
+    "dialog_save_file",
 ];
 
 /// The invoke handler with every command.
@@ -535,7 +534,6 @@ macro_rules! mj_handlers {
             $crate::commands::scope_set,
             $crate::commands::scope_add_root,
             $crate::commands::scope_remove_root,
-            $crate::commands::fs_list_dir,
             $crate::commands::scan_start,
             $crate::commands::scan_pause,
             $crate::commands::scan_resume,
@@ -596,6 +594,8 @@ macro_rules! mj_handlers {
             $crate::commands::drives_list,
             $crate::commands::disk_usage_tree,
             $crate::commands::breakdown,
+            $crate::dialogs::dialog_pick_folder,
+            $crate::dialogs::dialog_save_file,
         ]
     };
 }

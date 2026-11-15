@@ -93,56 +93,60 @@ pub struct ScopePathRequest {
     pub path: PathBuf,
 }
 
-/// `fs_list_dir` request (in-app folder browser, D-104).
+// ------------------------------------------------- shell (native dialogs)
+//
+// The two `dialog_*` commands are shell commands (`SHELL_COMMANDS`): the GUI shell
+// implements them with the operating system's own dialogs, because they need the
+// window. The engine has no method for them; the types live here because this
+// module is the one IPC contract shared by the shell, IPC.md and the mock.
+
+/// `dialog_pick_folder` request: the OS folder dialog (W6-A D-6A1).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct FsListDirRequest {
-    /// Folder to list; `None` lists the places (home, common folders, drives).
+pub struct DialogPickFolderRequest {
+    /// Dialog title; the OS default when omitted.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Folder the dialog opens in; the OS default (usually the last one used) when
+    /// omitted. A hint only: a relative or missing folder is ignored.
     #[serde(default, with = "mj_core::pathutil::serde_path::opt")]
-    pub path: Option<PathBuf>,
-    #[serde(default)]
-    pub show_hidden: bool,
-    /// Also list files (for "save as" pickers); folders only by default.
-    #[serde(default)]
-    pub include_files: bool,
+    pub start_dir: Option<PathBuf>,
 }
 
-/// One row of the folder browser.
+/// One entry of the file-type list of a save dialog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FsDirEntry {
+#[serde(deny_unknown_fields)]
+pub struct DialogFileFilter {
+    /// Label shown in the list (`CSV file`).
     pub name: String,
-    #[serde(with = "mj_core::pathutil::serde_path")]
-    pub path: PathBuf,
-    pub is_dir: bool,
-    pub is_link: bool,
-    pub hidden: bool,
+    /// Extensions without the dot (`["csv"]`). The first one of the first filter is
+    /// the default extension on Windows.
+    pub extensions: Vec<String>,
 }
 
-/// A shortcut in the folder browser sidebar.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FsPlace {
-    pub label: String,
-    #[serde(with = "mj_core::pathutil::serde_path")]
-    pub path: PathBuf,
-    /// `home`, `folder` or `drive`.
-    pub kind: String,
-}
-
-/// `fs_list_dir` response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FsListDirResponse {
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "mj_core::pathutil::serde_path::opt")]
-    pub path: Option<PathBuf>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "mj_core::pathutil::serde_path::opt")]
-    pub parent: Option<PathBuf>,
-    /// Sorted: folders first, then case-insensitive name.
-    pub entries: Vec<FsDirEntry>,
-    pub places: Vec<FsPlace>,
-    /// Entries left out because they are hidden (`show_hidden: false`) or are files
-    /// (`include_files: false`), so the browser can say so instead of hiding them silently.
+/// `dialog_save_file` request: the OS "Save as" dialog (W6-A D-6A1).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DialogSaveFileRequest {
+    /// Dialog title; the OS default when omitted.
     #[serde(default)]
-    pub omitted: u64,
+    pub title: Option<String>,
+    /// Folder the dialog opens in (a hint, like `DialogPickFolderRequest::start_dir`).
+    #[serde(default, with = "mj_core::pathutil::serde_path::opt")]
+    pub start_dir: Option<PathBuf>,
+    /// Suggested file name (a name, not a path).
+    #[serde(default)]
+    pub file_name: Option<String>,
+    /// File types offered by the dialog.
+    #[serde(default)]
+    pub filters: Vec<DialogFileFilter>,
 }
+
+/// Response of both dialog commands: the chosen path, or `null` when the user
+/// cancelled the dialog (a cancel is not an error).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DialogPath(#[serde(with = "mj_core::pathutil::serde_path::opt")] pub Option<PathBuf>);
 
 // ---------------------------------------------------------------- scan
 
@@ -818,7 +822,8 @@ pub enum ReportExportKind {
     Audit,
 }
 
-/// `report_export` request. The destination comes from the in-app save picker.
+/// `report_export` request. In the GUI the destination comes from the OS save dialog
+/// (`dialog_save_file`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReportExportRequest {
@@ -826,9 +831,15 @@ pub struct ReportExportRequest {
     pub run_id: Option<RunId>,
     pub kind: ReportExportKind,
     pub format: ExportFormat,
-    /// Target file; never overwritten (a ` (1)` suffix is added instead).
+    /// Target file. An existing file is kept and a ` (1)` suffix is added, unless
+    /// `overwrite` is set.
     #[serde(with = "mj_core::pathutil::serde_path")]
     pub dest: PathBuf,
+    /// Replace an existing regular file at `dest` (W6-A D-6A4). Set only when the user
+    /// chose `dest` in the OS save dialog, which asked before an existing file was
+    /// chosen. Off by default: the CLI and every other caller never overwrite.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 /// `results_export` request (CLN-ACT-11).
@@ -841,14 +852,18 @@ pub struct ResultsExportRequest {
     #[serde(default)]
     pub selected_only: bool,
     pub format: ExportFormat,
+    /// Target file; see `ReportExportRequest::dest`.
     #[serde(with = "mj_core::pathutil::serde_path")]
     pub dest: PathBuf,
+    /// Replace an existing regular file at `dest`; see `ReportExportRequest::overwrite`.
+    #[serde(default)]
+    pub overwrite: bool,
 }
 
 /// Export result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportResult {
-    /// The file actually written (may carry a ` (n)` suffix).
+    /// The file actually written (carries a ` (n)` suffix when `dest` existed and was kept).
     #[serde(with = "mj_core::pathutil::serde_path")]
     pub path: PathBuf,
     pub bytes: u64,

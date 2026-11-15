@@ -18,7 +18,6 @@ export const sc = {
   unavailable: 'Not available',
   add: 'Add',
   remove: 'Remove',
-  cancel: 'Cancel',
   more: 'Show more',
   less: 'Show less',
 
@@ -145,14 +144,11 @@ export const sc = {
     contextMenuLinux: 'Adds entries for your account. Nautilus gets scripts when its scripts folder exists.',
     contextMenuPortable: 'Not available in portable mode, which never registers with the system.',
   },
-  picker: {
-    title: 'Choose a folder',
-    places: 'Places',
-    up: 'Up',
-    choose: 'Choose this folder',
-    empty: 'No folders here.',
-    loading: 'Loading',
-    current: 'Current folder',
+  /** Titles of the operating system's folder dialog. */
+  dialogs: {
+    protected: 'Choose a folder to protect',
+    temp: 'Choose the temporary folder',
+    backup: 'Choose the backup folder for originals',
   },
 };
 

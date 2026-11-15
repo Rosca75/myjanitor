@@ -109,9 +109,10 @@ export function createExtras(m, sim, emit, base) {
   m.presets ??= [];
   m.exported = new Set();
   const exportTo = (req, rows) => {
-    if (!/^([A-Za-z]:\\|\/)/.test(String(req.dest))) throw fail('invalid_input', `Not an absolute path: ${req.dest}`, 'Choose a folder in the list.');
+    if (!/^([A-Za-z]:\\|\/)/.test(String(req.dest))) throw fail('invalid_input', `Not an absolute path: ${req.dest}`, 'Choose where to save the file.');
     let path = String(req.dest);
-    if (m.exported.has(path)) path = path.replace(/(\.\w+)$/, ' (1)$1');
+    // Never overwrites, unless the user confirmed the replacement in the save dialog.
+    if (m.exported.has(path) && !req.overwrite) path = path.replace(/(\.\w+)$/, ' (1)$1');
     m.exported.add(path);
     return { path, bytes: 1200 + rows * 140, rows };
   };

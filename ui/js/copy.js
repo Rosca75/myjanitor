@@ -32,15 +32,13 @@ export const copy = {
     safe: 'Nothing is changed during a scan.',
   },
 
-  browser: {
-    title: 'Choose a folder',
-    places: 'Places',
-    up: 'Up one level',
-    choose: 'Choose this folder',
-    cancel: 'Cancel',
-    empty: 'No sub-folders here',
-    loading: 'Loading',
-    current: 'Current folder',
+  /** Titles and file-type labels of the operating system's file dialogs. */
+  dialogs: {
+    addLocation: 'Add a location to scan',
+    destination: { move: 'Choose the folder to move the files to', copy: 'Choose the folder to copy the files to' },
+    keepFolder: 'Choose the folder whose copies are kept',
+    saveExport: { report: 'Save the report', audit: 'Save the audit log', results: 'Save the results' },
+    fileTypes: { csv: 'CSV file', html: 'HTML page', pdf: 'PDF document' },
   },
 
   scanning: {
@@ -275,7 +273,6 @@ export const copy = {
     keepHelp: 'In each group of identical files, the others are checked.',
     advanced: 'Advanced',
     reset: 'Reset selection',
-    moveSoon: 'Choosing a destination folder comes with the folder browser in a later build.',
   },
 
   confirm: {
@@ -417,8 +414,6 @@ export const copy = {
     title: 'Report',
     none: 'There is no report yet',
     saved: (rows, path) => `Saved ${rows} ${plural(rows, 'row')} to ${path}`,
-    badName: 'Enter a file name without folders',
-    badNameHint: 'Use a name such as report.csv.',
     files: 'Files',
     done: 'Done',
     skipped: 'Skipped',
@@ -661,13 +656,6 @@ export const copy = {
   },
 
   ask: { cancel: 'Cancel' },
-
-  browser2: {
-    save: 'Save here',
-    fileName: 'File name',
-    saveTo: 'Save to this folder',
-    chooseKeep: 'Keep the copy in this folder',
-  },
 
   toast2: { retry: 'Try again' },
 

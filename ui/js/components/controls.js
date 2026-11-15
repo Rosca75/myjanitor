@@ -48,8 +48,12 @@ export function toggle(o) {
  * @param {{ options: {value: string, label: string}[], value: string, label: string, onChange: (value: string) => void, fk?: string, extra?: string, disabled?: boolean }} o
  */
 export function select(o) {
-  return h('select', { class: ['select', o.extra], 'aria-label': o.label, 'data-fk': o.fk, disabled: o.disabled, on: { change: (e) => o.onChange(String(e.target.value)) } },
+  const el = h('select', { class: ['select', o.extra], 'aria-label': o.label, 'data-fk': o.fk, disabled: o.disabled, on: { change: (e) => o.onChange(String(e.target.value)) } },
     o.options.map((opt) => h('option', { value: opt.value, selected: opt.value === o.value }, opt.label)));
+  // The value shown is always the one in force, also when a redraw follows a choice the
+  // controller did not take (a cancelled folder dialog for "Preferred folder…").
+  if (o.options.some((opt) => opt.value === o.value)) el.value = String(o.value);
+  return el;
 }
 
 /** Number input with a suffix. @param {{ value: number, min?: number, max?: number, step?: number, label: string, unit?: string, onChange: (n: number) => void, fk?: string, disabled?: boolean }} o */

@@ -1,4 +1,4 @@
-/* Overlays: scrim, modal, confirmation dialog, folder browser. */
+/* Overlays: scrim, modal, confirmation dialog. */
 .scrim { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding-top: 10vh; background: var(--scrim); overflow: auto; }
 .modal { width: min(var(--dialog-width), calc(100vw - var(--space-8))); background: var(--surface); border-radius: var(--radius-dialog); box-shadow: var(--shadow-raised); padding: var(--space-7); display: flex; flex-direction: column; gap: var(--space-4); max-height: 86vh; overflow: auto; }
 .modal:focus-visible { outline-offset: -2px; }
@@ -28,15 +28,4 @@
 .btn--acting { height: 34px; min-width: 150px; font-size: var(--text-md); }
 .modal--permanent .ack__hint { color: var(--danger-text); }
 
-.modal--browser { width: min(720px, calc(100vw - var(--space-8))); }
-.browser { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: var(--space-4); min-height: 280px; }
-.browser__places { display: flex; flex-direction: column; gap: var(--space-1); border-right: 1px solid var(--border); padding-right: var(--space-3); }
-.browser__place { justify-content: flex-start; }
-.browser__main { display: flex; flex-direction: column; gap: var(--space-3); min-width: 0; }
-.browser__path { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-.browser__current { font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.browser__list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.browser__entry { display: flex; align-items: center; gap: var(--space-3); width: 100%; height: 32px; padding: 0 var(--space-3); background: none; border: 0; border-bottom: 1px solid var(--border); text-align: left; cursor: pointer; }
-.browser__entry:hover { background: var(--select-soft); }
-.browser__empty { color: var(--text-muted); padding: var(--space-4) 0; }
 .report__sections { padding-left: var(--space-4); list-style: disc; color: var(--text-muted); }

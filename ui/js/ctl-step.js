@@ -6,6 +6,7 @@
  * and table component as the step review.
  */
 import { toErrorInfo } from './errors.js';
+import { copy } from './copy.js';
 
 export const PAGE_SIZE = 50;
 
@@ -139,6 +140,26 @@ export function stepActions(c) {
       if (step) set({ plan: await api.planUpdateStep({ step_id: step.id, action }) });
       ops.patch({ pendingAction: action });
       await ops.loadDetail();
+    }),
+    /**
+     * "Preferred folder…" of the keep rule: choose the folder in the OS folder dialog,
+     * then apply the rule. On cancel the rule in force stays, and the panel is drawn
+     * again so its list shows that rule instead of the entry that was clicked.
+     */
+    chooseKeepFolder: guard(async () => {
+      const rule = cur()?.detail?.opportunity?.params?.keep_rule;
+      const folder = await c.pickFolder(copy.dialogs.keepFolder, typeof rule === 'object' ? rule?.folder : null);
+      if (folder) await c.actions.applyKeepRule('preferred_folder', folder);
+      else if (cur()) set({ step: { ...cur() } });
+    }),
+    /**
+     * Move / Copy (CLN-ACT-05): choose the destination in the OS folder dialog, then set
+     * the action. A cancelled dialog leaves the action as it was.
+     * @param {'move'|'copy'} kind @param {string} [startDir] the destination in force, if any
+     */
+    chooseDestination: guard(async (kind, startDir) => {
+      const dest = await c.pickFolder(copy.dialogs.destination[kind], startDir);
+      if (dest) await c.actions.setStepAction(kind, dest);
     }),
     /** Archive format (plan_update_step when the opportunity is in the plan, else kept for "Add"). @param {string} oppId @param {string} format */
     setArchiveFormat: guard(async (oppId, format) => {

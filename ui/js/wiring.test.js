@@ -31,9 +31,7 @@ test('the back link returns to Overview', async () => {
 
 test('Scan sends scan_start; Pause, Resume and Stop send their commands', async () => {
   const env = await makeEnv({ scenario: 'empty', speed: 1 });
-  await env.actions.openBrowser();
-  await env.settle();
-  await env.actions.chooseFolder();
+  await env.actions.addLocation();
   await env.settle();
   env.clearCalls();
   env.$('[data-fk="scan"]').click();
@@ -58,20 +56,42 @@ test('Scan again starts a new scan from the results header', async () => {
   await env.actions.stopScan();
 });
 
-test('the folder browser lists places through fs_list_dir and adds the folder to the scope', async () => {
-  const env = await makeEnv({ scenario: 'empty' });
+test('Add a folder asks the OS folder dialog and adds the chosen folder to the scope', async () => {
+  const env = await makeEnv({ scenario: 'empty', dialog: { folder: 'D:\\Projects' } });
   await env.click(env.$('[data-fk="add-folder"]'));
-  assert.deepEqual(env.sent('fs_list_dir')[0].req, {});
-  assert.ok(env.$('[role="dialog"]'));
-  assert.ok(env.$$('.browser__place').length >= 5);
-  await env.click(env.$('[data-fk="dir-Documents"]'));
-  assert.equal(last(env, 'fs_list_dir').path, 'C:\\Users\\Michel\\Documents');
-  await env.click(env.$('[data-fk="browser-choose"]'));
-  assert.deepEqual(last(env, 'scope_add_root'), { path: 'C:\\Users\\Michel\\Documents' });
-  assert.equal(env.$('[role="dialog"]'), null);
+  assert.deepEqual(env.sent('dialog_pick_folder').map((c) => c.req), [{ title: 'Add a location to scan' }]);
+  assert.deepEqual(last(env, 'scope_add_root'), { path: 'D:\\Projects' });
+  assert.equal(env.$('[role="dialog"]'), null, 'no in-app dialog: the operating system shows its own');
   assert.equal(env.$$('.chip').length, 1);
   await env.click(env.$('.chip__x'));
-  assert.deepEqual(last(env, 'scope_remove_root'), { path: 'C:\\Users\\Michel\\Documents' });
+  assert.deepEqual(last(env, 'scope_remove_root'), { path: 'D:\\Projects' });
+});
+
+test('a cancelled folder dialog changes nothing and shows no error', async () => {
+  const env = await makeEnv({ scenario: 'empty', dialog: { folder: null } });
+  const before = env.state();
+  await env.click(env.$('[data-fk="add-folder"]'));
+  assert.equal(env.sent('dialog_pick_folder').length, 1);
+  assert.equal(env.sent('scope_add_root').length, 0);
+  assert.equal(env.state(), before, 'the store was not written at all');
+  assert.equal(env.$('.toast'), null);
+  assert.equal(env.$$('.chip').length, 0);
+  assert.equal(env.$('[data-fk="scan"]').disabled, true);
+});
+
+test('Add location in the results header uses the same dialog', async () => {
+  const env = await makeEnv({ dialog: { folder: 'D:\\Archive' } });
+  await env.click(env.$('[data-fk="add-location"]'));
+  assert.deepEqual(last(env, 'dialog_pick_folder'), { title: 'Add a location to scan' });
+  assert.deepEqual(last(env, 'scope_add_root'), { path: 'D:\\Archive' });
+});
+
+test('a dialog that cannot open (one is open already) is a toast, and nothing is added', async () => {
+  const env = await makeEnv({ scenario: 'empty' });
+  env.backend.failNext('dialog_pick_folder', { code: 'conflict', message: 'A file dialog is already open', hint: 'Choose or cancel in the open dialog first.' });
+  await env.click(env.$('[data-fk="add-folder"]'));
+  assert.match(env.$('.toast').textContent, /A file dialog is already open.*Choose or cancel in the open dialog first/);
+  assert.equal(env.sent('scope_add_root').length, 0);
 });
 
 test('tabs and sort send opportunities_list with the tab and sort', async () => {
@@ -312,27 +332,45 @@ test('action tiles change the plan step action; before adding, the choice travel
   assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: 'det:old_installers', action: { kind: 'quarantine', purge_after_days: 7 } });
 });
 
-test('Move opens the folder browser and sends the chosen destination', async () => {
-  const env = await makeEnv();
+test('Move asks the OS folder dialog and sends the chosen destination', async () => {
+  const env = await makeEnv({ dialog: { folder: 'D:\\Archive\\Installers' } });
   await env.actions.openStep('det:old_installers');
   await env.settle();
   await env.click(env.$('[data-fk="act-move"]'));
-  assert.equal(env.state().browser.mode, 'move');
-  await env.click(env.$('[data-fk="browser-choose"]'));
+  assert.deepEqual(last(env, 'dialog_pick_folder'), { title: 'Choose the folder to move the files to' });
+  assert.equal(env.$('[data-fk="act-move"]').getAttribute('aria-checked'), 'true');
+  assert.match(env.$('[data-fk="act-move"]').textContent, /D:\\Archive\\Installers/, 'the tile names the destination');
   await env.click(env.$('[data-fk="step-add"]'));
   const req = last(env, 'plan_add_step');
-  assert.equal(req.action.kind, 'move');
-  assert.equal(typeof req.action.dest, 'string');
-  assert.equal(req.action.keep_structure, true, 'CLN-ACT-05: folder structure kept by default');
+  assert.deepEqual(req.action, { kind: 'move', dest: 'D:\\Archive\\Installers', keep_structure: true }, 'CLN-ACT-05: folder structure kept by default');
+});
+
+test('a cancelled destination dialog leaves the action as it was', async () => {
+  const env = await makeEnv({ dialog: { folder: null } });
+  await env.actions.openStep('det:old_installers');
+  await env.settle();
+  const selected = () => env.$$('[role="radio"]').filter((t) => t.getAttribute('aria-checked') === 'true').map((t) => t.getAttribute('data-fk'));
+  const before = selected();
+  env.clearCalls();
+  await env.click(env.$('[data-fk="act-move"]'));
+  assert.equal(env.sent('dialog_pick_folder').length, 1);
+  assert.deepEqual(env.sent().map((c) => c.cmd), ['dialog_pick_folder'], 'nothing else was sent');
+  assert.deepEqual(selected(), before);
+  assert.equal(env.$('.toast'), null);
+  assert.equal(env.state().step.pendingAction, null);
 });
 
 test('Copy picks a destination, keeps the folder structure by default and can turn it off', async () => {
-  const env = await makeEnv();
+  const env = await makeEnv({ dialog: { folder: 'D:\\Backup' } });
   await env.actions.openStep('det:old_installers');
   await env.settle();
   await env.click(env.$('[data-fk="act-copy"]'));
-  assert.equal(env.state().browser.mode, 'copy');
-  await env.click(env.$('[data-fk="browser-choose"]'));
+  assert.deepEqual(last(env, 'dialog_pick_folder'), { title: 'Choose the folder to copy the files to' });
+  // Switching to Move opens the dialog in the destination already chosen.
+  env.backend.answerDialogs({ folder: null });
+  await env.click(env.$('[data-fk="act-move"]'));
+  assert.deepEqual(last(env, 'dialog_pick_folder'), { title: 'Choose the folder to move the files to', start_dir: 'D:\\Backup' });
+  assert.equal(env.$('[data-fk="act-copy"]').getAttribute('aria-checked'), 'true', 'cancelled: still Copy');
   const keep = env.$('[data-fk="keep-structure"]');
   assert.ok(keep, 'the option shows once a destination is chosen');
   assert.equal(keep.checked, true);
@@ -340,9 +378,7 @@ test('Copy picks a destination, keeps the folder structure by default and can tu
   await env.settle();
   await env.click(env.$('[data-fk="step-add"]'));
   const req = last(env, 'plan_add_step');
-  assert.equal(req.action.kind, 'copy');
-  assert.equal(typeof req.action.dest, 'string');
-  assert.equal(req.action.keep_structure, false);
+  assert.deepEqual(req.action, { kind: 'copy', dest: 'D:\\Backup', keep_structure: false });
 });
 
 test('CLN-ACT-06: duplicates offer hard links (confirmed in the dialog) and reflinks only where supported', async () => {

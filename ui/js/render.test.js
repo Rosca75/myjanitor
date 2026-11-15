@@ -19,9 +19,7 @@ test('empty state: scope picker and one primary Scan button', async () => {
 
 test('empty state with a folder enables Scan and lists the chip', async () => {
   const env = await makeEnv({ scenario: 'empty' });
-  await env.actions.openBrowser();
-  await env.settle();
-  await env.actions.chooseFolder();
+  await env.actions.addLocation();
   await env.settle();
   assert.equal(env.$$('.chip').length, 1);
   assert.equal(env.$('[data-fk="scan"]').disabled, false);
@@ -135,9 +133,7 @@ test('drive bars show free space before and after the plan', async () => {
 
 test('scanning: progress header, Pause and Stop, live cards fill in', async () => {
   const env = await makeEnv({ scenario: 'empty', speed: 1 });
-  await env.actions.openBrowser();
-  await env.settle();
-  await env.actions.chooseFolder();
+  await env.actions.addLocation();
   await env.actions.startScan();
   assert.ok(env.$('.scanhead'));
   assert.ok(env.$('[data-fk="scan-pause"]'));
@@ -155,9 +151,7 @@ test('scanning: progress header, Pause and Stop, live cards fill in', async () =
 
 test('scanning ends in results with live cards replaced by the real grid', async () => {
   const env = await makeEnv({ scenario: 'empty', speed: 0 });
-  await env.actions.openBrowser();
-  await env.settle();
-  await env.actions.chooseFolder();
+  await env.actions.addLocation();
   await env.actions.startScan();
   await env.settle();
   assert.ok(env.$('.hero'));

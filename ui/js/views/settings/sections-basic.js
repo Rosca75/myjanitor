@@ -6,7 +6,6 @@ import { badge } from '../../components/badge.js';
 import { formatBytes, formatCount, displayPath } from '../../format.js';
 import { sc } from './copy.js';
 import { advanced, removableList, row, rows, section, textInput, errorLine } from './ui.js';
-import { renderPicker } from './picker.js';
 
 /** @param {any} s @param {any} ctl */
 export function general(s, ctl) {
@@ -46,8 +45,8 @@ export function protectedPaths(s, ctl) {
       all.length > 6 && button({ label: showAll ? sc.less : sc.more, variant: 'link', size: 'sm', fk: 'builtin-more', onClick: () => ctl.toggleOpen('builtin') })),
     h('div', { class: 'kv' }, h('span', { class: 'kv__k' }, sc.protectedPaths.yours)),
     removableList(user, 'rm-protected', `${sc.remove} {}`, (v) => ctl.setProtected(user.filter((x) => x !== v)), sc.protectedPaths.none),
-    ctl.st.picker?.purpose === 'protected' ? renderPicker(ctl) : button({ label: sc.protectedPaths.addFolder, variant: 'secondary', size: 'sm', icon: 'plus', fk: 'add-protected', onClick: () => ctl.openPicker('protected') }),
-    errorLine(ctl, 'protected'), ctl.st.picker?.purpose === 'protected' && errorLine(ctl, 'picker'));
+    button({ label: sc.protectedPaths.addFolder, variant: 'secondary', size: 'sm', icon: 'plus', fk: 'add-protected', onClick: () => ctl.chooseFolder('protected') }),
+    errorLine(ctl, 'protected'));
 }
 
 /** @param {any} s @param {any} ctl */

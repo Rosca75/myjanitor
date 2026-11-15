@@ -52,16 +52,14 @@ test('hostile names in scope chips, card titles, plan steps, history and toast a
   assertNoInjectedMarkup(env.root);
 });
 
-test('hostile folder names in the folder browser and a hostile scan path are text only', async () => {
-  const env = await makeEnv({ scenario: 'empty' });
+test('a hostile folder name chosen in the folder dialog and a hostile scan path are text only', async () => {
+  const env = await makeEnv({ scenario: 'empty', dialog: { folder: `C:\\${HOSTILE}` } });
   env.backend.model.scope.roots = [];
-  await env.actions.openBrowser();
-  await env.settle();
-  const b = env.state().browser;
-  env.store.set({ browser: { ...b, entries: [{ name: HOSTILE, path: `C:\\${HOSTILE}`, is_dir: true, is_link: false, hidden: false }], path: `C:\\${HOSTILE}` } });
-  assert.ok(env.$('.browser__entry').textContent.includes(HOSTILE));
+  await env.click(env.$('[data-fk="add-folder"]'));
+  assert.deepEqual(env.state().scope.roots, [`C:\\${HOSTILE}`]);
+  assert.ok(env.$('.chip').textContent.includes(HOSTILE));
   assertNoInjectedMarkup(env.root);
-  env.store.set({ browser: null, scan: { state: 'scanning', generation: 1 }, scanProgress: { generation: 1, phase: 'walking', files: 1, dirs: 1, bytes: 1, done: 0, current: HOSTILE, elapsed_ms: 1 } });
+  env.store.set({ scan: { state: 'scanning', generation: 1 }, scanProgress: { generation: 1, phase: 'walking', files: 1, dirs: 1, bytes: 1, done: 0, current: HOSTILE, elapsed_ms: 1 } });
   assert.equal(env.$('.scanhead__path').textContent, HOSTILE);
   assertNoInjectedMarkup(env.root);
 });

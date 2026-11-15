@@ -232,7 +232,6 @@ fn session() -> (Fixture, Vec<(&'static str, &'static str, Value)>) {
             serde_json::to_value($e).unwrap()
         };
     }
-    let tree_root = f.tree.path().to_path_buf();
     let responses = vec![
         ("app_info", "AppInfo", v!(e.app_info().unwrap())),
         ("scope_get", "ScanScope", v!(e.scope_get().unwrap())),
@@ -280,12 +279,6 @@ fn session() -> (Fixture, Vec<(&'static str, &'static str, Value)>) {
             "breakdown",
             "Breakdown",
             v!(e.breakdown(BreakdownRequest { by: BreakdownBy::Extension, path: None }).unwrap()),
-        ),
-        (
-            "fs_list_dir",
-            "FsListDirResponse",
-            v!(e.fs_list_dir(FsListDirRequest { path: Some(tree_root), show_hidden: false, include_files: true })
-                .unwrap()),
         ),
     ];
     (f, responses)

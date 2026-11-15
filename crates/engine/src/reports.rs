@@ -1,5 +1,6 @@
 //! Reports and exports (SAF-04, SAF-12, CLN-ACT-11). Owner: W3-D (writers in
-//! `mj_actions::report`, W2-E). Exports never overwrite: `name (1).csv`.
+//! `mj_actions::report`, W2-E). Exports never overwrite (`name (1).csv`) unless the
+//! request says the user confirmed the replacement in the OS save dialog (`overwrite`).
 
 use std::io::Write;
 
@@ -11,6 +12,20 @@ use crate::Engine;
 
 fn export_result((path, bytes, rows): (std::path::PathBuf, u64, u64)) -> ExportResult {
     ExportResult { path, bytes, rows }
+}
+
+/// Write an export to `dest`: under a free name, or replacing the file when asked to.
+fn write_to(
+    dest: &std::path::Path,
+    overwrite: bool,
+    write: impl FnOnce(&mut dyn Write) -> Result<u64>,
+) -> Result<ExportResult> {
+    let r = if overwrite {
+        mj_actions::report::write_export_replacing(dest, write)
+    } else {
+        mj_actions::report::write_export(dest, write)
+    };
+    r.map(export_result)
 }
 
 /// Refuse export targets inside protected locations (the guard's rule for writes).
@@ -51,7 +66,7 @@ impl Engine {
                 let run_id = req.run_id.ok_or_else(|| Error::InvalidInput("a report needs a run id".into()))?;
                 let report = self.report_get(RunRequest { run_id })?;
                 let rows: u64 = report.sections.iter().map(|s| s.items.len() as u64).sum();
-                let r = mj_actions::report::write_export(&req.dest, |out: &mut dyn Write| {
+                write_to(&req.dest, req.overwrite, |out: &mut dyn Write| {
                     match req.format {
                         ExportFormat::Csv => mj_actions::report::report_csv(&report, out)?,
                         ExportFormat::Html => mj_actions::report::report_html(&report, out)?,
@@ -60,8 +75,7 @@ impl Engine {
                         }
                     }
                     Ok(rows)
-                })?;
-                Ok(export_result(r))
+                })
             }
             ReportExportKind::Audit => {
                 if req.format != ExportFormat::Csv {
@@ -75,11 +89,10 @@ impl Engine {
                     None => self.journal.all_entries(),
                 };
                 let rows = entries.len() as u64;
-                let r = mj_actions::report::write_export(&req.dest, |out: &mut dyn Write| {
+                write_to(&req.dest, req.overwrite, |out: &mut dyn Write| {
                     mj_actions::report::audit_csv(&entries, out)?;
                     Ok(rows)
-                })?;
-                Ok(export_result(r))
+                })
             }
         }
     }
@@ -118,7 +131,7 @@ impl Engine {
             (title, rows)
         };
         let n = rows.len() as u64;
-        let r = mj_actions::report::write_export(&req.dest, |out: &mut dyn Write| {
+        write_to(&req.dest, req.overwrite, |out: &mut dyn Write| {
             match req.format {
                 ExportFormat::Csv => mj_actions::report::candidates_csv(&rows, out)?,
                 ExportFormat::Html => mj_actions::report::candidates_html(&title, &rows, out)?,
@@ -127,7 +140,6 @@ impl Engine {
                 }
             }
             Ok(n)
-        })?;
-        Ok(export_result(r))
+        })
     }
 }

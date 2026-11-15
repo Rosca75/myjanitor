@@ -86,7 +86,7 @@ export function mountApp(root, store, actions, opts = {}) {
     focus.after(overlay, kind);
   };
   drawOverlay(store.get());
-  sub(drawOverlay, ['dialog', 'browser', 'report', 'ask', 'compare', 'reportUi']);
+  sub(drawOverlay, ['dialog', 'report', 'ask', 'compare', 'reportUi']);
 
   bind(toast, ['toast'], (s) => renderToast(s, actions));
 

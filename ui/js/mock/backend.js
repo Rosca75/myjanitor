@@ -7,12 +7,15 @@
  *    plan) or `results` (scanned, the four-step plan of the wireframe).
  *  - speed: multiplier for every simulated delay; 0 makes timers fire at once.
  *  - now: a clock function (ms) for deterministic tests.
- * The returned object adds `emit`, `whenIdle` and `model` for tests.
+ *  - dialog: what the stand-in for the native file dialogs answers (see
+ *    dialogs.js; `?dialog=cancel` or `?dialog=<folder>` in the URL).
+ * The returned object adds `emit`, `whenIdle`, `answerDialogs` and `model` for tests.
  */
 import { createModel } from './model.js';
 import { createSim } from './sim.js';
 import { createHandlers, fail } from './handlers.js';
 import { createExtras, applyRich } from './extras.js';
+import { createDialogs, dialogAnswersFromUrl } from './dialogs.js';
 
 /** @param {string} key */
 function fromLocation(key) {
@@ -23,7 +26,7 @@ function fromLocation(key) {
   }
 }
 
-/** @param {{ scenario?: string, speed?: number, now?: () => number }} [opts] */
+/** @param {{ scenario?: string, speed?: number, now?: () => number, platform?: string, disabled?: string[], dialog?: import('./dialogs.js').DialogAnswers }} [opts] */
 export function createMockBackend(opts = {}) {
   const platform = opts.platform ?? fromLocation('platform') ?? 'windows';
   /** Commands answered with not_implemented (tests and `?ni=disk_usage_tree,breakdown`). */
@@ -62,7 +65,8 @@ export function createMockBackend(opts = {}) {
   if (scenario === 'rich') applyRich(model);
   const sim = createSim(model, emit, later);
   const base = createHandlers(model, sim, emit);
-  const handlers = { ...base, ...createExtras(model, sim, emit, base) };
+  model.dialog = { ...(opts.dialog ?? dialogAnswersFromUrl(fromLocation('dialog'))) };
+  const handlers = { ...base, ...createExtras(model, sim, emit, base), ...createDialogs(model) };
 
   return {
     kind: 'mock',
@@ -85,6 +89,12 @@ export function createMockBackend(opts = {}) {
     failNext: (cmd, error) => { failures.set(cmd, error); },
     /** Test helper: answer `cmd` with not_implemented from now on. @param {string} cmd */
     disable: (cmd) => { disabled.add(cmd); },
+    /**
+     * Test helper: what the native-dialog stand-in answers from now on. `null` is a
+     * cancelled dialog, a string the chosen path, `undefined` the dialog's own proposal.
+     * @param {import('./dialogs.js').DialogAnswers} answers
+     */
+    answerDialogs: (answers) => { Object.assign(model.dialog, answers); },
     /** Test helper: number of live event listeners. */
     listenerCount: () => [...listeners.values()].reduce((a, set) => a + set.size, 0),
     /** Test helper: push an event to subscribers. @param {string} event @param {any} payload */

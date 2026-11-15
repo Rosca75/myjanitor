@@ -71,6 +71,15 @@ export function createController({ api, store }) {
     }
   };
 
+  /**
+   * Ask for a folder in the operating system's own folder dialog (docs/IPC.md 3.1).
+   * Resolves to the chosen path, or null when the user cancelled: callers then do
+   * nothing at all. Errors (a dialog is already open) reject like any command.
+   * @param {string} title @param {string | null} [startDir] folder the dialog opens in
+   * @returns {Promise<string | null>}
+   */
+  ctx.pickFolder = async (title, startDir) => (await api.dialogPickFolder({ title, ...(startDir ? { start_dir: startDir } : {}) })) ?? null;
+
   const a = ctx.actions;
   Object.assign(a, coreActions(ctx), stepActions(ctx), applyActions(ctx), miscActions(ctx), historyActions(ctx), reportActions(ctx), searchActions(ctx), diskActions(ctx), { notify: ctx.notify });
   return a;
@@ -79,7 +88,7 @@ export function createController({ api, store }) {
 /** Drop `progress` from a ScanStatus: it lives in `scanProgress`. @param {any} status */
 export const withoutProgress = (status) => { const { progress, ...rest } = status; void progress; return rest; };
 
-/** Start-up, navigation, scan, scope, folder browser, overview data and plan. @param {any} c */
+/** Start-up, navigation, scan, scope, overview data and plan. @param {any} c */
 function coreActions(c) {
   const { api, set, get, guard } = c;
   /** @template T @param {Promise<T>} p @param {any} fallback */
@@ -135,52 +144,12 @@ function coreActions(c) {
     // ---------------------------------------------------------------- scope
     removeRoot: guard(async (path) => set({ scope: await api.scopeRemoveRoot({ path }) })),
     /**
-     * Open the in-app folder browser. Modes: scope (add a location), move, keep
-     * (preferred folder of a keep rule) and export (choose where to save; also
-     * carries the file name and what to export).
-     * @param {{ mode?: 'scope'|'move'|'copy'|'keep'|'export', exportJob?: any, filename?: string }} [opts]
+     * "+ Add location": choose a folder in the operating system's folder dialog and
+     * add it to the scan scope. A cancelled dialog changes nothing.
      */
-    async openBrowser(opts = {}) {
-      const mode = opts.mode ?? 'scope';
-      const extra = { exportJob: opts.exportJob ?? null, filename: opts.filename ?? '' };
-      set({ browser: { mode, ...extra, path: '', parent: null, entries: [], places: [], loading: true } });
-      try {
-        const first = await api.fsListDir({});
-        set({ browser: { mode, ...extra, path: '', parent: null, entries: [], places: first.places, loading: false } });
-        const start = (mode === 'export' && first.places.find((p) => p.kind === 'documents')) || first.places[0];
-        if (start) await c.actions.browseTo(start.path);
-      } catch (e) {
-        c.fail(e);
-        set({ browser: null });
-      }
-    },
-    /** @param {string} path */
-    browseTo: guard(async (path) => {
-      const prev = get().browser;
-      set({ browser: { ...prev, loading: true } });
-      const r = await api.fsListDir({ path, show_hidden: false, include_files: false });
-      set({ browser: { ...prev, path: r.path, parent: r.parent ?? null, entries: r.entries, places: r.places, loading: false } });
-    }),
-    closeBrowser: () => set({ browser: null }),
-    /** "Choose this folder": add it to the scan scope. */
-    chooseFolder: guard(async () => {
-      const b = get().browser;
-      if (!b?.path) return;
-      if (b.mode === 'move' || b.mode === 'copy') {
-        set({ browser: null });
-        await c.actions.setStepAction(b.mode, b.path);
-        return;
-      }
-      if (b.mode === 'keep') {
-        set({ browser: null });
-        await c.actions.applyKeepRule('preferred_folder', b.path);
-        return;
-      }
-      if (b.mode === 'export') {
-        await c.actions.finishExport();
-        return;
-      }
-      set({ scope: await api.scopeAddRoot({ path: b.path }), browser: null });
+    addLocation: guard(async () => {
+      const path = await c.pickFolder(copy.dialogs.addLocation);
+      if (path) set({ scope: await api.scopeAddRoot({ path }) });
     }),
 
     // ----------------------------------------------------------------- scan

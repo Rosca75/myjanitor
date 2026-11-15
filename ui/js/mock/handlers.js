@@ -3,7 +3,7 @@
  * The command table of the mock backend. Every handler takes the request and
  * returns exactly the docs/IPC.md response type; failures throw ErrorInfo.
  */
-import { FS, GB } from './fixtures.js';
+import { GB } from './fixtures.js';
 import { buildCandidates } from './candidates.js';
 
 /** @param {string} code @param {string} message @param {string} [hint] */
@@ -137,14 +137,6 @@ export function createHandlers(m, sim, emit) {
       return m.scope;
     },
     scope_remove_root: (req) => { m.scope.roots = m.scope.roots.filter((r) => lc(r) !== lc(req.path)); return m.scope; },
-    fs_list_dir: (req) => {
-      if (!req.path) return { path: '', entries: [], places: FS.places };
-      const p = String(req.path);
-      const names = FS.dirs[p] ?? FS.dirs[p.replace(/[\\/]+$/, '')] ?? [];
-      const parent = p.length <= 3 ? undefined : p.slice(0, Math.max(p.lastIndexOf('\\'), 2) + (p.lastIndexOf('\\') === 2 ? 1 : 0));
-      const join = (n) => `${p.replace(/\\$/, '')}\\${n}`;
-      return { path: p, ...(parent ? { parent } : {}), entries: names.map((n) => ({ name: n, path: join(n), is_dir: true, is_link: false, hidden: false })), places: FS.places };
-    },
 
     scan_start: (req) => {
       if (m.scan.state === 'scanning' || m.scan.state === 'paused') throw fail('conflict', 'A scan is already running', 'Wait for it to finish or stop it.');

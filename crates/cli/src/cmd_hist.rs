@@ -131,6 +131,8 @@ pub fn report(a: &Parsed) -> Res {
                 kind: ReportExportKind::Report,
                 format: fmt,
                 dest,
+                // The CLI never overwrites: an existing file gets a ` (1)` sibling.
+                overwrite: false,
             })?;
             println!("Wrote {} rows to {} ({}).", r.rows, r.path.display(), bytes(r.bytes));
         }

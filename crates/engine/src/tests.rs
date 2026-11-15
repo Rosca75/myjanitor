@@ -34,7 +34,6 @@ fn start_up_commands_work_without_a_scan() {
     let s = e.settings_get().unwrap();
     assert_eq!(e.settings_set(SettingsSetRequest { settings: s.clone() }).unwrap(), s);
     assert!(e.protected_paths_get().unwrap().builtin.len() > 3);
-    assert!(e.fs_list_dir(FsListDirRequest::default()).unwrap().entries.is_empty());
 }
 
 #[test]
@@ -61,18 +60,17 @@ fn scan_runs_end_to_end_on_a_fixture_tree() {
     assert!(events.names().contains(&"scan://done"));
     let tree = e.disk_usage_tree(DiskUsageRequest { path: None, depth: 3, min_fraction: Some(0.0) }).unwrap();
     assert_eq!(tree.size, 105);
-    let listing = e
-        .fs_list_dir(FsListDirRequest { path: Some(t.path().to_path_buf()), show_hidden: false, include_files: true })
-        .unwrap();
-    assert_eq!(listing.entries.len(), 1);
 }
 
 #[test]
 fn every_command_is_unique_and_documented() {
-    let mut names: Vec<_> = COMMANDS.iter().map(|c| c.name).collect();
+    let commands: Vec<String> = COMMANDS.iter().map(|c| c.name.to_string()).collect();
+    let shell: Vec<String> = SHELL_COMMANDS.iter().map(|c| c.name.to_string()).collect();
+    let events: Vec<String> = EVENTS.iter().map(|e| e.name.to_string()).collect();
+    let mut names: Vec<&String> = commands.iter().chain(&shell).collect();
     names.sort();
     names.dedup();
-    assert_eq!(names.len(), COMMANDS.len());
+    assert_eq!(names.len(), COMMANDS.len() + SHELL_COMMANDS.len(), "a command name is used twice");
     let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/IPC.md")).expect("docs/IPC.md");
     let documented: Vec<String> = doc
         .lines()
@@ -80,14 +78,56 @@ fn every_command_is_unique_and_documented() {
         .filter_map(|l| l.split('`').next())
         .map(String::from)
         .collect();
-    let commands: Vec<String> = COMMANDS.iter().map(|c| c.name.to_string()).collect();
-    let events: Vec<String> = EVENTS.iter().map(|e| e.name.to_string()).collect();
-    let mut expected = commands.clone();
+    let mut expected = commands;
+    expected.extend(shell);
     expected.extend(events);
     assert_eq!(
         documented, expected,
-        "docs/IPC.md headings must list every command then every event, in registry order"
+        "docs/IPC.md headings must list every engine command, then every shell command, then every event, in registry order"
     );
+}
+
+/// The types a shell command names exist, and IPC.md documents each command with them.
+#[test]
+fn shell_commands_name_documented_types() {
+    let doc = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/IPC.md")).expect("docs/IPC.md");
+    for c in SHELL_COMMANDS {
+        let heading = format!("### `{}`", c.name);
+        let section = doc.split(&heading).nth(1).unwrap_or_else(|| panic!("IPC.md has no section for {}", c.name));
+        let section = section.split("\n### ").next().unwrap();
+        let signature = format!("`{}` \u{2192} `{}`", c.request, c.response);
+        assert!(section.contains(&signature), "{}: IPC.md must state {signature}", c.name);
+        assert!(
+            section.contains(&format!("```json {}\n", c.request)),
+            "{}: IPC.md must show a {} example (`ipc_examples_parse` then checks that it parses)",
+            c.name,
+            c.request
+        );
+        // `check` panics on a type name it does not know, so a typo in the table fails
+        // here. Every shell command answers with a path or `null`.
+        check(c.response, "null");
+        check(c.response, "\"C:\\\\Users\\\\Michel\\\\Pictures\"");
+    }
+}
+
+/// The dialog response is the bare path or `null`, with the lossless path codec.
+#[test]
+fn dialog_path_is_a_bare_path_or_null() {
+    use std::path::PathBuf;
+    assert_eq!(serde_json::to_string(&DialogPath(None)).unwrap(), "null");
+    let p = DialogPath(Some(PathBuf::from("/home/me/Pictures")));
+    assert_eq!(serde_json::to_string(&p).unwrap(), "\"/home/me/Pictures\"");
+    assert_eq!(serde_json::from_str::<DialogPath>("\"/home/me/Pictures\"").unwrap(), p);
+    assert_eq!(serde_json::from_str::<DialogPath>("null").unwrap(), DialogPath(None));
+    // A request with an unknown field is rejected like every other request.
+    assert!(serde_json::from_str::<DialogPickFolderRequest>("{\"path\":\"/x\"}").is_err());
+    assert!(serde_json::from_str::<DialogSaveFileRequest>("{\"dest\":\"/x\"}").is_err());
+    let req: DialogSaveFileRequest = serde_json::from_str(
+        "{\"file_name\":\"report.csv\",\"filters\":[{\"name\":\"CSV file\",\"extensions\":[\"csv\"]}]}",
+    )
+    .unwrap();
+    assert_eq!(req.filters[0].extensions, ["csv"]);
+    assert_eq!(req.start_dir, None);
 }
 
 /// Every ```json <Type> block in IPC.md must deserialize into that type.
@@ -124,8 +164,9 @@ fn check(ty: &str, body: &str) {
         ScanScope,
         ScopeSetRequest,
         ScopePathRequest,
-        FsListDirRequest,
-        FsListDirResponse,
+        DialogPickFolderRequest,
+        DialogSaveFileRequest,
+        DialogPath,
         ScanStartRequest,
         ScanStarted,
         ScanStatus,

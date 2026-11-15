@@ -15,7 +15,6 @@ mod apply;
 mod disk;
 mod engine;
 mod extract;
-mod fsbrowse;
 mod history;
 pub mod instance;
 mod jobs;

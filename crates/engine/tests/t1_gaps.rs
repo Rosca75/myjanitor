@@ -119,6 +119,7 @@ fn cln_act_11_results_and_reports_export_as_pdf() {
             selected_only: false,
             format: mj_core::ExportFormat::Pdf,
             dest: out.join("results.pdf"),
+            overwrite: false,
         })
         .unwrap();
     assert_eq!(r.rows, 2);
@@ -140,6 +141,7 @@ fn cln_act_11_results_and_reports_export_as_pdf() {
             kind: ReportExportKind::Report,
             format: mj_core::ExportFormat::Pdf,
             dest: out.join("report.pdf"),
+            overwrite: false,
         })
         .unwrap();
     let bytes = std::fs::read(&rep.path).unwrap();

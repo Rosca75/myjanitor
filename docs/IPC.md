@@ -5,15 +5,23 @@ Changes go through the orchestrator. This file is
 machine-checked:
 
 - every `### \`name\`` heading is a command or an event, in the order of
-  `mj_engine::api::COMMANDS` then `EVENTS` (test `every_command_is_unique_and_documented`
-  in `crates/engine/src/tests.rs`, and `ui/js/api.test.js`);
+  `mj_engine::api::COMMANDS`, then `SHELL_COMMANDS`, then `EVENTS` (test
+  `every_command_is_unique_and_documented` in `crates/engine/src/tests.rs`, and
+  `ui/js/api.test.js`);
 - every fenced block opened with three backticks followed by `json <TypeName>`
-  must deserialize into that Rust type (test `ipc_examples_parse`).
+  must deserialize into that Rust type (test `ipc_examples_parse`);
+- every shell command states its request and response types and shows a request
+  example (test `shell_commands_name_documented_types`).
 
 The same API is used by the Tauri shell (`src-tauri/src/commands.rs`, one thin
 wrapper per command), the CLI (`crates/cli`, calling `Engine` methods directly)
 and the mock backend (`ui/js/mock/backend.js`). The engine method for each
 command has the command's name: `Engine::plan_add_step(req)`.
+
+Two commands are **shell commands** (§3.1): they open the operating system's
+own file dialogs, need the application window, and are therefore implemented by
+the Tauri shell (`src-tauri/src/dialogs.rs`) instead of an `Engine` method. The
+CLI does not have them; the mock backend answers them with a stand-in (§7).
 
 ## 1. Conventions
 
@@ -66,13 +74,13 @@ command has the command's name: `Engine::plan_add_step(req)`.
 | Screen / state | Commands | Events |
 |---|---|---|
 | Start-up | `app_info`, `scope_get`, `scan_status`, `opportunities_list`, `plan_get`, `jobs_list`, `report_last`, `drives_list`, `tools_list` | all |
-| Empty state | `fs_list_dir`, `scope_add_root`, `scan_start` | |
+| Empty state | `dialog_pick_folder`, `scope_add_root`, `scan_start` | |
 | Scanning | `scan_pause`, `scan_resume`, `scan_stop`, `scan_status` | `scan://progress`, `scan://detector`, `scan://done` |
 | B1 Overview | `opportunities_list`, `drives_list`, `plan_add_step`, `plan_remove_step`, `plan_reorder`, `plan_dry_run`, `schedule_from_plan` | `opportunities://changed`, `plan://changed`, `plan://dry_run` |
-| B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `results_export` | |
+| B2 Step review | `step_detail`, `candidates_page`, `selection_set`, `selection_apply_keep_rule`, `selection_reset`, `step_params_set`, `candidate_preview`, `results_export`, `dialog_pick_folder` (move/copy destination, preferred folder), `dialog_save_file` | |
 | Confirmation dialog | `plan_confirmation_info`, `plan_apply` | |
 | Action running | `jobs_list`, `job_pause`, `job_resume`, `job_cancel`, `jobs_reorder` | `job://progress`, `job://state`, `job://done` |
-| Completed | `report_last`, `report_get`, `report_export`, `undo_last` | `history://changed` |
+| Completed | `report_last`, `report_get`, `report_export`, `dialog_save_file`, `undo_last` | `history://changed` |
 | History | `history_list`, `history_run_detail`, `undo_run`, `restore_entries`, `quarantine_info`, `quarantine_purge` | `history://changed` |
 | Custom search | `search_parse`, `search_suggest`, `search_run`, `presets_list`, `preset_save`, `preset_delete` | |
 | Settings drawer | `settings_get`, `settings_set`, `protected_paths_get`, `protected_paths_set`, `cache_info`, `cache_clear`, `schedules_list`, `schedule_save`, `schedule_delete`, `schedule_run_now`, `tools_refresh` | |
@@ -119,16 +127,6 @@ when the path is not an existing folder.
 
 ### `scope_remove_root`
 `ScopePathRequest` → `ScanScope`. Removes a chip (compared case-insensitively on Windows).
-
-### `fs_list_dir`
-`FsListDirRequest` → `FsListDirResponse`. The in-app folder browser used for
-"+ Add location", move/copy/backup destinations and export targets (D-104: no
-dialog plugin). Without `path` it returns only `places` (Home, Desktop,
-Documents, Downloads, Pictures, Videos, Music, drives / mount points). Read-only.
-
-```json FsListDirRequest
-{"path":"/home/me","show_hidden":false,"include_files":false}
-```
 
 ### `scan_start`
 `ScanStartRequest` → `ScanStarted`. *Spawns.* Optionally replaces the scope
@@ -447,7 +445,14 @@ report as CSV, HTML or PDF (`format: "pdf"`, CLN-ACT-11: a text-only, paginated
 table of path, size, action and status in the standard Helvetica font;
 characters it cannot show are replaced by `?` and the count is noted on the last
 page); `kind: "audit"` writes the audit CSV (SAF-12) of one run
-or, without `run_id`, of the whole journal. Never overwrites: `name (1).csv`.
+or, without `run_id`, of the whole journal. Never overwrites: an existing `dest`
+is kept and the export is written beside it as `name (1).csv` (`ExportResult.path`
+is the file actually written). The one exception is `overwrite: true`, which the
+GUI sends when `dest` came from `dialog_save_file`: the OS dialog has already
+asked the user before an existing file was chosen, so that file is replaced
+(written to a temporary sibling first and renamed over it when complete; a
+failed export leaves the old file untouched; a folder or a link at `dest` is
+never replaced). `overwrite` defaults to `false`; the CLI never sets it.
 Columns (CSV, UTF-8 with BOM): report — `step, path, status, bytes_before,
 bytes_after, saved, error`; audit — `time, run_id, entry_id, action, state,
 path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
@@ -459,10 +464,11 @@ path, retained_at, bytes_before, bytes_after, sha256, lossy, error`.
 ### `results_export`
 `ResultsExportRequest` → `ExportResult`. CLN-ACT-11: candidates of one or all
 opportunities, as CSV, HTML or PDF (path, size, opportunity, selected). Columns: `opportunity, path, size, size_after, saving, reason,
-badges, selected, group, modified`.
+badges, selected, group, modified`. `dest` and `overwrite` behave as in
+`report_export`.
 
 ```json ResultsExportRequest
-{"opportunity_id":"det:old_installers","selected_only":true,"format":"html","dest":"/home/me/Documents/installers.html"}
+{"opportunity_id":"det:old_installers","selected_only":true,"format":"html","dest":"/home/me/Documents/installers.html","overwrite":true}
 ```
 
 ### `settings_get`
@@ -546,6 +552,49 @@ time) or owner.
 {"by":"type"}
 ```
 
+## 3.1 Shell commands (native dialogs)
+
+Implemented by the Tauri shell, not by the engine (`mj_engine::api::SHELL_COMMANDS`).
+Each opens the operating system's own dialog (Windows: the Explorer
+`IFileOpenDialog` / `IFileSaveDialog`; Linux: the GTK file chooser, which uses the
+desktop portal when the app runs sandboxed), owned by the main window, and
+resolves when the user closes it. The response is the chosen path as a string,
+or `null` when the user cancelled: **a cancel is not an error**, and the UI must
+change nothing and show nothing. The dialog only chooses a path; nothing is
+created, written or added to the scope until the UI sends the matching engine
+command (`scope_add_root`, `plan_update_step`, `report_export`, ...), which
+applies its own checks.
+
+Only one dialog can be open: a second call while one is open fails with
+`conflict`. `title` and `start_dir` are optional; `start_dir` is a hint (a
+relative path is ignored, and so is a folder that no longer exists).
+
+### `dialog_pick_folder`
+`DialogPickFolderRequest` → `DialogPath`. The folder dialog, used for
+"+ Add location", move/copy destinations, the preferred folder of a keep rule
+and the folder settings (protected paths, backup folder, temporary folder).
+
+```json DialogPickFolderRequest
+{"title":"Add a location to scan","start_dir":"C:\\Users\\Michel"}
+```
+
+```json DialogPath
+"C:\\Users\\Michel\\Pictures"
+```
+
+### `dialog_save_file`
+`DialogSaveFileRequest` → `DialogPath`. The "Save as" dialog, used for the
+export targets (`report_export`, `results_export`). `file_name` is the
+suggested name (a name, not a path; one with a path separator or a character
+Windows does not allow is ignored), `filters` the file types offered; on
+Windows the first extension of the first filter is appended when the user types
+a name without one. The dialog asks before an existing file is chosen, which is
+why the UI may then send `overwrite: true` to the export command.
+
+```json DialogSaveFileRequest
+{"title":"Save the results","file_name":"myjanitor-results.csv","filters":[{"name":"CSV file","extensions":["csv"]}]}
+```
+
 ## 4. Events
 
 Subscribe with `api.on(name, cb)`; `cb` receives the payload.
@@ -600,12 +649,6 @@ paths; global exclusions from settings are added by the engine.
 
 ```json ScanScope
 {"roots":["/home/me"],"include":[],"exclude":["/home/me/VMs"],"options":{"include_hidden":true,"use_fast_index":true,"use_cache":true,"one_file_system":true,"max_depth":null,"threads":0,"collect_owner":false}}
-```
-
-#### FsListDirResponse
-
-```json FsListDirResponse
-{"path":"/home/me","parent":"/home","entries":[{"name":"Downloads","path":"/home/me/Downloads","is_dir":true,"is_link":false,"hidden":false}],"places":[{"label":"Home","path":"/home/me","kind":"home"},{"label":"Computer","path":"/","kind":"drive"}],"omitted":4}
 ```
 
 #### ScanStatus

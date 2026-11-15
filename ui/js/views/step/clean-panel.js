@@ -36,8 +36,8 @@ export function renderCleanPanel(s, actions) {
   const act = currentAction(s);
   const offered = opp.available_actions;
   const label = (kind) => actionLabel(kind, s.info);
-  // CLN-ACT-05: Move and Copy pick their destination in the in-app folder browser.
-  const tile = (kind) => radioTile({ title: label(kind).label, sub: TO_FOLDER.includes(kind) && act.kind === kind && act.dest ? act.dest : label(kind).help, selected: act.kind === kind, fk: `act-${kind}`, onSelect: () => (TO_FOLDER.includes(kind) ? actions.openBrowser({ mode: kind }) : actions.setStepAction(kind)) });
+  // CLN-ACT-05: Move and Copy pick their destination in the operating system's folder dialog.
+  const tile = (kind) => radioTile({ title: label(kind).label, sub: TO_FOLDER.includes(kind) && act.kind === kind && act.dest ? act.dest : label(kind).help, selected: act.kind === kind, fk: `act-${kind}`, onSelect: () => (TO_FOLDER.includes(kind) ? actions.chooseDestination(kind, act.dest) : actions.setStepAction(kind)) });
   const structure = TO_FOLDER.includes(act.kind) && act.dest && h('div', { class: 'setting' },
     h('label', { class: 'setting__text' }, h('span', { class: 'setting__label' }, copy.clean.keepStructure), h('span', { class: 'setting__help' }, copy.clean.keepStructureHelp)),
     toggle({ label: copy.clean.keepStructure, checked: act.keep_structure !== false, fk: 'keep-structure', onChange: (on) => actions.setStepAction(act.kind, act.dest, on) }));
@@ -58,7 +58,7 @@ export function renderCleanPanel(s, actions) {
         }))),
     dup && h('div', { class: 'setting' },
       h('label', { class: 'setting__text' }, h('span', { class: 'setting__label' }, copy.clean.keep), h('span', { class: 'setting__help' }, copy.clean.keepHelp)),
-      select({ label: copy.clean.keep, value: keepValue(opp.params.keep_rule), fk: 'keep-rule', options: [...Object.entries(copy.clean.keepRules).map(([value, label]) => ({ value, label })), { value: 'preferred_folder', label: copy.step2.keepFolder }], onChange: (v) => (v === 'preferred_folder' ? actions.openBrowser({ mode: 'keep' }) : actions.applyKeepRule(v)) })),
+      select({ label: copy.clean.keep, value: keepValue(opp.params.keep_rule), fk: 'keep-rule', options: [...Object.entries(copy.clean.keepRules).map(([value, label]) => ({ value, label })), { value: 'preferred_folder', label: copy.step2.keepFolder }], onChange: (v) => (v === 'preferred_folder' ? actions.chooseKeepFolder() : actions.applyKeepRule(v)) })),
     previewPane(s, actions),
     opp.category === 'optimise' && compareButton(s, actions),
     h('div', { class: 'estimate', role: 'status', 'aria-live': 'polite' }, h('span', { class: 'estimate__label' }, copy.step.thisStep), h('strong', { class: 'estimate__value', 'data-role': 'step-estimate' }, sum.size_after > 0 ? copy.step.estimateLine(formatBytes(sum.size_before), formatBytes(sum.size_after), formatBytes(sum.saving)) : copy.step.estimateRemove(formatBytes(sum.saving)))),

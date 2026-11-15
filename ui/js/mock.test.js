@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createMockBackend } from './mock/backend.js';
+import { dialogAnswersFromUrl } from './mock/dialogs.js';
 import { COMMANDS } from './api.js';
 import { formatBytes } from './format.js';
 
@@ -13,7 +14,7 @@ const ackOf = async (b, step_id) => ({ step_id, acknowledged: true, selection_di
 
 test('the mock answers every command of IPC.md or says not_implemented, never crashes', async () => {
   const b = mk();
-  const reqs = { scope_set: { scope: { roots: ['C:\\a'], include: [], exclude: [] } }, scope_add_root: { path: 'C:\\x' }, scope_remove_root: { path: 'C:\\x' }, fs_list_dir: {}, opportunities_list: {}, step_detail: { opportunity_id: 'opt:audio' }, candidates_page: { opportunity_id: 'opt:audio' }, selection_set: { opportunity_id: 'opt:audio', selected: true }, selection_apply_keep_rule: { opportunity_id: 'det:exact_duplicates', rule: { rule: 'newest' } }, selection_reset: { opportunity_id: 'opt:audio' }, step_params_set: { opportunity_id: 'opt:audio' }, candidate_preview: { candidate_id: 1041 }, search_parse: { query: 'a' }, search_suggest: { query: 'ex', cursor: 2 }, plan_confirmation_info: { step_id: 12 }, history_run_detail: { run_id: 1 }, settings_set: { settings: {} }, protected_paths_set: { user: [] } };
+  const reqs = { scope_set: { scope: { roots: ['C:\\a'], include: [], exclude: [] } }, scope_add_root: { path: 'C:\\x' }, scope_remove_root: { path: 'C:\\x' }, opportunities_list: {}, step_detail: { opportunity_id: 'opt:audio' }, candidates_page: { opportunity_id: 'opt:audio' }, selection_set: { opportunity_id: 'opt:audio', selected: true }, selection_apply_keep_rule: { opportunity_id: 'det:exact_duplicates', rule: { rule: 'newest' } }, selection_reset: { opportunity_id: 'opt:audio' }, step_params_set: { opportunity_id: 'opt:audio' }, candidate_preview: { candidate_id: 1041 }, search_parse: { query: 'a' }, search_suggest: { query: 'ex', cursor: 2 }, plan_confirmation_info: { step_id: 12 }, history_run_detail: { run_id: 1 }, settings_set: { settings: {} }, protected_paths_set: { user: [] } };
   for (const cmd of COMMANDS) {
     if (['scan_start', 'plan_apply', 'plan_dry_run', 'undo_last', 'job_pause', 'job_resume', 'job_cancel', 'jobs_reorder', 'undo_run', 'report_get', 'schedule_from_plan', 'search_run', 'plan_add_step', 'plan_update_step', 'plan_remove_step', 'plan_reorder', 'history_run_detail', 'plan_confirmation_info', 'report_export'].includes(cmd)) continue;
     try {
@@ -198,13 +199,45 @@ test('plan_confirmation_info matches the dialog copy of the wireframe', async ()
   assert.equal(info.permanent, false);
 });
 
-test('fs_list_dir without a path returns places; with a path, its folders', async () => {
+test('native dialogs have a deterministic stand-in: the proposal, a fixed path, or a cancel', async () => {
+  // By default the stand-in accepts what the dialog proposes.
   const b = mk('empty');
-  const places = await b.call('fs_list_dir', {});
-  assert.ok(places.places.length >= 5);
-  const home = await b.call('fs_list_dir', { path: 'C:\\Users\\Michel' });
-  assert.ok(home.entries.some((e) => e.name === 'Documents' && e.is_dir));
-  assert.equal(home.parent, 'C:\\Users');
+  assert.equal(await b.call('dialog_pick_folder', {}), 'C:\\Users\\Michel\\Documents');
+  assert.equal(await b.call('dialog_pick_folder', { title: 'T', start_dir: 'D:\\Projects' }), 'D:\\Projects');
+  assert.equal(await b.call('dialog_save_file', { file_name: 'a.csv' }), 'C:\\Users\\Michel\\Documents\\a.csv');
+  assert.equal(await b.call('dialog_save_file', { start_dir: 'D:\\', file_name: 'a.csv', filters: [{ name: 'CSV file', extensions: ['csv'] }] }), 'D:\\a.csv');
+  const linux = createMockBackend({ scenario: 'empty', speed: 0, platform: 'linux' });
+  assert.equal(await linux.call('dialog_pick_folder', {}), '/home/michel/Documents');
+  assert.equal(await linux.call('dialog_save_file', { file_name: 'a.csv' }), '/home/michel/Documents/a.csv');
+  // A fixed answer, then a cancel (null, not an error), then the proposal again.
+  b.answerDialogs({ folder: 'E:\\Photos', file: 'E:\\out.html' });
+  assert.equal(await b.call('dialog_pick_folder', { start_dir: 'D:\\Projects' }), 'E:\\Photos');
+  assert.equal(await b.call('dialog_save_file', { file_name: 'a.csv' }), 'E:\\out.html');
+  b.answerDialogs({ folder: null, file: null });
+  assert.equal(await b.call('dialog_pick_folder', {}), null);
+  assert.equal(await b.call('dialog_save_file', {}), null);
+  b.answerDialogs({ folder: undefined, file: undefined });
+  assert.equal(await b.call('dialog_pick_folder', {}), 'C:\\Users\\Michel\\Documents');
+  // Configured at creation (tests) ...
+  const cancelled = createMockBackend({ scenario: 'empty', speed: 0, dialog: { folder: null } });
+  assert.equal(await cancelled.call('dialog_pick_folder', {}), null);
+  assert.equal(await cancelled.call('dialog_save_file', { file_name: 'a.csv' }), 'C:\\Users\\Michel\\Documents\\a.csv');
+  // ... or from the page URL (browser dev mode).
+  assert.deepEqual(dialogAnswersFromUrl(null), {});
+  assert.deepEqual(dialogAnswersFromUrl('cancel'), { folder: null, file: null });
+  assert.deepEqual(dialogAnswersFromUrl('D:\\Projects'), { folder: 'D:\\Projects' });
+  // Requests are checked like the shell checks them: unknown fields are rejected.
+  await assert.rejects(b.call('dialog_pick_folder', { path: 'C:\\x' }), (e) => e.code === 'invalid_input' && /path/.test(e.message));
+  await assert.rejects(b.call('dialog_save_file', { dest: 'C:\\x' }), (e) => e.code === 'invalid_input');
+  await assert.rejects(b.call('dialog_save_file', { filters: [{ name: 'CSV' }] }), (e) => e.code === 'invalid_input');
+});
+
+test('exports never overwrite, except when the save dialog confirmed the replacement', async () => {
+  const b = mk();
+  const dest = 'C:\\Users\\Michel\\Documents\\results.csv';
+  assert.equal((await b.call('results_export', { format: 'csv', dest })).path, dest);
+  assert.equal((await b.call('results_export', { format: 'csv', dest })).path, 'C:\\Users\\Michel\\Documents\\results (1).csv');
+  assert.equal((await b.call('results_export', { format: 'csv', dest, overwrite: true })).path, dest);
 });
 
 test('scope_add_root collapses nested roots and rejects relative paths', async () => {

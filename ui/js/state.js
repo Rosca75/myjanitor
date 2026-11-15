@@ -110,8 +110,6 @@ export function initialState() {
     queueOpen: false,
     /** Step review. */
     step: null,
-    /** Folder browser modal, or null. */
-    browser: null,
     /** Confirmation dialog sequence, or null. */
     dialog: null,
     /** Custom search state (Clean view). */

@@ -128,23 +128,3 @@ export const SETTINGS = {
   integration: { context_menu: false, fs_compression_watcher: false, watched_folders: [] },
   type_groups: { installers: ['msi', 'exe', 'iso'] },
 };
-
-/** Folder tree for the in-app browser (Windows-style paths). */
-export const FS = {
-  places: [
-    { label: 'Home', path: 'C:\\Users\\Michel', kind: 'home' },
-    { label: 'Desktop', path: 'C:\\Users\\Michel\\Desktop', kind: 'desktop' },
-    { label: 'Documents', path: 'C:\\Users\\Michel\\Documents', kind: 'documents' },
-    { label: 'Downloads', path: 'C:\\Users\\Michel\\Downloads', kind: 'downloads' },
-    { label: 'Recordings', path: 'C:\\Users\\Michel\\Recordings', kind: 'videos' },
-    { label: 'System (C:)', path: 'C:\\', kind: 'drive' },
-    { label: 'Projects (D:)', path: 'D:\\', kind: 'drive' },
-  ],
-  dirs: {
-    'C:\\': ['Users', 'Program Files', 'Windows'],
-    'C:\\Users': ['Michel'],
-    'C:\\Users\\Michel': ['Desktop', 'Documents', 'Downloads', 'Pictures', 'Recordings', 'Projects'],
-    'D:\\': ['Projects', 'Archive', 'Clients'],
-    'D:\\Projects': ['app', 'website', 'notes'],
-  },
-};
