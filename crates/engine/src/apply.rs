@@ -225,7 +225,8 @@ impl Engine {
         if plan.steps.is_empty() {
             return Err(Error::InvalidInput("the plan is empty".into()));
         }
-        let works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
+        let mut works: Vec<StepWork> = plan.steps.iter().map(|s| self.build_step(s, None)).collect::<Result<_>>()?;
+        skip_kept_copies(works.iter_mut());
         let total: u64 = works.iter().map(|w| w.items.len() as u64).sum();
         let job = self.new_job(JobKind::DryRun, None, None, "Dry run", total, plan.estimate.bytes_before);
         let plan_id = plan.id;
@@ -444,6 +445,8 @@ impl Engine {
             }
             works.push((self.build_step(s, conf)?, confirm));
         }
+        // G-03: the copy one step keeps is kept by every other step of the run too.
+        skip_kept_copies(works.iter_mut().map(|(w, _)| w));
         let now = Timestamp::now();
         let run_id = self.journal.next_run_id(now);
         let titles: Vec<String> = plan.steps.iter().map(|s| s.title.clone()).collect();
@@ -538,6 +541,66 @@ impl Engine {
         let _ = self.plan_changed(plan);
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
         done
+    }
+}
+
+/// True when `action`, run on a kept copy (or a folder holding one), could leave no copy of
+/// its group where the user can reach it: removals, moves, archives that take their
+/// sources away, and optimisations or archives that delete the originals (G-03).
+fn takes_copy_away(action: &Action) -> bool {
+    match action {
+        Action::Trash | Action::Quarantine { .. } | Action::PermanentDelete | Action::Move { .. } => true,
+        Action::Archive { keep_sources, originals, .. } => !keep_sources || *originals == OriginalsPolicy::Delete,
+        Action::Optimise { originals, .. } => *originals == OriginalsPolicy::Delete,
+        _ => false,
+    }
+}
+
+/// G-03: "one copy is always kept" across the whole run. Every copy a step keeps (the
+/// survivor of a removed duplicate, the source of a link) is collected over every step;
+/// any item of any step that is such a copy, or a folder holding one, and whose action
+/// would take it away, is dropped from its step and reported, whatever the step order.
+pub(crate) fn skip_kept_copies<'a>(works: impl Iterator<Item = &'a mut StepWork>) {
+    use mj_core::pathutil::path_key;
+    let mut works: Vec<&mut StepWork> = works.collect();
+    // The key of every kept copy and of each of its ancestors: an item is refused when its
+    // own key is in the set (it is a kept copy, or holds one).
+    let mut held: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for w in works.iter() {
+        for i in &w.items {
+            for k in i.keep.as_ref().map(|k| &k.path).into_iter().chain(i.link_source.as_ref()) {
+                let mut cur = Some(k.as_path());
+                while let Some(p) = cur {
+                    if !held.insert(path_key(p)) {
+                        break;
+                    }
+                    cur = p.parent();
+                }
+            }
+        }
+    }
+    if held.is_empty() {
+        return;
+    }
+    for w in works.iter_mut() {
+        let mut skipped = 0u64;
+        let mut items = Vec::with_capacity(w.items.len());
+        let mut sizes = Vec::with_capacity(w.sizes.len());
+        for (item, size) in w.items.drain(..).zip(w.sizes.drain(..)) {
+            if takes_copy_away(&item.action) && held.contains(&path_key(&item.path)) {
+                skipped += 1;
+            } else {
+                items.push(item);
+                sizes.push(size);
+            }
+        }
+        w.items = items;
+        w.sizes = sizes;
+        if skipped > 0 {
+            w.warnings.push(format!(
+                "{skipped} item(s) skipped: they are, or hold, the copy another step keeps, so one copy is always kept"
+            ));
+        }
     }
 }
 
