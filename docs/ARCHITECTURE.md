@@ -36,7 +36,7 @@ Two front ends share one engine:
 | `mj-platform` | `crates/platform` | core | `ScanPlatform` / `ActionPlatform` traits, `NativePlatform`, hand-written FFI |
 | `mj-formats` | `crates/formats` | core, miniz_oxide | ZIP, XML, OOXML, PDF, PNG, JPEG, EXIF, CFB, media tags, CRC-32, content sniffing |
 | `mj-scan` | `crates/scan` | core, platform | Walker, index building, scan cache |
-| `mj-dupes` | `crates/dupes` | core, platform, formats | Exact duplicates, similar images, version chains, derived files, attachment copies, duplicate fonts |
+| `mj-dupes` | `crates/dupes` | core, platform, formats, miniz_oxide, zune-jpeg | Exact duplicates, similar images, version chains, derived files, attachment copies, duplicate fonts; bounded JPEG/PNG thumbnails for the review (`decode::thumb`) |
 | `mj-filters` | `crates/filters` | core, formats, regex | Rule evaluation, quick-query parser, presets, type groups, content search |
 | `mj-detect` | `crates/detect` | core, platform, formats | Simple detectors |
 | `mj-actions` | `crates/actions` | core, platform, formats, serde_json | Action engine, guard, journal, undo, quarantine, safety inspection, keep-rule selection, report writers |
@@ -101,7 +101,13 @@ ScanScope ─► mj_scan::scan ─► FileIndex ─┬─► Detector::run ─�
    candidate and group ids, adds path badges (protected, synced, online-only,
    encrypted attribute) from `mj_actions::SafetyInspector`, applies the
    auto-uncheck rule (`Badges::AUTO_UNCHECK`), and computes the card numbers
-   (`opportunities::recompute`). Default sort: biggest saving first.
+   (`opportunities::recompute`). Default sort: biggest saving first. The step
+   table (`candidates_page`) is ordered, filtered and paged in the engine, flat or
+   with duplicate groups kept together (`review_order.rs`, W6-A: groups ordered by
+   an aggregate of the column, whole groups filtered, pages packed by groups, the
+   order cached per request shape and checked against a fingerprint). Row
+   thumbnails and the preview image come from `thumbs.rs` (bounded decode through
+   `mj_dupes::decode::thumb`, byte-capped LRU, never reading online-only files).
 5. **Plan**: steps reference opportunities; a step carries the action, the
    parameters, an estimate and its `SafetyClass`. The checklist is computed on
    every change.

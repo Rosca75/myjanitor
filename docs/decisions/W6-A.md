@@ -145,3 +145,127 @@ capability, which allows listening to `tauri://drag-drop`, are unchanged). Check
 baseline (66375fb): the UI has no drop handler, so dropping a folder on the window does
 nothing today, before and after this change. Adding one (drop a folder to add it to the
 scope) is a feature of its own and is left as an open item rather than slipped in here.
+
+# W6-A (second task): duplicate review with thumbnails and groups kept together
+
+Owner requirements: (a) "For duplicates, thumbnails should be displayed to the user to help
+him validating which one to remove"; (b) "For duplicates, when filtering on size, you should
+be able to keep the notion of duplicate groups (filter on the biggest file of the group). We
+need to be able to recover the group view somehow." Decided without the owner, by what a
+file cleaner people trust with their real files needs, Windows first.
+
+## D-6A9 Groups are kept together by the engine, not by the UI
+
+- **Choice:** `candidates_page` takes `keep_groups` (and a new `min_size`). The order, the
+  filters and the paging are computed in `crates/engine/src/review_order.rs` over all
+  candidates, not in the UI over one page: a UI-side regrouping of 50 rows would show
+  groups cut by the page edge and a size order that is wrong across pages.
+- **Mode:** on by default in the UI for every step with groups (the response's `has_groups`),
+  shown as a visible "Keep groups together" checkbox next to the filters. Off gives the flat
+  list exactly as before; on again restores the group view. The flag lives in the step state:
+  it survives paging, sorting, filtering and selection changes and resets when another step
+  is opened (`freshStep`). The engine default stays `false` so the CLI and older callers see
+  no change.
+- **Rejected:** a separate "group view" tab (two lists to keep in sync, and the owner asked to
+  keep the groups *while* filtering on size, not to switch views).
+
+## D-6A10 Group aggregates per column
+
+The owner fixed size; the others are chosen so the order reads the way the column does:
+
+| Column | Group key | Why |
+|---|---|---|
+| Size | largest member | owner's rule; equal to the file size for exact duplicates |
+| After / saving | sum of member savings | what the group can free, the reason to review it first |
+| Name, Folder (path) | the group's lead row: kept copy, else first path | the first row shown under the header is the one the order is read from |
+| Modified | most recently modified member | "groups touched recently" first or last |
+| Group | group id | unchanged |
+
+Ties fall back to the lead path, then the group id (a total order: pages are stable).
+`descending` reverses the group order only; inside a group the kept copy comes first, then
+the column's natural order (biggest first for size and saving), then the path. Rows without a
+group are single-row blocks ordered by the same keys and get no header.
+
+## D-6A11 Filters keep or drop whole groups
+
+With groups kept together a group is shown, all of its members, when any member matches the
+path filter and its largest member is at least `min_size`. "Any member" for the path filter
+keeps the owner's intent (find a group by one of its copies, then see every copy before
+choosing). `min_size` is a new "At least" list (Any, 1 MB, 10 MB, 100 MB, 1 GB) on every
+results table; in flat mode it applies per row. The table had no size filter before, and a
+list of round sizes is enough for review (a free number field invites typos in bytes).
+
+## D-6A12 Pages hold whole groups
+
+Pages are packed by groups with the page size (50) as a row budget: a group that does not fit
+starts the next page, so a page holds at most 50 rows and never splits a group that fits on
+one page; a group of more than 50 rows is split (unavoidable), and the rows after it share
+its last page. The engine returns `offset` (the start of the page holding the requested
+offset), `next_offset` / `prev_offset`, `page` and `pages`; the UI pages with them instead of
+`offset ± 50`. `total` stays the number of rows matching. The two existing UI tests that
+encoded 50-row pages on the duplicates step were changed on purpose to expect group-aligned
+pages (48 rows on the first page of the mock) and to check the flat 50-row paging with the
+mode off.
+
+## D-6A13 Speed at 1M candidates
+
+The order of one request shape (opportunity, scan generation, sub-group, filters, sort,
+direction, mode, page size in grouped mode) is cached in one slot and validated by an O(n)
+fingerprint of the candidates (id, size, saving, group, kept-copy flag, mtime, path length),
+so a keep rule, a re-analysis or an apply never serves a stale order, and paging through a
+step sorts once. Measured on 1M synthetic candidates in groups of two, debug build: grouped
+order 1.9 s versus 1.3 s flat (computed once per request shape), fingerprint 40 ms per page
+(`review_order::tests::million_rows_order_once`, ignored by default). The flat mode uses the
+same cache, which also speeds up its paging.
+
+## D-6A14 Thumbnails are made in Rust with the decoders the project has
+
+- **Decoders:** JPEG through `zune-jpeg` (already a dependency of `mj-dupes`, now asked for
+  RGB), PNG through the in-house decoder of `mj-dupes`, refactored to walk rows for both the
+  fingerprint and the thumbnail (`decode/thumb.rs`). Box downscale (alpha premultiplied),
+  EXIF orientation applied (`mj_formats::exif`), encoded as PNG with the in-house filters and
+  `miniz_oxide`. No image crate: the policy is in-house first, and two decoders plus a
+  40-line scaler cover the files people photograph.
+- **Fast path:** a row thumbnail of a JPEG first reads a 256 KiB prefix and uses the EXIF
+  embedded thumbnail when it has the image's aspect ratio (within 3 %; a letterboxed one is
+  refused) and is large enough; otherwise the whole file is read and decoded.
+- **GIF, WebP, BMP:** not decoded in Rust. The original is sent when the file is at most
+  256 KiB (row) or 1 MiB (preview pane) and its header gives a sane size; otherwise the type
+  icon. The webview decodes these formats every day for web pages; a small cap keeps the
+  data URL small (a 256 KiB file is about 350 KB of base64 for one row). Writing three more
+  decoders for formats that are rare among duplicates is not worth it. An animated GIF
+  animates in its cell; accepted.
+- **Sizes:** row thumbnails are at most 128 px on the long side (shown at 48 px, 96 px on
+  hover or focus: sharp on a 2x screen); the preview pane image is at most 512 px. This makes
+  `candidate_preview` a real bounded thumbnail and fixes review finding IPC-9 (it used to
+  send whole files up to 4 MiB).
+- **Not images:** video, PDF and Office files get a type icon. Follow-up: OS shell thumbnails
+  on Windows (`IShellItemImageFactory`), which would cover them without new decoders.
+
+## D-6A15 Thumbnail limits and efficiency
+
+- Never read an online-only file: the scan badge, then a fresh attribute check
+  (`Platform::metadata`) right before reading, since a file can be dehydrated after the scan.
+- Input at most 64 MiB, decoded pixels at most 48 MP (checked from the header before any
+  pixel is decoded), images over 12 MP decoded one at a time (a gate), every decode under
+  `catch_unwind`, every failure a reason code (`not_image`, `online_only`, `too_large`,
+  `unreadable`, `undecodable`, `unknown`), never an error for the batch.
+- `candidate_thumbnails` (at most 100 ids) runs on the blocking pool like every command (the
+  Tauri wrapper's `spawn_blocking`): neither the UI thread nor the async runtime waits on it.
+  The results lock is released before any file is read.
+- One thumbnail per exact-duplicate group: the engine computes it once per batch and, when
+  the asked row is online-only or unreadable, takes it from another member on this disk; the
+  UI asks for one row per exact group and paints every row of the group with it. Similar-
+  image groups get one thumbnail per row (their members differ, which is the point).
+- Engine cache: an LRU of 32 MiB of encoded images (failures cached too) keyed by path, size,
+  modification time and requested size. UI cache: 1000 entries keyed by path, size and
+  modification time.
+- UI loading: after the rows are drawn, batches of 10 ids, two calls in flight; a newer page
+  makes older answers stale (dropped); each answer patches its own cells
+  (`[data-thumb]`), never the table. Only data URLs of the five image types reach `src`.
+
+## D-6A16 Mock parity
+
+`ui/js/mock/review-order.js` mirrors the engine order (same aggregates, filters, packing and
+group totals; a parity test runs the engine's unit-test fixture through it). The mock's
+`candidate_thumbnails` answers a generated PNG for image paths and `not_image` otherwise.
