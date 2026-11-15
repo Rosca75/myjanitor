@@ -233,10 +233,32 @@ impl Guard {
     /// for. `owned_tree` is set for regenerable artefact folders a detector owns as a whole
     /// (`node_modules`, build output, caches): version-control metadata inside them may
     /// go with them; every other rule still applies.
+    ///
+    /// G-01: every comparison is made in the item's own spelling **and** in its canonical
+    /// one (a symlinked scan root, a junction, a mapped or `subst` drive), so a protected
+    /// entry registered under the real location is seen below a folder reached through a
+    /// link, and the reverse.
     pub fn check_tree(&self, path: &Path, platform: &dyn ScanPlatform, owned_tree: bool) -> Result<TreeWalk> {
-        if self.protected.has_protected_below(path) {
+        let canon = crate::protected::canonical_spelling(path);
+        if self.protected.has_protected_below(path)
+            || canon.as_deref().is_some_and(|c| self.protected.has_protected_below(c))
+        {
             return Err(Error::Protected(path.to_path_buf()));
         }
+        let protected_entry = |p: &Path| {
+            let hit = |q: &Path| {
+                if owned_tree {
+                    self.protected.is_protected_in_owned_tree(q)
+                } else {
+                    self.protected.is_protected(q)
+                }
+            };
+            hit(p)
+                || canon
+                    .as_deref()
+                    .and_then(|c| p.strip_prefix(path).ok().map(|rel| c.join(rel)))
+                    .is_some_and(|q| hit(&q))
+        };
         let top = platform.metadata(path)?;
         let volume = top.file_id.map(|f| f.volume);
         let mut walk = TreeWalk { newest_mtime: top.modified.unwrap_or_default(), ..TreeWalk::default() };
@@ -247,12 +269,7 @@ impl Guard {
             }
             for item in platform.read_dir(&dir)? {
                 let md = platform.metadata(&item.path)?;
-                let hit = if owned_tree {
-                    self.protected.is_protected_in_owned_tree(&item.path)
-                } else {
-                    self.protected.is_protected(&item.path)
-                };
-                if hit {
+                if protected_entry(&item.path) {
                     return Err(Error::Protected(item.path.clone()));
                 }
                 walk.entries += 1;

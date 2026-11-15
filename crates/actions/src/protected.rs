@@ -172,6 +172,16 @@ pub fn builtin_credential_patterns() -> Vec<String> {
     v
 }
 
+/// The canonical spelling of an existing absolute path when it differs from the given one
+/// (G-01). `None` for a path that does not exist (yet) or already is canonical.
+pub fn canonical_spelling(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let c = std::fs::canonicalize(path).ok()?;
+    (path_key(&c) != path_key(path)).then_some(c)
+}
+
 fn is_glob(s: &str) -> bool {
     s.contains(['*', '?', '['])
 }
@@ -206,10 +216,31 @@ fn prefix_key(root: &Path) -> String {
 }
 
 impl ProtectedPaths {
-    /// Recompute the cached keys after the lists changed.
+    /// Recompute the cached keys after the lists changed. G-01: every folder and exact
+    /// entry that exists is keyed in its given spelling **and** in its canonical one (links,
+    /// junctions, mapped and `subst` drives resolved; short names expanded on Windows), so a
+    /// path reached through another spelling of the same location is still recognised.
     fn rekey(mut self) -> Self {
-        self.folder_prefixes = self.folders.iter().chain(self.user.iter()).map(|f| prefix_key(f)).collect();
-        self.exact_keys = self.exact.iter().map(|e| path_key(e)).collect();
+        let mut prefixes = Vec::new();
+        for f in self.folders.iter().chain(self.user.iter()) {
+            prefixes.push(prefix_key(f));
+            if let Some(c) = canonical_spelling(f) {
+                prefixes.push(prefix_key(&c));
+            }
+        }
+        let mut exact = Vec::new();
+        for e in &self.exact {
+            exact.push(path_key(e));
+            if let Some(c) = canonical_spelling(e) {
+                exact.push(path_key(&c));
+            }
+        }
+        prefixes.sort();
+        prefixes.dedup();
+        exact.sort();
+        exact.dedup();
+        self.folder_prefixes = prefixes;
+        self.exact_keys = exact;
         self
     }
 
