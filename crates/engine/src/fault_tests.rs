@@ -192,7 +192,10 @@ fn a_panicking_detector_becomes_a_disabled_card_and_the_scan_survives() {
     match &card.availability {
         Availability::Disabled { reason } => {
             // XC-3: the card says which analysis failed and why.
-            assert!(reason.contains("failed") && reason.contains("det:temp_files") && reason.contains("detector bug"), "{reason}");
+            assert!(
+                reason.contains("failed") && reason.contains("det:temp_files") && reason.contains("detector bug"),
+                "{reason}"
+            );
         }
         a => panic!("{a:?}"),
     }

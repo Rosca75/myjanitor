@@ -106,7 +106,11 @@ pub fn init(data_dir: &Path) {
             let place = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "?".into());
             log(
                 "PANIC",
-                &format!("thread '{}' at {place}: {}", thread.name().unwrap_or("<unnamed>"), panic_text(info.payload())),
+                &format!(
+                    "thread '{}' at {place}: {}",
+                    thread.name().unwrap_or("<unnamed>"),
+                    panic_text(info.payload())
+                ),
             );
             previous(info);
         }));

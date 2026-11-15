@@ -278,7 +278,8 @@ fn finish_run(ctx: &Ctx, run: Option<u64>, jobs: &[Job]) -> Res {
         }
     }
     if !ctx.json {
-        let hint = if run.is_some() { format!(" Undo with `myjanitor-cli undo --run {run_id}`.") } else { String::new() };
+        let hint =
+            if run.is_some() { format!(" Undo with `myjanitor-cli undo --run {run_id}`.") } else { String::new() };
         println!("Run {run_id}: {ok} done, {skipped} skipped, {failed} failed, {} saved.{hint}", bytes(saved));
         if let Some(note) = skipped_note(skipped, failed) {
             eprintln!("{note}");

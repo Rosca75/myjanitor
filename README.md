@@ -155,6 +155,7 @@ Only ffmpeg (in the build session) and 7z (in CI, both platforms) were run for r
 
 | | Windows | Linux |
 |---|---|---|
+| Diagnostics log (`myjanitor.log`, panics and internal errors only, no file contents; attach it to a bug report) | the data folder, next to `settings.json` | the data folder |
 | Settings, presets, schedules, journal, quarantine | `%LOCALAPPDATA%\MyJanitor` | `$XDG_DATA_HOME/myjanitor` or `~/.local/share/myjanitor` |
 | Scan cache and scratch files | `%LOCALAPPDATA%\MyJanitor\cache` | `$XDG_CACHE_HOME/myjanitor` or `~/.cache/myjanitor` |
 
