@@ -216,3 +216,51 @@ fn g13_undo_failed_quarantine_items_are_counted_and_purged() {
     assert_eq!(mj_actions::quarantine::summary(&f.journal, &f.qdir).items, 0);
     assert_eq!(std::fs::read(&file).unwrap(), b"a new file with the same name", "the user's file is untouched");
 }
+
+/// An archiver that must never be reached (the refusal comes first).
+struct NeverArchive;
+
+impl mj_core::Archiver for NeverArchive {
+    fn formats(&self, _: &[mj_core::ExternalTool]) -> Vec<mj_core::ArchiveFormat> {
+        vec![mj_core::ArchiveFormat::Zip, mj_core::ArchiveFormat::SevenZip]
+    }
+    fn create(&self, _: &mj_core::ArchiveJob<'_>) -> mj_core::Result<u64> {
+        panic!("the archiver must not run");
+    }
+    fn verify(&self, _: &Path, _: &[PathBuf], _: &Path, _: &mj_core::CancelToken) -> mj_core::Result<()> {
+        Ok(())
+    }
+}
+
+/// G-14: archiving a folder whose links (any format) or empty folders (7z) the archive
+/// cannot store is skipped when the sources would be removed.
+#[test]
+fn g14_archive_never_removes_sources_it_could_not_store() {
+    let f = Fixture::new("g14");
+    f.write("proj/a.txt", b"a");
+    std::fs::create_dir_all(f.root().join("proj/empty")).unwrap();
+    let archiver = NeverArchive;
+    let services = mj_actions::Services { optimisers: &[], archiver: Some(&archiver), tools: &[] };
+    let archive = |format| Action::Archive {
+        format,
+        level: 6,
+        dest: None,
+        originals: mj_core::OriginalsPolicy::Quarantine,
+        keep_sources: false,
+    };
+    let run = f.new_run(mj_core::RunKind::Apply);
+    let item = f.item(&f.root().join("proj"), archive(mj_core::ArchiveFormat::SevenZip));
+    let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &confirmed()).unwrap();
+    assert_eq!((out.succeeded, out.skipped), (0, 1), "{out:?}");
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir(f.root().join("proj/empty")).unwrap();
+        std::os::unix::fs::symlink(f.root().join("proj/a.txt"), f.root().join("proj/link")).unwrap();
+        let run = f.new_run(mj_core::RunKind::Apply);
+        let item = f.item(&f.root().join("proj"), archive(mj_core::ArchiveFormat::Zip));
+        let out = mj_actions::execute_with(&f.ctx(run, services), &[item], &confirmed()).unwrap();
+        assert_eq!((out.succeeded, out.skipped), (0, 1), "{out:?}");
+        assert!(std::fs::symlink_metadata(f.root().join("proj/link")).is_ok());
+    }
+    assert!(f.root().join("proj/a.txt").exists());
+}

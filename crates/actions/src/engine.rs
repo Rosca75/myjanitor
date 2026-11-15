@@ -1104,6 +1104,28 @@ fn archive(
             Err(err) => return skip(ctx, e, err),
         }
     };
+    // G-14: an archive stores no links (they are only listed in INDEX.csv) and a 7z
+    // archive no empty folders; when the sources would go, those would exist nowhere.
+    if plan.is_some() && item.target == TargetKind::Folder {
+        let (links, empty_dirs) = fsops::links_and_empty_dirs(&item.path);
+        let empty = if format == mj_core::ArchiveFormat::SevenZip { empty_dirs } else { 0 };
+        if links > 0 || empty > 0 {
+            let what = match (links, empty) {
+                (l, 0) => format!("{l} link(s)"),
+                (0, d) => format!("{d} empty folder(s)"),
+                (l, d) => format!("{l} link(s) and {d} empty folder(s)"),
+            };
+            return skip(
+                ctx,
+                e,
+                Error::Conflict(format!(
+                    "skipped: {} holds {what} the archive cannot store, so its sources were kept; \
+                     archive it with \"keep the originals\" or remove them first",
+                    item.path.display()
+                )),
+            );
+        }
+    }
     if let Some(p) = &plan {
         retain::note_plan(&mut e, p);
     }

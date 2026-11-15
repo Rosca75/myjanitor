@@ -627,6 +627,28 @@ pub fn tree_size(path: &Path) -> u64 {
     total
 }
 
+/// G-14: links and empty folders below `path` (never following links; bounded depth).
+pub fn links_and_empty_dirs(path: &Path) -> (u64, u64) {
+    let (mut links, mut empty) = (0u64, 0u64);
+    let mut stack = vec![(path.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(rd) = fs::read_dir(&d) else { continue };
+        let mut n = 0usize;
+        for e in rd.flatten() {
+            n += 1;
+            match e.file_type() {
+                Ok(t) if t.is_symlink() => links += 1,
+                Ok(t) if t.is_dir() && depth < MAX_DEPTH => stack.push((e.path(), depth + 1)),
+                _ => {}
+            }
+        }
+        if n == 0 && d != path {
+            empty += 1;
+        }
+    }
+    (links, empty)
+}
+
 /// Hex of an xxh64.
 pub fn hex64(v: u64) -> String {
     to_hex(&v.to_be_bytes())
