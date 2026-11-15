@@ -279,3 +279,18 @@ fn png_variants_group_and_unrelated_do_not() {
     assert_eq!(group_names(&out), vec![vec!["base.png", "half.png", "noisy.png", "rgb.png"]]);
     assert_ne!(keeper_of(&out, "half.png"), "half.png", "the full-size image is kept");
 }
+
+#[test]
+fn flat_images_of_different_colours_never_match_in_any_mode() {
+    // DUP-3: black, dark grey and mid grey are different pictures.
+    let (w, h) = (64u32, 48u32);
+    let t = TempDir::new("flat").unwrap();
+    for (n, v) in [("black.png", 0u8), ("dark.png", 64), ("grey.png", 128)] {
+        t.write(n, &png::encode(w, h, 1, &vec![v; (w * h) as usize], false)).unwrap();
+    }
+    for mode in ["dhash", "phash", "both"] {
+        let out = Harness::new(index_of(t.path())).text("match_mode", mode).run(&SimilarImages).unwrap();
+        assert!(out.groups.is_empty(), "mode {mode}: {:?}", group_names(&out));
+        assert_eq!(out.diagnostics.skipped.get("flat_image"), Some(&3), "mode {mode}");
+    }
+}

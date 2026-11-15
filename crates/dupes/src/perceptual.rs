@@ -242,12 +242,18 @@ impl MatchMode {
     }
 
     /// A fingerprint pair this mode can use (0 means "none" for either hash).
+    ///
+    /// A zero dHash (no row ever gets darker: flat images first of all) is unusable in
+    /// every mode (DUP-3): the pHash of such an image is floating-point noise that is
+    /// identical for different grey levels, so pHash mode grouped a black, a grey and
+    /// a white image at distance 0. Checking the dHash also covers hashes cached
+    /// before this rule.
     pub fn usable(self, fp: Fp) -> bool {
-        match self {
-            MatchMode::DHash => fp.dhash != 0,
-            MatchMode::PHash => fp.phash != 0,
-            MatchMode::Both => fp.dhash != 0 && fp.phash != 0,
-        }
+        fp.dhash != 0
+            && match self {
+                MatchMode::DHash => true,
+                MatchMode::PHash | MatchMode::Both => fp.phash != 0,
+            }
     }
 
     fn key(self, fp: Fp) -> u64 {
@@ -528,7 +534,10 @@ mod tests {
         assert_eq!(MatchMode::DHash.distance(a, b), 4);
         assert_eq!(MatchMode::PHash.distance(a, b), 0);
         assert_eq!(MatchMode::Both.distance(a, b), 4);
-        assert!(!MatchMode::DHash.usable(b) && MatchMode::PHash.usable(b) && !MatchMode::Both.usable(b));
+        // DUP-3: a zero dHash is unusable in every mode, pHash included.
+        assert!(!MatchMode::DHash.usable(b) && !MatchMode::PHash.usable(b) && !MatchMode::Both.usable(b));
+        let c = Fp { dhash: 0b1, phash: 0 };
+        assert!(MatchMode::DHash.usable(c) && !MatchMode::PHash.usable(c) && !MatchMode::Both.usable(c));
     }
 
     #[test]
@@ -593,11 +602,12 @@ mod tests {
         assert!((g[0].confidence() - (1.0 - 2.0 / 64.0) * 100.0).abs() < 1e-4);
         assert_eq!(g[1].members, vec![3, 4]);
         assert_eq!(group(&items, MatchMode::DHash, HammingBits(6)), g);
-        // Zero hashes never match (flat images).
+        // Zero hashes never match (flat images), in every mode (DUP-3: the pHash of a
+        // flat image is rounding noise that collides across different colours).
         let flat = vec![Fp { dhash: 0, phash: 1 }, Fp { dhash: 0, phash: 1 }];
         assert!(group(&flat, MatchMode::DHash, HammingBits(6)).is_empty());
         assert!(group(&flat, MatchMode::Both, HammingBits(6)).is_empty());
-        assert_eq!(group(&flat, MatchMode::PHash, HammingBits(6)).len(), 1);
+        assert!(group(&flat, MatchMode::PHash, HammingBits(6)).is_empty());
     }
 
     #[test]
