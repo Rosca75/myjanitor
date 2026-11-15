@@ -4,8 +4,35 @@
  * selection, plan, jobs and history. All derived numbers (card sizes, step
  * summaries, plan estimate, checklist) are computed here from the rows so the
  * UI behaves like it would against the real engine.
+ *
+ * Savings follow the engine's account (crates/engine/src/savings.rs, docs/IPC.md
+ * "The savings invariant"): a selected row frees what its action frees (a removal
+ * the whole row, an optimisation its estimate, review only / copy / light copy
+ * nothing); the hero total is the sum of the cards' `saving`; unticked rows are
+ * `to_review`, never counted. The mock lists no file in two cards, so `overlap`
+ * is always 0 here.
  */
-import { buildOpportunities, buildCandidates, PLAN_BASE, DRIVES, GB, SETTINGS, TOOLS, HERO_SUMMARY } from './fixtures-all.js';
+
+const REMOVALS = ['trash', 'quarantine', 'permanent_delete', 'move', 'hardlink', 'reflink', 'dehydrate'];
+/** Badges that keep a row out of the selection (locked, the kept copy, not on this disk). */
+const IDLE = ['protected', 'signed', 'labelled', 'encrypted', 'keeper', 'online_only'];
+
+/**
+ * What an action frees of a row it runs on (engine `savings::frees`).
+ * @param {any} action @returns {'whole' | 'estimated' | 'nothing'}
+ */
+export function frees(action) {
+  const k = action?.kind;
+  if (REMOVALS.includes(k)) return 'whole';
+  if (k === 'optimise') return action.output?.mode === 'light_copy' ? 'nothing' : 'estimated';
+  if (k === 'archive') return action.keep_sources ? 'nothing' : 'estimated';
+  if (k === 'fs_compress') return 'estimated';
+  return 'nothing';
+}
+
+/** Hero bucket of a safety class (core `SafetyClass::bucket`). @param {string} safety */
+export const bucketOf = (safety) => (safety === 'review_only' ? 'review_only' : safety === 'lossy_opt_in' || safety === 'permanent' ? 'opt_in' : 'reversible');
+import { buildOpportunities, buildCandidates, PLAN_BASE, DRIVES, GB, SETTINGS, TOOLS } from './fixtures-all.js';
 
 const DAY_NS = 86_400_000_000_000;
 
@@ -18,7 +45,6 @@ export function createModel(opts) {
   /** @type {Map<string, Set<number>>} */
   const selection = new Map();
   for (const [id, list] of rows) selection.set(id, new Set(list.filter((r) => r.default_selected).map((r) => r.id)));
-  const baseBefore = new Map(opps.map((o) => [o.id, o.size_before]));
 
   const m = {
     nowNs,
@@ -52,28 +78,48 @@ export function createModel(opts) {
   /** @param {string} id */
   m.step = (id) => m.plan.steps.find((s) => s.opportunity === id);
 
-  /** StepSummary of the current selection. @param {string} id */
-  m.summary = (id) => {
+  /**
+   * The numbers of one card under `action`: every row on its own.
+   * @param {string} id @param {any} action
+   */
+  m.count = (id, action) => {
     const list = rows.get(id) ?? [];
     const sel = selection.get(id) ?? new Set();
-    let before = 0;
-    let after = 0;
-    let n = 0;
-    for (const r of list) if (sel.has(r.id)) { before += r.size; after += r.size_after; n += 1; }
-    return { candidates: list.length, selected: n, size_before: before, size_after: after, saving: before - after, confidence: m.opp(id)?.confidence ?? 'estimated' };
+    const f = frees(action);
+    const c = { selected: 0, size_before: 0, saving: 0, to_review: 0, to_review_count: 0 };
+    for (const r of list) {
+      const badges = r.badges ?? [];
+      if (!sel.has(r.id)) {
+        if (!badges.some((b) => IDLE.includes(b))) { c.to_review += r.size; c.to_review_count += 1; }
+        continue;
+      }
+      c.selected += 1;
+      if (badges.includes('online_only')) continue;
+      c.size_before += r.size;
+      c.saving += f === 'whole' ? r.size : f === 'estimated' ? Math.max(0, r.size - Math.min(r.size_after, r.size)) : 0;
+      if (action?.kind === 'none') { c.to_review += r.size; c.to_review_count += 1; }
+    }
+    return c;
   };
 
-  /** Push the selection numbers back into the opportunity card. @param {string} id */
+  /** StepSummary of the current selection (the card on its own, default action). @param {string} id */
+  m.summary = (id) => {
+    const o = m.opp(id);
+    const c = m.count(id, o?.default_action);
+    return { candidates: (rows.get(id) ?? []).length, selected: c.selected, size_before: c.size_before, size_after: c.size_before - c.saving, saving: c.saving, confidence: o?.confidence ?? 'estimated' };
+  };
+
+  /** Push the selection numbers back into the opportunity card: its plan step's action, else its default. @param {string} id */
   m.refresh = (id) => {
     const o = m.opp(id);
-    if (!o || o.safety === 'review_only') return;
-    const s = m.summary(id);
-    o.size_before = s.size_before;
-    o.saving = s.saving;
-    o.selected = s.selected;
+    if (!o || !rows.has(id)) return;
     const st = m.step(id);
+    const c = m.count(id, st?.action ?? o.default_action);
+    Object.assign(o, { size_before: c.size_before, saving: c.saving, selected: c.selected, count: c.selected, candidates: (rows.get(id) ?? []).length, overlap: 0, to_review: c.to_review, to_review_count: c.to_review_count, rank: c.saving });
     if (st) Object.assign(st, m.buildStep(o, st));
   };
+  /** Refresh every card (after a plan change: a card follows its step's action). */
+  m.refreshAll = () => { for (const o of opps) m.refresh(o.id); };
 
   /** Keep-rule labels used in plan step summaries. */
   const KEEP = { newest: 'newest', oldest: 'oldest', shortest_path: 'shortest path', highest_resolution: 'highest resolution' };
@@ -109,15 +155,11 @@ export function createModel(opts) {
    */
   m.buildStep = (o, prev) => {
     const base = PLAN_BASE[o.id];
-    const s = m.summary(o.id);
-    const factor = (baseBefore.get(o.id) ?? 1) ? s.size_before / (baseBefore.get(o.id) ?? 1) : 1;
-    const before = base ? Math.round(base.before * factor) : s.size_before;
-    const afterRatio = s.size_before ? s.size_after / s.size_before : 0;
     const action = prev?.action ?? m.actions.get(o.id) ?? base?.action ?? o.default_action;
     const params = { ...(base?.params ?? o.params), ...(prev?.params ?? {}), ...(o.params.preset ? { preset: o.params.preset } : {}) };
     const permanent = action.kind === 'permanent_delete';
     const lossy = !permanent && !!m.lossy.get(o.id);
-    const removal = ['trash', 'quarantine', 'permanent_delete', 'move', 'hardlink', 'reflink'].includes(action.kind);
+    const c = m.count(o.id, action);
     return {
       id: prev?.id ?? m.nextStepId++,
       opportunity: o.id,
@@ -126,7 +168,7 @@ export function createModel(opts) {
       action,
       params,
       selection: { include: [], exclude: [] },
-      estimate: { files: s.selected, bytes_before: before, bytes_after: removal ? 0 : Math.round(before * afterRatio), confidence: m.exact ? 'exact' : o.confidence, skipped: 0 },
+      estimate: { files: c.selected, bytes_before: c.size_before, bytes_after: c.size_before - c.saving, confidence: m.exact ? 'exact' : o.confidence, skipped: 0 },
       safety: permanent ? 'permanent' : (lossy || action.kind === 'hardlink') ? 'lossy_opt_in' : o.safety === 'lossy_opt_in' ? 'reversible' : o.safety,
       lossy,
     };
@@ -150,20 +192,37 @@ export function createModel(opts) {
     return { id: m.plan.id, name: 'Your plan', steps: structuredClone(steps), estimate: est, checklist, updated: m.plan.updated };
   };
 
-  /** Hero drive bars: the wireframe plan frees 29.3 GB, other plans scale. */
+  /** Hero drive bars: the plan's saving spread over the drives in the wireframe's proportions, so their `plan_saving` adds up to the plan total. */
   m.drives = () => {
     const est = m.planJson().estimate;
-    const k = (est.bytes_before - est.bytes_after) / (29.3 * GB);
+    const saving = est.bytes_before - est.bytes_after;
     const base = DRIVES.reduce((a, d) => a + d.plan_saving, 0);
-    return DRIVES.map((d) => {
+    let left = saving;
+    return DRIVES.map((d, i) => {
       const freed = Math.round(m.freed * (d.plan_saving / base));
-      return { ...structuredClone(d), free: d.free + freed, available: d.free + freed, plan_saving: Math.round(d.plan_saving * k), free_after_plan: d.free + freed + Math.round(d.plan_saving * k) };
+      const share = i === DRIVES.length - 1 ? left : Math.round(saving * (d.plan_saving / base));
+      left -= share;
+      return { ...structuredClone(d), free: d.free + freed, available: d.free + freed, plan_saving: share, free_after_plan: d.free + freed + share };
     });
+  };
+
+  /** Hero summary over every available card (engine `opportunities_list`). */
+  m.heroSummary = () => {
+    const sum = { total: 0, reversible: 0, opt_in: 0, review_only: 0, opportunities: 0, overlap: 0, review_opportunities: 0, to_review: 0 };
+    for (const o of opps.filter((x) => x.availability?.state !== 'disabled' && x.candidates > 0)) {
+      sum.total += o.saving;
+      sum[bucketOf(o.safety)] += o.saving;
+      sum.overlap += o.overlap ?? 0;
+      sum.to_review += o.to_review ?? 0;
+      if (o.selected > 0) sum.opportunities += 1;
+      if ((o.to_review_count ?? 0) > 0) sum.review_opportunities += 1;
+    }
+    return sum;
   };
 
   /** Opportunity list response for a tab and sort. @param {{tab?: string, sort?: string}} req */
   m.list = (req) => {
-    if (m.scannedAt === null) return { generation: m.scan.generation, items: [], summary: { total: 0, reversible: 0, opt_in: 0, review_only: 0, opportunities: 0 }, counts: { all: 0, clean: 0, optimise: 0, archive: 0, review_only: 0 }, cached: false };
+    if (m.scannedAt === null) return { generation: m.scan.generation, items: [], summary: { total: 0, reversible: 0, opt_in: 0, review_only: 0, opportunities: 0, overlap: 0, review_opportunities: 0, to_review: 0 }, counts: { all: 0, clean: 0, optimise: 0, archive: 0, review_only: 0 }, cached: false };
     const tab = req.tab ?? 'all';
     const review = (o) => o.safety === 'review_only';
     const inTab = (o) => (tab === 'all' ? true : tab === 'review_only' ? review(o) : o.category === tab && !review(o));
@@ -179,7 +238,7 @@ export function createModel(opts) {
     return {
       generation: m.scan.generation,
       items,
-      summary: { ...HERO_SUMMARY, opportunities: opps.length },
+      summary: m.heroSummary(),
       counts: { all: opps.length, clean: count((o) => o.category === 'clean' && !review(o)), optimise: count((o) => o.category === 'optimise' && !review(o)), archive: count((o) => o.category === 'archive' && !review(o)), review_only: count(review) },
       scanned_at: m.scannedAt,
       cached: m.scan.cached,
@@ -187,6 +246,8 @@ export function createModel(opts) {
   };
 
   /** Seed one of the named scenarios. @param {string} scenario */
+  m.refreshAll();
+
   m.seed = (scenario) => {
     if (scenario === 'empty') return;
     m.scope.roots = ['C:\\Users\\Michel', 'D:\\Projects'];
@@ -194,6 +255,7 @@ export function createModel(opts) {
     m.scan = { state: 'done', generation: 3, started: m.scannedAt - 60e9, finished: m.scannedAt, progress: { generation: 3, phase: 'detecting', files: 184233, dirs: 20117, bytes: 412e9, done: 18, total: 18, elapsed_ms: 60012 }, cached: true };
     if (scenario === 'fresh') return;
     for (const o of opps.filter((x) => x.in_plan)) m.plan.steps.push(m.buildStep(o));
+    m.refreshAll();
     const t = nowNs() - 3 * DAY_NS;
     m.runs.push({ run_id: Math.round(t / 1e6), kind: 'apply', title: 'Plan · 2 steps', started: t, finished: t + 90e9, steps: ['Temporary files', 'Old log files'], items: 299, done: 299, failed: 0, undone: 299, bytes_saved: Math.round(0.6 * GB), undoable: false, undo_until: t + 30 * DAY_NS });
   };

@@ -25,31 +25,58 @@ test('the mock answers every command of IPC.md or says not_implemented, never cr
   }
 });
 
-test('fixtures: 18 opportunities, 48.6 GB, the wireframe counts', async () => {
+test('fixtures: 18 opportunities, the hero is the sum of the cards (savings invariant, W6-B)', async () => {
   const b = mk();
   const all = await b.call('opportunities_list', { tab: 'all', sort: 'saving' });
   assert.equal(all.items.length, 18);
-  assert.equal(formatBytes(all.summary.total), '48.6 GB');
-  assert.equal(formatBytes(all.summary.reversible), '41.2 GB');
-  assert.equal(formatBytes(all.summary.opt_in), '5.1 GB');
-  assert.equal(formatBytes(all.summary.review_only), '2.3 GB');
+  const s = all.summary;
+  const available = all.items.filter((o) => o.availability.state === 'available');
+  assert.equal(s.total, available.reduce((a, o) => a + o.saving, 0), 'hero = sum of the cards');
+  assert.equal(s.total, s.reversible + s.opt_in + s.review_only, 'buckets add up');
+  assert.equal(s.to_review, available.reduce((a, o) => a + o.to_review, 0));
+  assert.equal(formatBytes(s.total), '52.5 GB');
+  assert.equal(formatBytes(s.reversible), '43.5 GB');
+  assert.equal(formatBytes(s.opt_in), '9.0 GB');
+  assert.equal(s.review_only, 0, 'review-only cards pre-select nothing');
+  assert.equal(formatBytes(s.to_review), '712 MB');
+  assert.equal(s.opportunities, 15);
+  assert.equal(s.review_opportunities, 4);
   assert.deepEqual(all.counts, { all: 18, clean: 8, optimise: 6, archive: 1, review_only: 3 });
-  assert.deepEqual(all.items.slice(0, 9).map((o) => o.title), ['Exact duplicates', 'Transparent compression', 'Developer artefacts', 'App caches & junk', 'Screen recordings', 'Inactive engagements', 'Meeting recordings', 'Office decks & workbooks', 'Old installers']);
-  assert.equal(formatBytes(all.items.slice(9).reduce((a, o) => a + o.size_before, 0)), '1.9 GB');
+  // Biggest saving first, by what the card frees (not the size of its files).
+  assert.deepEqual(all.items.slice(0, 9).map((o) => o.title), ['Exact duplicates', 'Developer artefacts', 'App caches & junk', 'Transparent compression', 'Screen recordings', 'Meeting recordings', 'Inactive engagements', 'Old installers', 'Temporary files']);
+  // An optimisation frees its estimate, not the size of the files it rewrites.
+  const fsc = all.items.find((o) => o.id === 'opt:fs_compress');
+  assert.ok(fsc.saving < fsc.size_before && fsc.saving > 0);
+  // A light copy leaves the original in place: it frees nothing.
+  const office = all.items.find((o) => o.id === 'opt:office');
+  assert.equal(office.saving, 0);
+  assert.ok(office.size_before > 0 && office.selected > 0);
+  // Review-only cards count nothing and list their rows for review.
+  for (const o of all.items.filter((x) => x.safety === 'review_only')) {
+    assert.equal(o.saving, 0, o.id);
+    assert.ok(o.to_review > 0 && o.to_review_count > 0, o.id);
+  }
   const clean = await b.call('opportunities_list', { tab: 'clean' });
   assert.ok(clean.items.every((o) => o.category === 'clean' && o.safety !== 'review_only'));
+  assert.deepEqual(clean.summary, s, 'the summary does not depend on the tab');
   const review = await b.call('opportunities_list', { tab: 'review_only' });
   assert.equal(review.items.length, 3);
 });
 
 test('fixtures: drives C: and D:, the plan, the meeting recordings step with 23 selected rows', async () => {
   const b = mk();
+  const all = await b.call('opportunities_list', { tab: 'all', sort: 'saving' });
   const drives = await b.call('drives_list');
   assert.deepEqual(drives.map((d) => d.id), ['C:', 'D:']);
-  assert.equal(formatBytes(drives[0].free_after_plan), '86.0 GB');
   const plan = await b.call('plan_get');
   assert.equal(plan.steps.length, 4);
-  assert.equal(formatBytes(plan.estimate.bytes_before - plan.estimate.bytes_after), '29.3 GB');
+  const planSaving = plan.estimate.bytes_before - plan.estimate.bytes_after;
+  assert.equal(formatBytes(planSaving), '33.1 GB');
+  // Each step says what its card shows; the drive bars add up to the plan total.
+  for (const st of plan.steps) assert.equal(st.estimate.bytes_before - st.estimate.bytes_after, all.items.find((o) => o.id === st.opportunity).saving, st.title);
+  assert.equal(drives.reduce((a, d) => a + d.plan_saving, 0), planSaving);
+  for (const d of drives) assert.equal(d.free_after_plan, d.free + d.plan_saving);
+  assert.equal(formatBytes(drives[0].free_after_plan), '72.7 GB');
   const detail = await b.call('step_detail', { opportunity_id: 'opt:audio' });
   assert.equal(detail.summary.selected, 23);
   assert.equal(detail.summary.candidates, 24);

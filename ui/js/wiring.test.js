@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeEnv } from './testing/env.js';
+import { formatBytes } from './format.js';
 
 const last = (env, cmd) => env.sent(cmd).at(-1)?.req;
 
@@ -126,7 +127,7 @@ test('Estimate exactly sends plan_dry_run and the plan turns exact', async () =>
   const env = await makeEnv();
   await env.click(env.byText('button', 'Estimate exactly (dry run)'));
   assert.equal(env.sent('plan_dry_run').length, 1);
-  assert.match(env.$('.toast').textContent, /Dry run finished: 233 files, 29\.\d GB saved/);
+  assert.match(env.$('.toast').textContent, /Dry run finished: 233 files, 33\.\d GB saved/);
   assert.ok(env.$('.step__size--exact'));
 });
 
@@ -140,7 +141,7 @@ test('Save as weekly schedule sends schedule_from_plan (plans without lossy step
 
 test('Apply plan asks for confirmation first and sends plan_apply only after the acknowledgement', async () => {
   const env = await makeEnv();
-  await env.click(env.byText('button', 'Apply plan  ·  29.3 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  33.1 GB'));
   assert.equal(env.sent('plan_apply').length, 0, 'nothing is applied before the dialog is confirmed');
   const stepId = env.state().plan.steps.find((s) => s.lossy).id;
   assert.deepEqual(last(env, 'plan_confirmation_info'), { step_id: stepId });
@@ -158,7 +159,7 @@ test('Apply plan asks for confirmation first and sends plan_apply only after the
 
 test('dropdown and online-only choices travel in the confirmation', async () => {
   const env = await makeEnv();
-  await env.click(env.byText('button', 'Apply plan  ·  29.3 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  33.1 GB'));
   const select = env.$('[role="dialog"] select');
   select.setValue('1');
   await env.settle();
@@ -176,18 +177,18 @@ test('dropdown and online-only choices travel in the confirmation', async () => 
 test('a plan without lossy steps applies directly with no confirmations', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
-  await env.click(env.byText('button', 'Apply plan  ·  25.1 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  28.9 GB'));
   assert.deepEqual(last(env, 'plan_apply'), { confirmations: [] });
   assert.equal(env.$('[role="dialog"]'), null);
 });
 
 test('Back closes the dialog without applying; Escape does the same', async () => {
   const env = await makeEnv();
-  await env.click(env.byText('button', 'Apply plan  ·  29.3 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  33.1 GB'));
   await env.click(env.$('[data-fk="dlg-back"]'));
   assert.equal(env.$('[role="dialog"]'), null);
   assert.equal(env.sent('plan_apply').length, 0);
-  await env.click(env.byText('button', 'Apply plan  ·  29.3 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  33.1 GB'));
   env.$('[role="dialog"]').key('Escape');
   await env.settle();
   assert.equal(env.$('[role="dialog"]'), null);
@@ -196,7 +197,7 @@ test('Back closes the dialog without applying; Escape does the same', async () =
 
 test('focus moves into the dialog on open and returns to the opener on close', async () => {
   const env = await makeEnv();
-  const apply = env.byText('button', 'Apply plan  ·  29.3 GB');
+  const apply = env.byText('button', 'Apply plan  ·  33.1 GB');
   apply.focus();
   apply.click();
   await env.settle();
@@ -208,7 +209,7 @@ test('focus moves into the dialog on open and returns to the opener on close', a
 
 test('the dialog traps Tab: last control wraps to the first and Shift+Tab the other way', async () => {
   const env = await makeEnv();
-  await env.click(env.byText('button', 'Apply plan  ·  29.3 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  33.1 GB'));
   env.$('[data-fk="dlg-ack"]').click(); // enables the acting button
   await env.settle();
   const dlg = env.$('[role="dialog"]');
@@ -224,7 +225,7 @@ test('the dialog traps Tab: last control wraps to the first and Shift+Tab the ot
 
 test('Compare a sample first closes the dialog and opens the step with a preview', async () => {
   const env = await makeEnv();
-  await env.click(env.byText('button', 'Apply plan  ·  29.3 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  33.1 GB'));
   await env.click(env.byText('button', 'Compare a sample first'));
   assert.equal(env.$('[role="dialog"]'), null);
   assert.equal(env.state().route.name, 'step');
@@ -252,13 +253,22 @@ test('a checkbox sends selection_set for that row; select all sends it without i
   assert.equal(all.checked, false, 'header box reflects that not every row is checked');
 });
 
-test('unchecking updates the card on Overview through opportunities://changed', async () => {
+test('unchecking updates the card and the hero on Overview through opportunities://changed', async () => {
   const env = await makeEnv();
+  const before = env.state().opps;
+  const card = before.items.find((o) => o.id === 'opt:audio');
+  assert.equal(env.$('[data-opp="opt:audio"] .card__size').textContent, '4.2 GB');
   await env.actions.openStep('opt:audio');
   await env.settle();
   await env.click(env.$$('.row')[2].querySelector('input'));
   await env.click(env.$('[data-fk="back"]'));
-  assert.equal(env.$('[data-opp="opt:audio"] .card__size').textContent, '3.7 GB');
+  const after = env.state().opps;
+  const now = after.items.find((o) => o.id === 'opt:audio');
+  assert.ok(now.saving < card.saving);
+  assert.equal(env.$('[data-opp="opt:audio"] .card__size').textContent, formatBytes(now.saving));
+  // The hero moves by exactly what the card lost (W6-B: the hero is the cards, added up).
+  assert.equal(after.summary.total, before.summary.total - (card.saving - now.saving));
+  assert.equal(env.$('[data-role="hero-total"]').textContent, formatBytes(after.summary.total));
 });
 
 test('preset tile sends step_params_set with the preset id and updates the estimate', async () => {
@@ -363,7 +373,7 @@ test('CLN-ACT-06: duplicates offer hard links (confirmed in the dialog) and refl
 test('Undo last action sends undo_last once a run exists', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
-  await env.click(env.byText('button', 'Apply plan  ·  25.1 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  28.9 GB'));
   await env.settle();
   assert.equal(env.state().undoable, true);
   await env.click(env.$('[data-fk="undo-last"]'));
@@ -375,7 +385,7 @@ test('Undo last action sends undo_last once a run exists', async () => {
 test('Undo on the completed summary sends undo_last; View report sends report_get', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
-  await env.click(env.byText('button', 'Apply plan  ·  25.1 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  28.9 GB'));
   await env.settle();
   const runId = env.state().completed.run_id;
   await env.click(env.$('[data-fk="done-report"]'));
@@ -421,7 +431,7 @@ test('job controls send job_pause, job_resume and job_cancel', async () => {
 test('History Restore asks, then sends undo_run for that run', async () => {
   const env = await makeEnv();
   await env.click(env.$('[aria-label="Remove Meeting recordings from the plan"]'));
-  await env.click(env.byText('button', 'Apply plan  ·  25.1 GB'));
+  await env.click(env.byText('button', 'Apply plan  ·  28.9 GB'));
   await env.settle();
   env.actions.navigate('history');
   await env.settle();

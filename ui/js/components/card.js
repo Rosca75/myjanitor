@@ -9,6 +9,31 @@ import { safetyBadge, inPlanBadge, badge } from './badge.js';
 const CATEGORY_ICON = { clean: 'clean', optimise: 'optimise', archive: 'archive' };
 
 /**
+ * The card's number is what it adds to the hero total ("You can free up"): `saving`, its
+ * share with every file counted once (docs/IPC.md, the savings invariant), so the hero is
+ * the sum of the numbers the cards show. When the card counts nothing but lists files for
+ * review, it shows their size labelled "to review" instead (never part of the hero). Every
+ * other figure (the size of the files acted on, what another card counts, what is left to
+ * review) is named in words under the number.
+ * @param {any} opp @param {string} unit
+ */
+function figures(opp, unit) {
+  const review = !(opp.saving > 0) && (opp.to_review ?? 0) > 0;
+  const bytes = review ? opp.to_review : opp.saving;
+  const n = review ? opp.to_review_count : opp.count;
+  const notes = [];
+  if (!review && opp.size_before > opp.saving) notes.push(opp.saving > 0 ? copy.card.from(formatBytes(opp.size_before)) : copy.card.freesNothing);
+  if ((opp.overlap ?? 0) > 0) notes.push(copy.card.overlap(formatBytes(opp.overlap)));
+  if (!review && (opp.to_review ?? 0) > 0) notes.push(copy.card.alsoToReview(formatBytes(opp.to_review)));
+  return [
+    h('div', { class: 'card__figures' },
+      h('span', { class: ['card__size', review && 'card__size--review'], 'data-role': review ? 'card-review' : 'card-saving', title: review ? copy.card.reviewTitle : copy.card.saves(formatBytes(opp.saving)) }, formatBytes(bytes), review && h('span', { class: 'card__size-label' }, ` ${copy.card.toReview}`)),
+      h('span', { class: 'card__count' }, `${formatCount(n)} ${n === 1 ? unit.replace(/s$/, '') : unit}`)),
+    notes.length > 0 && h('p', { class: 'card__note', 'data-role': 'card-note' }, notes.join(' · ')),
+  ];
+}
+
+/**
  * @param {any} opp an Opportunity
  * @param {{ onReview: (id: string) => void, onAdd: (id: string) => void }} handlers
  */
@@ -26,9 +51,7 @@ export function oppCard(opp, handlers) {
         h('h3', { class: 'card__title', title: opp.title }, opp.title),
         h('p', { class: 'card__desc', title: opp.description }, disabled ? opp.description : opp.description)),
       inPlan && inPlanBadge()),
-    h('div', { class: 'card__figures' },
-      h('span', { class: 'card__size', title: copy.card.saves(formatBytes(opp.saving)) }, formatBytes(opp.size_before)),
-      h('span', { class: 'card__count' }, `${formatCount(opp.count)} ${opp.count === 1 ? unit.replace(/s$/, '') : unit}`)),
+    figures(opp, unit),
     disabled && h('p', { class: 'card__reason', 'data-role': 'card-reason' }, icon('info', 12), h('span', { class: 'card__reason-text' }, reason), note && note !== reason && badge(note, 'neutral', { extra: 'badge--row' })),
     h('div', { class: 'card__foot' },
       safetyBadge(opp.safety),
