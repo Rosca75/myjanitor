@@ -93,6 +93,9 @@ impl Engine {
         let action = req.action.clone().unwrap_or(Action::Trash);
         let removal = crate::plan::removes(&action);
         let preselect = removal && !action.safety(false).requires_confirmation();
+        // RF-1: a whole folder is pre-selected only when the rule asks for folders
+        // (`kind:dir`); one matched on its name, path length or attributes is only listed.
+        let preselect_folders = preselect && mj_filters::asks_for_folders(&req.rule);
         let mut out = DetectorOutput { diagnostics: sel.diagnostics.to_core(), ..Default::default() };
         let (title, custom_id) = {
             let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
@@ -112,12 +115,12 @@ impl Engine {
         };
         for &p in sel.positions.iter().take(MAX_ROWS) {
             let e = index.entry(p);
-            let (target, size, files) = match e.kind {
+            let (target, size, files, selected) = match e.kind {
                 EntryKind::Dir => {
                     let t = index.totals(p);
-                    (TargetKind::Folder, t.reclaimable, Some(t.files))
+                    (TargetKind::Folder, t.reclaimable, Some(t.files), preselect_folders)
                 }
-                EntryKind::File => (TargetKind::File, e.reclaimable(), None),
+                EntryKind::File => (TargetKind::File, e.reclaimable(), None, preselect),
                 // Links are never targets of a custom search (they would not be followed).
                 _ => continue,
             };
@@ -131,7 +134,7 @@ impl Engine {
                 confidence: Confidence::Exact,
                 reason: "Matches the search".into(),
                 badges: mj_core::Badges::empty(),
-                default_selected: preselect,
+                default_selected: selected,
                 group: None,
                 sub_group: None,
                 modified: e.modified,

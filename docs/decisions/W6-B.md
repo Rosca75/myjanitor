@@ -238,3 +238,22 @@ file). A removed duplicate is read once instead of three times on the quarantine
 (test: `fsops::content_reads_on_this_thread`, a per-thread counter). Not done: the kept copy
 is still read once per member of its group; caching its verified hash across a batch would
 need an identity check of its own and was left out of a safety-critical path.
+
+## D-B18 File conditions never select a folder (RF-1)
+
+Extension, type group, size, zero-byte, the three dates, header mismatch, content and media
+describe a regular file's own bytes and times. On a folder, link or device they are now
+*not applicable* (`Unknown`): never a match, and their negation is no match either, since
+`not(Unknown)` stays `Unknown`. A folder's own size is 0 and its own mtime only moves when
+a direct child is added or removed, so `size:<1MB`, `older:90d` and `-ext:mp4` used to
+select every folder, and `search_run` turned each into a whole-subtree row pre-selected for
+Trash (the "Downloads older than 90 days" preset took a year-old folder holding last
+week's tax return). Name, path, kind, depth, path length, attributes, owner and invalid
+name still apply to folders, so `kind:dir name:=node_modules` (Dev junk) is unchanged.
+Defence in depth: `search_run` pre-selects a folder row only when the rule holds a
+non-negated `kind:dir` (`mj_filters::asks_for_folders`); a folder matched on its name,
+path length or attributes alone is listed unselected. The Downloads and hidden-system
+presets gained `kind:file`. Rejected: ageing a folder by the newest file in its subtree
+(`totals().newest_modified`); it would need index access inside the evaluator and is a
+feature, not a fix. `testutil::set_mtime` now also sets a folder's mtime (used by the
+regression test).

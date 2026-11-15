@@ -26,7 +26,7 @@ pub mod query;
 pub mod timeutil;
 
 pub use eval::{
-    compile, compile_with, select, select_with, CompiledRule, FilterContext, FilterDiagnostics, SelectOptions,
+    asks_for_folders, compile, compile_with, select, select_with, CompiledRule, FilterContext, FilterDiagnostics, SelectOptions,
     Selection,
 };
 pub use exclusions::Exclusions;

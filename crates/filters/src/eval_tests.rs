@@ -374,3 +374,58 @@ fn compiled_rule_is_shareable_across_threads() {
     assert_sync::<CompiledRule>();
     assert_sync::<Exclusions>();
 }
+
+/// RF-1: a folder's own size (0) and own mtime say nothing about the files inside it, so
+/// file conditions never select a folder, not even through a negation.
+#[test]
+fn file_conditions_never_select_a_folder() {
+    let mut dir = FileEntry::new("/r/Downloads/Taxes", EntryKind::Dir, 0);
+    dir.modified = Some(Timestamp::from_ymd_hms(2020, 1, 1, 0, 0, 0));
+    dir.created = dir.modified;
+    dir.accessed = dir.modified;
+    let not = |r: Rule| Rule::Not(Box::new(r));
+    let file_only = [
+        cond(Condition::Size { cmp: Cmp::Lt, bytes: 1 << 20 }),
+        not(cond(Condition::Size { cmp: Cmp::Gt, bytes: 1 << 20 })),
+        date(DateField::Modified, Cmp::Lt, ago(90, SpanUnit::Days)),
+        date(DateField::Modified, Cmp::Lt, DateValue::At(Timestamp::from_ymd_hms(2024, 1, 1, 0, 0, 0))),
+        not(date(DateField::Modified, Cmp::Ge, ago(90, SpanUnit::Days))),
+        date(DateField::Created, Cmp::Lt, ago(90, SpanUnit::Days)),
+        date(DateField::Accessed, Cmp::Lt, ago(90, SpanUnit::Days)),
+        not(cond(Condition::Extension { values: vec!["mp4".into()] })),
+        not(cond(Condition::ZeroByte)),
+        not(cond(Condition::ExtensionMismatch)),
+        not(cond(Condition::ContentContains { text: "x".into(), case_sensitive: false })),
+        not(cond(Condition::TypeGroup { group: "video".into() })),
+        Rule::All(vec![
+            cond(Condition::Path { mode: TextMode::Wildcard, pattern: "**/Downloads/**".into(), case_sensitive: false }),
+            date(DateField::Modified, Cmp::Lt, ago(90, SpanUnit::Days)),
+        ]),
+    ];
+    for r in &file_only {
+        assert!(!matches(r, &dir), "{r:?} must not select a folder");
+    }
+    // Conditions that do describe a folder still select it.
+    let node = Rule::All(vec![
+        cond(Condition::Kind { kind: EntryKind::Dir }),
+        name(TextMode::Exact, "Taxes", false),
+    ]);
+    assert!(matches(&node, &dir));
+    assert!(matches(&not(cond(Condition::Kind { kind: EntryKind::File })), &dir));
+    // A file is unaffected.
+    let mut f = file("/r/Downloads/old.iso", 10);
+    f.modified = dir.modified;
+    assert!(matches(&file_only[0], &f));
+    assert!(matches(&file_only[2], &f));
+    assert!(matches(&file_only[7], &f));
+}
+
+#[test]
+fn only_a_positive_kind_dir_asks_for_folders() {
+    let dir = cond(Condition::Kind { kind: EntryKind::Dir });
+    assert!(asks_for_folders(&Rule::All(vec![dir.clone(), name(TextMode::Exact, "node_modules", false)])));
+    assert!(asks_for_folders(&Rule::Not(Box::new(Rule::Not(Box::new(dir.clone()))))));
+    assert!(!asks_for_folders(&Rule::Not(Box::new(dir))));
+    assert!(!asks_for_folders(&cond(Condition::PathLength { cmp: Cmp::Gt, value: 240 })));
+    assert!(!asks_for_folders(&Rule::Not(Box::new(cond(Condition::Kind { kind: EntryKind::File })))));
+}

@@ -287,7 +287,10 @@ command itself does not fail.
 `SearchRunRequest` → `Opportunity`. Evaluates the rule over the current index
 and creates (or replaces, same title) a `custom:<n>` opportunity that then
 behaves like any card (step review, plan). Fails with `invalid_input` before
-the first scan.
+the first scan. File conditions (extension, type, size, dates, header, content,
+media) never match a folder, not even negated; a matching folder becomes one
+whole-folder row, pre-selected only when the rule holds a non-negated
+`kind:dir` condition.
 
 ```json SearchRunRequest
 {"rule":{"all":[{"cond":{"field":"extension","values":["mp4"]}},{"cond":{"field":"size","cmp":"gt","bytes":1073741824}}]},"title":"Big videos","topmost_only":false,"action":{"kind":"trash"}}
@@ -785,7 +788,7 @@ Nodes: `all`, `any`, `not`, `cond`. Conditions (`field`): `name`, `path`
 #### RulePreset
 
 ```json RulePreset
-{"id":"downloads_older_90d","name":"Downloads older than 90 days","description":"Anything in a Downloads folder not modified for 90 days","rule":{"all":[{"cond":{"field":"path","mode":"wildcard","pattern":"**/Downloads/**","case_sensitive":false}},{"cond":{"field":"date","which":"modified","cmp":"lt","value":{"ago":{"amount":90,"unit":"days"}}}}]},"topmost_only":false,"builtin":true}
+{"id":"downloads_older_90d","name":"Downloads older than 90 days","description":"Files in a Downloads folder not modified for 90 days","rule":{"all":[{"cond":{"field":"kind","kind":"file"}},{"cond":{"field":"path","mode":"wildcard","pattern":"**/Downloads/**","case_sensitive":false}},{"cond":{"field":"date","which":"modified","cmp":"lt","value":{"ago":{"amount":90,"unit":"days"}}}}]},"topmost_only":false,"builtin":true}
 ```
 
 #### Action
