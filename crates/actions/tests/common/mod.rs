@@ -38,6 +38,8 @@ pub struct TestPlatform {
     /// Simulate a trash of a folder that fails part-way: one file below the folder is
     /// deleted, then the call fails (ACT-1).
     pub partial_trash: bool,
+    /// Simulate another program writing to the kept file the moment it is linked (ACT-11).
+    pub write_keeper_on_link: bool,
 }
 
 impl TestPlatform {
@@ -52,6 +54,7 @@ impl TestPlatform {
             fake_reflink: true,
             ignore_dehydrate: false,
             partial_trash: false,
+            write_keeper_on_link: false,
         }
     }
 }
@@ -104,6 +107,13 @@ impl ActionPlatform for TestPlatform {
         return fixture_trash::restore(ticket, original);
     }
     fn hardlink(&self, existing: &Path, new_link: &Path) -> Result<()> {
+        if self.write_keeper_on_link {
+            std::io::Write::write_all(
+                &mut std::fs::OpenOptions::new().append(true).open(existing).unwrap(),
+                b" edited",
+            )
+            .unwrap();
+        }
         self.native.hardlink(existing, new_link)
     }
     fn reflink(&self, src: &Path, dst: &Path) -> Result<()> {

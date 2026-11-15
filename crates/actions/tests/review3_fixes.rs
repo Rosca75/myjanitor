@@ -197,3 +197,22 @@ fn act3_read_only_files_can_be_optimised_and_unlinked() {
     std::fs::write(&keeper, b"edited").unwrap();
     assert_eq!(std::fs::read(&dup).unwrap(), b"same text in both");
 }
+
+/// ACT-11: the kept copy changes between the byte comparison and the replacement: the
+/// duplicate is not replaced by a link to the new content.
+#[test]
+fn act11_link_replacement_rechecks_the_kept_copy() {
+    let mut f = Fixture::new("act11");
+    f.platform.write_keeper_on_link = true;
+    let keeper = f.write("a/keep.txt", b"compared content");
+    let dup = f.write("b/copy.txt", b"compared content");
+    let mut item = f.item(&dup, Action::Hardlink);
+    item.link_source = Some(keeper.clone());
+    let (_, out) = f.apply(std::slice::from_ref(&item), &confirmed());
+    assert_eq!(out.succeeded, 0, "{out:?}");
+    assert_eq!(std::fs::read(&dup).unwrap(), b"compared content", "the duplicate kept the compared content");
+    let names: Vec<_> = std::fs::read_dir(dup.parent().unwrap()).unwrap().flatten().map(|e| e.file_name()).collect();
+    assert_eq!(names.len(), 1, "no temporary link left: {names:?}");
+    let err = out.errors[0].error.as_ref().unwrap();
+    assert!(err.message.contains("kept copy changed"), "{err:?}");
+}

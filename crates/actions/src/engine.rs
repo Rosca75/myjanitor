@@ -779,6 +779,20 @@ fn link_replace(
             }
             // TOCTOU: the duplicate must still be what was verified.
             ctx.guard.restat(item, ctx.platform)?;
+            // ACT-11 (F-02 sibling): and so must the kept copy, or the duplicate would be
+            // replaced by a link to content nobody compared. For a hard link the new name
+            // must also be the kept file itself.
+            let changed = || Error::Conflict("skipped: the kept copy changed; nothing was replaced".into());
+            let now = ctx.platform.metadata(&keeper).map_err(|_| changed())?;
+            if now.stamp() != kmd.stamp() || now.file_id != kmd.file_id {
+                return Err(changed());
+            }
+            if is_hard {
+                let linked = ctx.platform.metadata(&temp)?;
+                if linked.file_id.is_some() && linked.file_id != kmd.file_id {
+                    return Err(changed());
+                }
+            }
             std::fs::rename(&temp, &item.path).map_err(|er| Error::io(&item.path, er))
         })();
         if let Err(err) = result {
