@@ -130,11 +130,11 @@ Notes starting with "Requires ffmpeg on PATH" describe the reason the card shows
 
 | ID | Feature | Tier | Platform | Owner | Status | Note |
 |---|---|---|---|---|---|---|
-| OPT-IMG-01 | Lossless recompression (PNG oxipng, JPEG jpegtran/MozJPEG, GIF gifsicle) | T2 | Win+Linux | W3-C | partial | PNG re-deflate and JPEG header rewrite are in-house and verified (inflate equality, scan bytes copied). oxipng and jpegtran are optional and [A] argument-tested only. No GIF optimiser (gifsicle argument builder only). |
+| OPT-IMG-01 | Lossless recompression (PNG oxipng, JPEG jpegtran/MozJPEG, GIF gifsicle) | T2 | Win+Linux | W3-C | partial | PNG re-deflate and JPEG header rewrite are in-house and verified (inflate equality, scan bytes copied). oxipng and jpegtran are optional and [A] argument-tested only; their output is accepted only when it holds every kept chunk or segment and the data after IEND/EOI (re-appended, fake-tool tested). No GIF optimiser (gifsicle argument builder only). |
 | OPT-IMG-02 | Lossy recompression with quality slider and side-by-side preview | T3 | Win+Linux | W3-C | disabled-with-reason | Requires cwebp, avifenc or cjxl on PATH. Quality setting exists; [A] adapters argument-tested only, never run against a real encoder. No side-by-side preview. |
 | OPT-IMG-03 | Format conversion: PNG to WebP, JPEG to AVIF, lossless JPEG to JPEG XL (reversible) | T3 | Win+Linux | W3-C | disabled-with-reason | Requires cwebp, avifenc or cjxl on PATH. PNG/JPEG to WebP, AVIF or JPEG XL; [A] argument-tested only, never run against a real encoder. |
 | OPT-IMG-04 | Resize to max long / short edge | T3 | Win+Linux | W3-C | disabled-with-reason | Requires cwebp on PATH, and only WebP output can resize; AVIF and JXL refuse it. [A] argument-tested only. |
-| OPT-IMG-05 | Metadata control: strip all, keep all, strip GPS only, thumbnails, ICC profiles | T2 | Win+Linux | W3-C | partial | JPEG policies (keep all, strip thumbnail, strip GPS, strip all) and PNG chunk stripping. The thumbnail and GPS strips never zero bytes shared with other EXIF structures, and refuse an unsafe layout (G-12). A GPS-only run is reachable only from a step that is already listed, not as its own card. |
+| OPT-IMG-05 | Metadata control: strip all, keep all, strip GPS only, thumbnails, ICC profiles | T2 | Win+Linux | W3-C | partial | JPEG policies (keep all, strip thumbnail, strip GPS, strip all) and PNG chunk stripping. Comments are removed only by strip all; data after the picture is kept by every policy. The thumbnail and GPS strips never zero bytes shared with other EXIF structures, and refuse an unsafe layout (G-12). A GPS-only run is reachable only from a step that is already listed, not as its own card. |
 | OPT-IMG-06 | Overwrite policy: always, never, only if smaller | T2 | Win+Linux | W3-A | partial | Replace the original or write a `_light` copy. 'Keep if not smaller' is always on and cannot be switched off, so 'always overwrite' is not offered. |
 
 ## Video (`OPT-VID`)
@@ -145,7 +145,7 @@ Notes starting with "Requires ffmpeg on PATH" describe the reason the card shows
 | OPT-VID-02 | Hardware encoders (NVENC, Quick Sync, AMF, VideoToolbox) with estimated encode time | T3 | Win+Linux | W3-C | partial | Requires ffmpeg. Encoders are detected and trial-encoded before use, but NVENC, QSV and AMF were never run on real hardware. No VAAPI option on Linux; VideoToolbox not targeted. |
 | OPT-VID-03 | Downscale resolution and cap frame rate | T3 | Win+Linux | W3-C | done | Requires ffmpeg on PATH. Max height and frame-rate cap [X] run against real ffmpeg. |
 | OPT-VID-04 | Drop extra audio tracks and subtitles | T3 | Win+Linux | W3-C | done | Requires ffmpeg on PATH. Keep first audio track, drop subtitles; [A] argument-tested, shares the [X] encode path. |
-| OPT-VID-05 | Remux only (no re-encode), strip junk streams | T3 | Win+Linux | W3-C | done | Requires ffmpeg on PATH. Remux preset without re-encode; [A] argument-tested. |
+| OPT-VID-05 | Remux only (no re-encode), strip junk streams | T3 | Win+Linux | W3-C | done | Requires ffmpeg on PATH. Remux preset without re-encode keeps every track (attachments, timecode) and checks the output's tracks and length with `ffmpeg -i`; a file with a track the output cannot carry (GPS/camera data, cover picture, second video) is skipped. Real-ffmpeg tested on Linux. |
 | OPT-VID-06 | Compatibility warning for target codec | T3 | Win+Linux | W3-C | done | Requires ffmpeg. Compatibility text for HEVC and AV1 shown with the codec choice and in the step notes. |
 
 ## Screen recordings (`OPT-SCR`)
@@ -227,7 +227,7 @@ Notes starting with "Requires ffmpeg on PATH" describe the reason the card shows
 |---|---|---|---|---|---|---|
 | OPT-OFC-01 | Repack ZIP container at maximum Deflate level | T2 | Win+Linux | W3-A | done | In-house ZIP writer, smallest of stored, deflate level 10 or original per entry; verified repack; signed, encrypted, legacy and labelled files skipped or protected. |
 | OPT-OFC-02 | Remove embedded thumbnails and revision data | T2 | Win+Linux | W3-A | partial | Embedded thumbnails are removed (default on). Revision data (tracked changes, comments) is reported but deliberately never removed. |
-| OPT-OFC-03 | Lossless recompression of other ZIP-based formats (EPUB, CBZ, APK/JAR, ODT) | T2 | Win+Linux | W3-A | done | EPUB, CBZ, JAR and ODF repack; APKs are refused on purpose (v2 signatures and zipalign cover the whole file); signed JARs are repacked. |
+| OPT-OFC-03 | Lossless recompression of other ZIP-based formats (EPUB, CBZ, APK/JAR, ODT) | T2 | Win+Linux | W3-A | done | EPUB, CBZ, JAR and ODF repack; APKs are refused on purpose (v2 signatures and zipalign cover the whole file); signed JARs are repacked; a JAR's stored entries stay stored (nested jars). |
 
 ## System fonts (`OPT-FNT`)
 

@@ -447,3 +447,80 @@ drive's root, so it does not arise), and progress during the enumeration of a wh
 (needs the record loop in `imp::enumerate` to report, which cannot be run here). Not
 verified on Windows: the Windows clippy target compiles the change; CI's elevated runner
 used the fast path on a temp-folder root, which now walks.
+
+## D-B33 An external image tool's output must hold everything the in-house result holds (OPT-1)
+
+libjpeg (jpegtran) stops at the EOI and oxipng does not copy data after IEND, so a motion
+photo's video, a Samsung trailer or any appended file was missing from the tool's output,
+which was then accepted because it was smaller and showed the same picture. Rule now: the
+in-house result (which applied the user's policy exactly) is the reference, and a tool's
+output replaces it only when it can be shown to hold all of it.
+- JPEG: `mj_formats::jpeg::image_end` finds the EOI that ends the first image (marker
+  segments skipped by length; in entropy data an `FF` is stuffing, a restart marker, fill or
+  the next marker, so the first marker EOI after a scan ends the image). jpegtran's output
+  must be exactly one complete image with the same frame and kept segments; the bytes after
+  the in-house result's image are re-appended byte for byte. Re-appending rather than
+  skipping keeps the Huffman gain on motion photos; their video is located from the end of
+  the file (XMP `MicroVideoOffset`), which the in-house rewrite already moves the same way,
+  and MPF files (absolute offsets) stay refused.
+- PNG: oxipng's output gets the in-house result's trailer re-appended and must pass
+  `png::same_metadata`: every chunk except the pixels and the chunks a colour reduction
+  rewrites (`IHDR PLTE IDAT IEND tRNS`, verified by decoding; `bKGD sBIT hIST` by presence)
+  equal, `iCCP` and `zTXt` compared inflated because oxipng re-deflates them, no extra chunk,
+  same trailer. This also stops `--strip safe` dropping a chunk the in-house policy keeps.
+- The in-house PNG pass kept the trailer only under "Keep everything"; it now keeps a
+  non-zero trailer under every policy (data after IEND is not metadata the user asked to
+  remove) and drops zero padding only when stripping (`trailing_bytes_follow_the_policy`
+  changed accordingly).
+- Photo conversion (WebP, AVIF, JPEG XL) cannot carry such data: a JPEG or PNG followed by
+  anything other than zero padding is skipped with a reason, also for the lossy presets
+  (the user asked for a smaller picture, not for its video to go).
+
+## D-B34 The "Reversible" JPEG XL preset routes by content (OPT-3)
+
+The source is sniffed before encoding: JPEG content takes `--lossless_jpeg=1` (bit-exact
+transcode), PNG content takes `-d 0`, anything else is skipped ("not a JPEG or PNG picture,
+whatever its name says"). The estimate still uses the extension (a cheap model, no safety
+claim). The JPEG must have a findable end of image, otherwise it is skipped.
+
+## D-B35 A JAR keeps its stored entries stored (OPT-2)
+
+Spring Boot refuses a nested jar that is not stored, and nothing in a JAR says which stored
+entries a loader depends on, so in a Java archive (JAR content, `.jar/.war/.ear`, or a
+`META-INF/MANIFEST.MF`) every stored entry is written stored and only deflated entries are
+recompressed (`RepackPlan::keep_stored`). EPUB, ODF, CBZ, Office and plain `.zip` still
+convert stored to deflate where it helps: their formats allow both methods. The estimate
+models the same rule. Not done: a `.zip` that is a renamed JAR goes through archive
+recompression, which does not apply the rule.
+
+## D-B36 Content routing compares entry names as bytes and is guarded (OPT-6)
+
+`refine_zip` sliced names at byte offsets and panicked on a multi-byte character; it now
+compares bytes. `analyse_by_content` also runs the routing under `guarded`, so a reader
+panic on one hostile file counts that file unreadable instead of failing the whole card.
+
+## D-B37 Media lengths and tracks come from ffmpeg, and the checks fail closed (OPT-4, OPT-5)
+
+MyJanitor's media prober reads WAV, AIFF, FLAC, Ogg, MP3 and MP4/MOV only; for Matroska,
+WebM, AVI and ASF the length check was skipped. `ffmpeg -i` (same local-only input
+arguments as an encode) now reports the length and every stream of the source and of the
+output (`InputReport`). Length: an unknown source length skips the file before encoding; an
+unknown or different output length is an error and nothing is changed (`check_length`; video,
+audio, and the screen recordings' voice). Tracks (`StreamPlan`): the output must hold every
+track of the source minus what the user asked to drop (extra audio, subtitles). Matroska
+attachments (subtitle fonts) are mapped and copied into Matroska outputs; a timecode track is
+expected back (the muxer writes it again from the timecode it reads) and checked; data tracks
+other than timecode (GoPro GPS, iPhone camera metadata), cover pictures, further video tracks
+and attachments going to MP4 skip the file before encoding, because this ffmpeg mapping cannot
+carry them. After the encode the output's report is compared with the plan; a missing track
+removes the output and skips the file. Consequence: iPhone videos with `mebx` tracks and GoPro
+videos are now skipped by the video card instead of losing those tracks; carrying data
+tracks over (`-map 0:d -copy_unknown` into MOV, per-tag) can be added once verified per
+camera. The remux setting's help now says what it does ("Keeps every track as is").
+The audio card's own cover-art handling was not part of this change.
+
+## D-B38 Comments go only with "Remove all metadata" (OPT-7)
+
+JPEG COM segments (captions, scanning notes) were removed by the default thumbnail pass and
+by "Remove GPS position only", without a word in the labels. They are now removed only by
+"Remove all metadata", which says so; the labels of the other policies are true again.
