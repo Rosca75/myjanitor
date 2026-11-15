@@ -341,5 +341,5 @@ fn a_duplicate_unreadable_at_the_act_time_check_is_skipped_not_failed() {
     assert_eq!(out.skipped, 1, "{out:?}");
     assert!(keeper.exists(), "the kept copy is untouched");
     let e = f.journal.entries_of(run).pop();
-    assert!(e.map_or(true, |e| e.state != mj_core::JournalState::Failed), "journalled as a skip, not a failure");
+    assert!(e.is_none_or(|e| e.state != mj_core::JournalState::Failed), "journalled as a skip, not a failure");
 }
