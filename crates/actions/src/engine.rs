@@ -609,6 +609,24 @@ fn recheck_tree(ctx: &ExecContext<'_>, item: &ActionItem) -> Result<()> {
     Ok(())
 }
 
+/// ACT-10 (F-15 for the originals of an optimisation or an archive): an original kept in
+/// the quarantine records the retention it is held for, so the purge honours it even if
+/// the setting changes later, and it is undoable no longer than it is held.
+fn held_in_quarantine(
+    ctx: &ExecContext<'_>,
+    e: &mut JournalEntry,
+    plan: Option<&RetainPlan>,
+    undo_until: Option<Timestamp>,
+) -> Option<Timestamp> {
+    if !matches!(plan, Some(RetainPlan::Quarantine { .. })) {
+        return undo_until;
+    }
+    let days = ctx.settings.general.quarantine_days;
+    e.retention_days = Some(days);
+    let held = e.at.add_days(i64::from(days));
+    undo_until.map(|u| u.min(held))
+}
+
 fn quarantine_item(
     ctx: &ExecContext<'_>,
     item: &ActionItem,
@@ -902,6 +920,7 @@ fn optimise(
     if let Some(p) = &plan {
         retain::note_plan(&mut e, p);
     }
+    let undo_until = held_in_quarantine(ctx, &mut e, plan.as_ref(), undo_until);
     e.created = vec![temp.clone()];
     let preserve_times = ctx.settings.optimise.preserve_timestamps;
     let preserve_perms = ctx.settings.optimise.preserve_permissions;
@@ -1129,6 +1148,7 @@ fn archive(
     if let Some(p) = &plan {
         retain::note_plan(&mut e, p);
     }
+    let undo_until = held_in_quarantine(ctx, &mut e, plan.as_ref(), undo_until);
     e.created = vec![dst.clone()];
     run_acted(ctx, item, e, |e| {
         let sources = [item.path.clone()];

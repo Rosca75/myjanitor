@@ -288,7 +288,7 @@ test('custom search: run sends the parsed rule, title, topmost and action; resul
   assert.deepEqual(req.rule, { all: [{ cond: { field: 'extension', values: ['log'] } }, { cond: { field: 'size', cmp: 'gt', bytes: 1048576 } }] });
   assert.equal(req.title, 'Big logs');
   assert.equal(req.topmost_only, true);
-  assert.deepEqual(req.action, { kind: 'quarantine', purge_after_days: 7 });
+  assert.deepEqual(req.action, { kind: 'quarantine', purge_after_days: 30 });
   assert.match(env.$('.custom__result').textContent, /Big logs: \d+ matches/);
   assert.ok(env.$$('.cresults .row').length > 0, 'rows in the shared table');
   assert.equal(last(env, 'candidates_page').opportunity_id, env.state().custom.result.id);
@@ -296,7 +296,7 @@ test('custom search: run sends the parsed rule, title, topmost and action; resul
   await env.settle();
   assert.equal(last(env, 'selection_set').selected, false);
   await env.click(env.$('[data-fk="custom-add"]'));
-  assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: env.state().custom.result.id, action: { kind: 'quarantine', purge_after_days: 7 } });
+  assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: env.state().custom.result.id, action: { kind: 'quarantine', purge_after_days: 30 } });
   assert.equal(env.$('[data-fk="custom-add"]').disabled, true);
 });
 

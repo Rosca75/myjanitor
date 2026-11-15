@@ -456,6 +456,13 @@ impl Engine {
                 )
             } else if permanent {
                 "Every change is logged in History, but permanently deleted files cannot be restored.".into()
+            } else if has_originals && settings.general.quarantine_days < settings.general.undo_days {
+                // ACT-10: originals held in the quarantine are purged after its retention.
+                format!(
+                    "Every change is logged; History → Restore brings the originals back for {} days \
+                     ({} days for originals kept in the quarantine).",
+                    settings.general.undo_days, settings.general.quarantine_days
+                )
             } else {
                 format!(
                     "Every change is logged; History → Restore brings the originals back for {} days.",

@@ -323,13 +323,13 @@ test('action tiles change the plan step action; before adding, the choice travel
   await env.settle();
   await env.click(env.$('[data-fk="act-quarantine"]'));
   const stepId = env.state().plan.steps[0].id;
-  assert.deepEqual(last(env, 'plan_update_step'), { step_id: stepId, action: { kind: 'quarantine', purge_after_days: 7 } });
+  assert.deepEqual(last(env, 'plan_update_step'), { step_id: stepId, action: { kind: 'quarantine', purge_after_days: 30 } });
   await env.actions.openStep('det:old_installers');
   await env.settle();
   await env.click(env.$('[data-fk="act-quarantine"]'));
   assert.equal(env.sent('plan_update_step').length, 1, 'not in the plan yet: no update');
   await env.click(env.$('[data-fk="step-add"]'));
-  assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: 'det:old_installers', action: { kind: 'quarantine', purge_after_days: 7 } });
+  assert.deepEqual(last(env, 'plan_add_step'), { opportunity_id: 'det:old_installers', action: { kind: 'quarantine', purge_after_days: 30 } });
 });
 
 test('Move asks the OS folder dialog and sends the chosen destination', async () => {

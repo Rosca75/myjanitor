@@ -386,3 +386,31 @@ and ACT-10 of the first independent review. Each was shown with a failing test f
 - **Not done:** the keep-rule dropdown still shows the rule saved in the step parameters
   (`opp.params.keep_rule`), which `selection_apply_keep_rule` does not update; the label
   can lag behind the rule last applied. Cosmetic, left for a later UI pass.
+
+## D-6A23 The promised undo window never outlives the quarantine (ENG-9, ACT-10)
+
+- **Context:** the step and search panels built the quarantine action with a fixed
+  `purge_after_days: 7`, ignoring Settings (default 30), while the plan checklist and the
+  confirmation promised the undo window (`undo_days`). Originals that an optimisation or
+  an archive sent to the quarantine (explicitly, or through the Recycle Bin route on
+  Windows) carried no retention and an undo deadline of `undo_days`: the purge then used
+  whatever `quarantine_days` was at purge time.
+- **Choice:**
+  - UI: the quarantine action holds items for the Settings value (`quarantineDays`: the
+    loaded settings, else one `settings_get`). Three UI tests that asserted the old fixed
+    `7` now expect the mock's setting (30); a new test sets 12 and 9 and checks both are
+    used.
+  - mj-actions: `held_in_quarantine` gives an original kept in the quarantine by
+    `optimise` or `archive` its retention (`quarantine_days`) and caps its undo deadline at
+    the end of that retention, exactly as `quarantine_item` already did for plain
+    quarantined items (F-15). The quarantine part of ENG-9 in mj-actions was already in
+    place (F-15) and needed no change.
+  - Plan checklist: `undo_window` names the shorter period when a reversible step keeps
+    items in the quarantine for less than `undo_days` (Quarantine steps, Trash routed to
+    the quarantine, originals kept there), via `plan::quarantine_days`. The confirmation's
+    undo text of optimise/archive steps names the quarantine days when they are shorter.
+  - `settings_set` refreshes the plan (checklist and estimates read settings) when the
+    plan has steps; before, the checklist kept the old figures until the next plan change.
+- **Rejected:** letting the engine read `purge_after_days: 0` as "use the setting" (a
+  special value in a frozen action type, and a stored plan would change meaning when the
+  setting changes).

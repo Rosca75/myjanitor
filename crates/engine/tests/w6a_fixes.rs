@@ -371,3 +371,38 @@ fn the_kept_badge_follows_the_selection_after_reset_and_rescan() {
         assert_keepers_follow_selection(e, "rescan");
     }
 }
+
+fn undo_text(e: &mj_engine::Engine) -> String {
+    e.plan_get().unwrap().checklist.into_iter().find(|c| c.code == "undo_window").unwrap().text
+}
+
+/// ENG-9: the undo window the plan promises is no longer than the quarantine holds the items.
+#[test]
+fn the_undo_window_names_the_quarantine_retention_when_it_is_shorter() {
+    let f = engine_for(old_tmp_tree(2));
+    let e = &f.engine;
+    assert_eq!(scan(e).state, ScanRunState::Done);
+    e.plan_add_step(PlanAddStepRequest { opportunity_id: oid("det:temp_files"), action: None, params: None }).unwrap();
+    assert!(undo_text(e).contains("30 days"), "{}", undo_text(e));
+    assert!(!undo_text(e).contains("quarantine"), "{}", undo_text(e));
+    // Trash goes to the quarantine here (the fixture's route): its retention counts.
+    let mut s = e.settings_get().unwrap();
+    s.general.quarantine_days = 10;
+    e.settings_set(SettingsSetRequest { settings: s }).unwrap();
+    assert!(undo_text(e).contains("10 days"), "{}", undo_text(e));
+    let step = e.plan_get().unwrap().steps[0].id;
+    e.plan_update_step(PlanUpdateStepRequest {
+        step_id: step,
+        action: Some(mj_core::Action::Quarantine { purge_after_days: 7 }),
+        params: None,
+    })
+    .unwrap();
+    assert!(undo_text(e).contains("7 days"), "{}", undo_text(e));
+    // History agrees: the run is restorable until the purge, not for 30 days.
+    let started = e.plan_apply(PlanApplyRequest::default()).unwrap();
+    wait_jobs(e);
+    let run =
+        e.history_list(Default::default()).unwrap().runs.into_iter().find(|r| r.run_id == started.run_id).unwrap();
+    let until = run.undo_until.unwrap();
+    assert!(until <= mj_core::Timestamp::now().add_days(7), "{until:?}");
+}

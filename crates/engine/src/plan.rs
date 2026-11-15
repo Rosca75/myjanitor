@@ -84,6 +84,22 @@ pub(crate) fn measure_key(rec: &OpportunityRecord, skip: Badges) -> u64 {
     h.finish()
 }
 
+/// Days the items (or originals) of `action` stay in MyJanitor's quarantine before the
+/// purge deletes them, when they go there; `None` when they do not.
+pub(crate) fn quarantine_days(action: &Action, route: mj_actions::TrashRoute, setting: u32) -> Option<u32> {
+    use mj_actions::TrashRoute::Quarantine as Q;
+    match action {
+        Action::Quarantine { purge_after_days } => Some(*purge_after_days),
+        Action::Trash if route == Q => Some(setting),
+        Action::Optimise { originals, .. } | Action::Archive { originals, .. } => match originals {
+            mj_core::OriginalsPolicy::Quarantine => Some(setting),
+            mj_core::OriginalsPolicy::RecycleBin if route == Q => Some(setting),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Estimate of a step from its record's selection.
 pub(crate) fn step_estimate(rec: &OpportunityRecord, skip: Badges, action: &Action) -> Estimate {
     let mut e = Estimate { confidence: Confidence::Exact, ..Estimate::default() };
@@ -142,6 +158,7 @@ impl Engine {
 
     /// Recompute estimates, safety and the checklist; returns the new plan.
     pub(crate) fn refresh_plan(&self) -> Plan {
+        let route = self.trash_route();
         let settings = lock(&self.settings).clone();
         let skip = skip_badges(&settings);
         let sync_known = self.platform().sync_roots().is_ok();
@@ -210,14 +227,27 @@ impl Engine {
         plan.estimate = plan.steps.iter().fold(zero, |acc, s| acc.add(&s.estimate));
         plan.updated = Timestamp::now();
         let mut list = Vec::new();
-        if plan.steps.iter().any(|s| s.safety.is_undoable() && s.safety != SafetyClass::ReviewOnly) {
+        let undoable: Vec<&PlanStep> =
+            plan.steps.iter().filter(|s| s.safety.is_undoable() && s.safety != SafetyClass::ReviewOnly).collect();
+        if !undoable.is_empty() {
+            // ENG-9: items held in the quarantine are purged after their retention, so their
+            // undo window is the shorter of the two.
+            let undo = settings.general.undo_days;
+            let held = undoable
+                .iter()
+                .filter_map(|s| quarantine_days(&s.action, route, settings.general.quarantine_days))
+                .min()
+                .filter(|&d| d < undo);
             list.push(ChecklistItem {
                 level: ChecklistLevel::Ok,
                 code: "undo_window".into(),
-                text: format!(
-                    "Every reversible step can be undone from History for {} days",
-                    settings.general.undo_days
-                ),
+                text: match held {
+                    None => format!("Every reversible step can be undone from History for {undo} days"),
+                    Some(d) => format!(
+                        "Every reversible step can be undone from History for {undo} days, \
+                         except items kept in the quarantine: {d} days, then they are deleted"
+                    ),
+                },
             });
         }
         let confirm = plan.steps.iter().filter(|s| s.safety.requires_confirmation()).count() as u64;

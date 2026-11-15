@@ -117,3 +117,21 @@ test('after a keep rule and Reset selection the kept badge sits on the copy that
     }
   }
 });
+
+// ---------------------------------------------------------------- ENG-9 quarantine days
+
+test('the quarantine action holds items for the Settings value, not a fixed 7 days', async () => {
+  const env = await makeEnv();
+  const s = await env.backend.call('settings_get', {});
+  s.general.quarantine_days = 12;
+  await env.backend.call('settings_set', { settings: s });
+  await env.actions.openStep('det:old_installers');
+  await env.settle();
+  await env.actions.setStepAction('quarantine');
+  await env.settle();
+  assert.deepEqual(env.state().step.pendingAction, { kind: 'quarantine', purge_after_days: 12 });
+  env.store.set({ settings: { ...s, general: { ...s.general, quarantine_days: 9 } } });
+  await env.actions.setStepAction('quarantine');
+  await env.settle();
+  assert.deepEqual(env.state().step.pendingAction, { kind: 'quarantine', purge_after_days: 9 }, 'the loaded settings win');
+});

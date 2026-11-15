@@ -11,10 +11,23 @@ import { createThumbLoader } from './thumbs.js';
 
 export const PAGE_SIZE = 50;
 
+/**
+ * ENG-9: days the quarantine holds items: the Settings value (read once if Settings was
+ * never opened), not a fixed figure, so the plan, History and the purge agree.
+ * @param {any} api @param {() => any} get
+ */
+export async function quarantineDays(api, get) {
+  const known = get().settings?.general?.quarantine_days;
+  if (known > 0) return known;
+  const settings = await api.settingsGet();
+  return settings.general.quarantine_days;
+}
+
 /** Actions the "What happens to them" panel can pick (permanent delete lives in Advanced). */
 const ACTIONS = {
   trash: () => ({ kind: 'trash' }),
-  quarantine: () => ({ kind: 'quarantine', purge_after_days: 7 }),
+  // ENG-9: held for the Settings value (the undo window promised for these items).
+  quarantine: (_dest, _keep, days = 30) => ({ kind: 'quarantine', purge_after_days: days }),
   permanent_delete: () => ({ kind: 'permanent_delete' }),
   // CLN-ACT-05: folder structure kept by default (the relative path below the scan root).
   move: (dest, keep = true) => ({ kind: 'move', dest, keep_structure: keep }),
@@ -159,7 +172,7 @@ export function stepActions(c) {
     setParam: guard(async (key, value) => { await api.stepParamsSet({ opportunity_id: cur().id, params: { [key]: value } }); await ops.reloadStep(); }),
     /** Action choice of a clean step (Recycle Bin / Quarantine / Move / Copy / permanent). @param {keyof typeof ACTIONS} kind @param {string} [dest] @param {boolean} [keep] */
     setStepAction: guard(async (kind, dest, keep) => {
-      const action = ACTIONS[kind](dest, keep);
+      const action = ACTIONS[kind](dest, keep, kind === 'quarantine' ? await quarantineDays(api, get) : undefined);
       const step = get().plan.steps.find((x) => x.opportunity === cur().id);
       if (step) set({ plan: await api.planUpdateStep({ step_id: step.id, action }) });
       ops.patch({ pendingAction: action });
