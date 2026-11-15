@@ -72,7 +72,10 @@ fn validate(engine: &Engine, s: &Schedule) -> Result<()> {
         return Err(Error::InvalidInput("a schedule needs at least one step".into()));
     }
     for step in &s.steps {
-        let reason = if matches!(step.action, mj_core::Action::None) {
+        let reason = if step.opportunity.0.starts_with("custom:") {
+            // ENG-12: the rule is not stored with the schedule; the step would never run.
+            Some("a custom search cannot be scheduled (its rule is not saved with a schedule); remove it from the plan first")
+        } else if matches!(step.action, mj_core::Action::None) {
             Some("review-only steps do nothing")
         } else if step.action.safety(false).requires_confirmation() || step_is_lossy(engine, step) {
             Some("lossy or permanent steps cannot run unattended")

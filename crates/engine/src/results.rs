@@ -5,6 +5,8 @@
 //! labelled and encrypted rows are locked while the matching `Settings::safety::skip_*`
 //! is on, because the action engine would skip them anyway (D-3D108).
 
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use mj_core::{
@@ -32,6 +34,13 @@ pub struct Results {
     pub cached: bool,
     /// Counter for `custom:<n>` ids.
     pub next_custom: u64,
+    /// ENG-11: path keys of items applied since `index` was built that are no longer at
+    /// their place (removed, moved, replaced under another name). The index is immutable:
+    /// a re-analysis or a search on it leaves these out. Cleared when a scan publishes.
+    pub removed: HashSet<String>,
+    /// ENG-12: the rule of every custom-search card (`custom:<id>`, the request that built
+    /// it). A scan runs each again on its new index, so the card and its plan step survive.
+    pub custom_rules: Vec<(String, crate::api::SearchRunRequest)>,
 }
 
 impl Results {
@@ -49,6 +58,41 @@ impl Results {
     pub fn find_candidate(&self, id: mj_core::CandidateId) -> Option<(&OpportunityRecord, &Candidate)> {
         self.opportunities.iter().find_map(|r| r.candidates.iter().find(|c| c.id == id).map(|c| (r, c)))
     }
+}
+
+/// True when `p` or a folder above it is in `removed` (ENG-11).
+pub(crate) fn is_removed(removed: &HashSet<String>, p: &Path) -> bool {
+    !removed.is_empty() && p.ancestors().any(|a| removed.contains(&mj_core::pathutil::path_key(a)))
+}
+
+/// ENG-11: take the rows at or below a path that is `gone` out of a card. Groups that lose
+/// members drop them, and a group left with fewer than two members leaves the card with
+/// its last row (nothing is a duplicate or a pair of nothing); the kept badges follow the
+/// selection again and the totals are recomputed. Returns true when anything changed.
+pub(crate) fn drop_gone(rec: &mut OpportunityRecord, gone: &dyn Fn(&Path) -> bool, skip: Badges) -> bool {
+    let before = rec.candidates.len();
+    rec.candidates.retain(|c| !gone(&c.path));
+    let mut changed = rec.candidates.len() != before;
+    let mut lone = Vec::new();
+    for g in &mut rec.groups {
+        let n = g.members.len();
+        g.members.retain(|m| !gone(m));
+        if g.members.len() != n {
+            changed = true;
+            if g.members.len() < 2 {
+                lone.push(g.id);
+            }
+        }
+    }
+    if !lone.is_empty() {
+        rec.groups.retain(|g| !lone.contains(&g.id));
+        rec.candidates.retain(|c| !c.group.is_some_and(|g| lone.contains(&g)));
+    }
+    if changed {
+        crate::steps::sync_keepers(rec, skip);
+        crate::opportunities::recompute(rec, skip);
+    }
+    changed
 }
 
 /// `invalid_input` for an unknown opportunity id.

@@ -585,7 +585,9 @@ impl Engine {
         JobResult { outcome: Some(outcome), error, report: true, complete }
     }
 
-    /// Applied items leave their cards (and the index); the applied step leaves the plan.
+    /// Applied items leave their cards (ENG-11: with the groups they leave too small), and
+    /// those no longer at their place are remembered so a re-analysis or a search on the
+    /// unchanged index does not bring them back; the applied step leaves the plan.
     fn after_apply_step(&self, run_id: RunId, w: &StepWork) -> Vec<PathBuf> {
         let done: Vec<PathBuf> = self
             .journal
@@ -598,17 +600,16 @@ impl Engine {
         let generation = {
             let mut results = self.results.write().unwrap_or_else(|e| e.into_inner());
             if !done.is_empty() {
-                let gone = |p: &Path| done.iter().any(|d| mj_core::pathutil::is_within(d, p));
+                let keys: std::collections::HashSet<String> =
+                    done.iter().map(|d| mj_core::pathutil::path_key(d)).collect();
+                let gone = |p: &Path| crate::results::is_removed(&keys, p);
                 for rec in &mut results.opportunities {
-                    let before = rec.candidates.len();
-                    rec.candidates.retain(|c| !gone(&c.path));
-                    if rec.candidates.len() != before {
-                        for g in &mut rec.groups {
-                            g.members.retain(|m| !gone(m));
-                        }
-                        crate::opportunities::recompute(rec, skip);
-                    }
+                    crate::results::drop_gone(rec, &gone, skip);
                 }
+                // An in-place change (optimised under the same name) is still there.
+                let vacated = done.iter().filter(|d| std::fs::symlink_metadata(d).is_err());
+                let vacated: Vec<String> = vacated.map(|d| mj_core::pathutil::path_key(d)).collect();
+                results.removed.extend(vacated);
             }
             results.generation
         };

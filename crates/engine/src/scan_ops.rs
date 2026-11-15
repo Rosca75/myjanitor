@@ -219,7 +219,7 @@ impl Engine {
         lock(&self.scan).status.generation == generation
     }
 
-    fn run_scan(&self, generation: u64, mut scope: ScanScope, cancel: CancelToken) {
+    fn run_scan(self: &Arc<Self>, generation: u64, mut scope: ScanScope, cancel: CancelToken) {
         let started = Instant::now();
         let settings = lock(&self.settings).clone();
         // AUT-05: the walk and hashing workers follow the settings when the scope does not
@@ -265,7 +265,9 @@ impl Engine {
             };
             let index = Arc::new(mj_scan::scan_with_cache(&req, &self.cache)?);
             cancel.checkpoint()?;
-            let records = self.run_analyses(generation, &index, &cancel, &sink)?;
+            let mut records = self.run_analyses(generation, &index, &cancel, &sink)?;
+            cancel.checkpoint()?;
+            records.extend(self.custom_records(&index));
             Ok((index, records))
         }));
         let (state, error, stats) = match outcome {
@@ -289,6 +291,7 @@ impl Engine {
                         }
                         results.generation = generation;
                         results.index = Some(index);
+                        results.removed.clear();
                         results.opportunities = records;
                         results.cached = stats.cache_hits > 0;
                     }
@@ -488,29 +491,45 @@ impl Engine {
         Ok(out)
     }
 
+    /// ENG-12: the custom-search cards rebuilt on a new index from their stored rules. A
+    /// rule that no longer runs (for example a type group that was deleted) loses its card.
+    fn custom_records(self: &Arc<Self>, index: &FileIndex) -> Vec<OpportunityRecord> {
+        let rules = self.results.read().unwrap_or_else(|e| e.into_inner()).custom_rules.clone();
+        rules.iter().filter_map(|(id, req)| self.custom_record(index, req, id).ok()).collect()
+    }
+
     /// Re-run one detector or optimiser with new parameters on the current index
     /// (step parameters changed). Returns the new record.
     pub(crate) fn rerun_analysis(&self, id: &mj_core::OpportunityId, params: ParamValues) -> Result<OpportunityRecord> {
-        let index = {
+        let (index, removed) = {
             let r = self.results.read().unwrap_or_else(|e| e.into_inner());
-            r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?
+            (r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?, r.removed.clone())
         };
         let tools = lock(&self.tools).clone();
         let env = ScanEnv::detect(self);
         let cancel = CancelToken::new();
+        let mut rec = None;
         for d in &self.detectors {
             let card = CardInfo::detector(d.info());
             if &card.id == id {
-                return self.run_one(card, &|ctx| d.run(ctx), params, &index, &env, &cancel);
+                rec = Some(self.run_one(card, &|ctx| d.run(ctx), params.clone(), &index, &env, &cancel)?);
+                break;
             }
         }
-        for o in &self.optimisers {
-            let card = CardInfo::optimiser(o.info(), o.availability(&tools));
-            if &card.id == id {
-                return self.run_one(card, &|ctx| o.analyse(ctx), params, &index, &env, &cancel);
+        if rec.is_none() {
+            for o in &self.optimisers {
+                let card = CardInfo::optimiser(o.info(), o.availability(&tools));
+                if &card.id == id {
+                    rec = Some(self.run_one(card, &|ctx| o.analyse(ctx), params.clone(), &index, &env, &cancel)?);
+                    break;
+                }
             }
         }
-        Err(crate::results::unknown(id))
+        let mut rec = rec.ok_or_else(|| crate::results::unknown(id))?;
+        // ENG-11: the index still lists what was applied since it was built.
+        let skip = crate::results::skip_badges(&lock(&self.settings));
+        crate::results::drop_gone(&mut rec, &|p| crate::results::is_removed(&removed, p), skip);
+        Ok(rec)
     }
 
     /// Pause the running scan.

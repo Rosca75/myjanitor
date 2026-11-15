@@ -431,6 +431,7 @@ export function createHandlers(m, sim, emit) {
       if (!s.name) throw fail('invalid_input', 'A schedule needs a name', 'Type a name.');
       if (!s.steps?.length) throw fail('invalid_input', 'A schedule needs at least one step', 'Save it from a plan.');
       if (s.steps.some((st) => st.action?.kind === 'permanent_delete' || st.action?.originals?.policy === 'delete')) throw fail('invalid_input', 'Lossy and permanent steps never run unattended', 'Remove those steps.');
+      if (s.steps.some((st) => String(st.opportunity).startsWith('custom:'))) throw fail('invalid_input', 'A custom search cannot be scheduled (its rule is not saved with a schedule)', 'Remove it from the plan first.');
       if (m.schedules.some((x) => x.id !== s.id && x.name.toLowerCase() === s.name.toLowerCase())) throw fail('invalid_input', `A schedule named "${s.name}" already exists`, 'Choose another name.');
       if (!s.id) s.id = `sched_${m.schedules.reduce((a, x) => Math.max(a, Number(String(x.id).replace('sched_', '')) || 0), 0) + 1}`;
       s.next_run = s.enabled ? m.nowNs() + 7 * 86_400_000_000_000 : null;
@@ -447,6 +448,7 @@ export function createHandlers(m, sim, emit) {
     schedule_from_plan: (req) => {
       if (m.plan.steps.some((s) => s.safety === 'lossy_opt_in' || s.safety === 'permanent')) throw fail('invalid_input', 'Lossy and permanent steps never run unattended', 'Remove those steps from the plan to save a schedule.');
       if (!m.plan.steps.length) throw fail('invalid_input', 'The plan is empty', 'Add a step first.');
+      if (m.plan.steps.some((st) => String(st.opportunity).startsWith('custom:'))) throw fail('invalid_input', 'A custom search cannot be scheduled (its rule is not saved with a schedule)', 'Remove it from the plan first.');
       const s = { id: `sched_${m.schedules.length + 1}`, name: req.name, enabled: true, cadence: req.cadence, scope: { roots: m.scope.roots }, steps: m.plan.steps.map((st) => ({ opportunity: st.opportunity, action: st.action, params: st.params })), last_run: null, next_run: m.nowNs() + 7 * 86_400_000_000_000 };
       m.schedules.push(s);
       return structuredClone(s);

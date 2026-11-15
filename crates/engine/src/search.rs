@@ -64,116 +64,34 @@ impl Engine {
 
     /// Run a rule over the index as a custom opportunity.
     pub fn search_run(self: &Arc<Self>, req: SearchRunRequest) -> Result<Opportunity> {
-        let index = {
+        let (index, removed) = {
             let r = self.results.read().unwrap_or_else(|e| e.into_inner());
-            r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?
+            (r.index.clone().ok_or_else(|| Error::InvalidInput("scan first".into()))?, r.removed.clone())
         };
-        let settings = lock(&self.settings).clone();
-        let groups = mj_filters::groups::effective(&settings.type_groups);
-        let ctx = mj_filters::FilterContext { now: mj_core::Timestamp::now(), type_groups: &groups };
-        let exclusions = mj_filters::Exclusions::from_entries(&settings.safety.exclusions);
-        let content = ContentConfig {
-            media: Some(MediaSource(Arc::new(CacheMedia { engine: Arc::clone(self) }))),
-            // CLN-CNT-01: PDF, Word, Excel and PowerPoint text.
-            extractors: crate::extract::builtin(),
-            ..ContentConfig::default()
-        };
-        let cancel = mj_core::CancelToken::new();
-        let sel = mj_filters::select_with(
-            &index,
-            &req.rule,
-            &ctx,
-            mj_filters::SelectOptions {
-                topmost_only: req.topmost_only,
-                cancel: Some(&cancel),
-                exclusions: Some(&exclusions),
-                content,
-            },
-        )?;
-        let action = req.action.clone().unwrap_or(Action::Trash);
-        let removal = crate::plan::removes(&action);
-        let preselect = removal && !action.safety(false).requires_confirmation();
-        let mut out = DetectorOutput { diagnostics: sel.diagnostics.to_core(), ..Default::default() };
-        let (title, custom_id) = {
+        let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom search".into());
+        let custom_id = {
             let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
-            let title = req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom search".into());
             let existing = r
                 .opportunities
                 .iter()
                 .find(|o| matches!(o.opportunity.source, Source::Custom(_)) && o.opportunity.title == title);
-            let id = match existing.map(|o| o.opportunity.source.clone()) {
+            match existing.map(|o| o.opportunity.source.clone()) {
                 Some(Source::Custom(id)) => id,
                 _ => {
                     r.next_custom += 1;
                     r.next_custom.to_string()
                 }
-            };
-            (title, id)
+            }
         };
-        for &p in sel.positions.iter().take(MAX_ROWS) {
-            let e = index.entry(p);
-            let (target, size, files) = match e.kind {
-                EntryKind::Dir => {
-                    let t = index.totals(p);
-                    (TargetKind::Folder, t.reclaimable, Some(t.files))
-                }
-                EntryKind::File => (TargetKind::File, e.reclaimable(), None),
-                // Links are never targets of a custom search (they would not be followed).
-                _ => continue,
-            };
-            out.candidates.push(Candidate {
-                id: CandidateId(0),
-                path: e.path.clone(),
-                target,
-                source: Source::Custom(custom_id.clone()),
-                size,
-                size_after: if removal { 0 } else { size },
-                confidence: Confidence::Exact,
-                reason: "Matches the search".into(),
-                badges: mj_core::Badges::empty(),
-                default_selected: preselect,
-                group: None,
-                sub_group: None,
-                modified: e.modified,
-                stamp: e.stamp(),
-                file_count: files,
-                columns: Default::default(),
-            });
-        }
-        if sel.positions.len() > MAX_ROWS {
-            out.diagnostics
-                .notes
-                .push(format!("{} more matches are not listed; narrow the search", sel.positions.len() - MAX_ROWS));
-        }
-        let card = CardInfo {
-            id: mj_core::OpportunityId(format!("custom:{custom_id}")),
-            source: Source::Custom(custom_id),
-            category: Category::Clean,
-            title,
-            description: "Custom search".into(),
-            safety: action.safety(false),
-            default_action: action.kind(),
-            available_actions: vec![
-                ActionKind::Trash,
-                ActionKind::Quarantine,
-                ActionKind::Move,
-                ActionKind::Copy,
-                ActionKind::PermanentDelete,
-            ],
-            presets: Vec::new(),
-            settings: Vec::new(),
-            unit: "files".into(),
-            feature_ids: vec!["CLN-ENG-01".into(), "CLN-ENG-05".into()],
-            availability: Availability::Available,
-        };
-        let badges = self.badger(&index, &out, false, &cancel);
-        let mut rec = build_record(self, card, out, ParamValues::default(), &|c| {
-            badges.get(&c.path).copied().unwrap_or_default()
-        });
-        rec.opportunity.default_action = action;
+        let mut rec = self.custom_record(&index, &req, &custom_id)?;
         let skip = crate::results::skip_badges(&lock(&self.settings));
+        // ENG-11: the index still lists what was applied since it was built.
+        crate::results::drop_gone(&mut rec, &|p| crate::results::is_removed(&removed, p), skip);
         let (opp, generation) = {
             let mut r = self.results.write().unwrap_or_else(|e| e.into_inner());
+            // ENG-12: the rule is kept so the card is rebuilt by the next scan.
+            r.custom_rules.retain(|(id, _)| id != &custom_id);
+            r.custom_rules.push((custom_id.clone(), req));
             let id = rec.opportunity.id.clone();
             let opp = match r.get_mut(&id) {
                 Some(slot) => {
@@ -199,5 +117,102 @@ impl Engine {
         }
         self.emit(Event::OpportunitiesChanged(OpportunitiesChanged { generation }));
         Ok(opp)
+    }
+
+    /// The `custom:<custom_id>` card of `req` over `index`, not stored.
+    pub(crate) fn custom_record(
+        self: &Arc<Self>,
+        index: &mj_core::FileIndex,
+        req: &SearchRunRequest,
+        custom_id: &str,
+    ) -> Result<crate::results::OpportunityRecord> {
+        let settings = lock(&self.settings).clone();
+        let groups = mj_filters::groups::effective(&settings.type_groups);
+        let ctx = mj_filters::FilterContext { now: mj_core::Timestamp::now(), type_groups: &groups };
+        let exclusions = mj_filters::Exclusions::from_entries(&settings.safety.exclusions);
+        let content = ContentConfig {
+            media: Some(MediaSource(Arc::new(CacheMedia { engine: Arc::clone(self) }))),
+            // CLN-CNT-01: PDF, Word, Excel and PowerPoint text.
+            extractors: crate::extract::builtin(),
+            ..ContentConfig::default()
+        };
+        let cancel = mj_core::CancelToken::new();
+        let sel = mj_filters::select_with(
+            index,
+            &req.rule,
+            &ctx,
+            mj_filters::SelectOptions {
+                topmost_only: req.topmost_only,
+                cancel: Some(&cancel),
+                exclusions: Some(&exclusions),
+                content,
+            },
+        )?;
+        let action = req.action.clone().unwrap_or(Action::Trash);
+        let removal = crate::plan::removes(&action);
+        let preselect = removal && !action.safety(false).requires_confirmation();
+        let mut out = DetectorOutput { diagnostics: sel.diagnostics.to_core(), ..Default::default() };
+        for &p in sel.positions.iter().take(MAX_ROWS) {
+            let e = index.entry(p);
+            let (target, size, files) = match e.kind {
+                EntryKind::Dir => {
+                    let t = index.totals(p);
+                    (TargetKind::Folder, t.reclaimable, Some(t.files))
+                }
+                EntryKind::File => (TargetKind::File, e.reclaimable(), None),
+                // Links are never targets of a custom search (they would not be followed).
+                _ => continue,
+            };
+            out.candidates.push(Candidate {
+                id: CandidateId(0),
+                path: e.path.clone(),
+                target,
+                source: Source::Custom(custom_id.to_string()),
+                size,
+                size_after: if removal { 0 } else { size },
+                confidence: Confidence::Exact,
+                reason: "Matches the search".into(),
+                badges: mj_core::Badges::empty(),
+                default_selected: preselect,
+                group: None,
+                sub_group: None,
+                modified: e.modified,
+                stamp: e.stamp(),
+                file_count: files,
+                columns: Default::default(),
+            });
+        }
+        if sel.positions.len() > MAX_ROWS {
+            out.diagnostics
+                .notes
+                .push(format!("{} more matches are not listed; narrow the search", sel.positions.len() - MAX_ROWS));
+        }
+        let card = CardInfo {
+            id: mj_core::OpportunityId(format!("custom:{custom_id}")),
+            source: Source::Custom(custom_id.to_string()),
+            category: Category::Clean,
+            title: req.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Custom search".into()),
+            description: "Custom search".into(),
+            safety: action.safety(false),
+            default_action: action.kind(),
+            available_actions: vec![
+                ActionKind::Trash,
+                ActionKind::Quarantine,
+                ActionKind::Move,
+                ActionKind::Copy,
+                ActionKind::PermanentDelete,
+            ],
+            presets: Vec::new(),
+            settings: Vec::new(),
+            unit: "files".into(),
+            feature_ids: vec!["CLN-ENG-01".into(), "CLN-ENG-05".into()],
+            availability: Availability::Available,
+        };
+        let badges = self.badger(index, &out, false, &cancel);
+        let mut rec = build_record(self, card, out, ParamValues::default(), &|c| {
+            badges.get(&c.path).copied().unwrap_or_default()
+        });
+        rec.opportunity.default_action = action;
+        Ok(rec)
     }
 }
